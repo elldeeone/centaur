@@ -7,33 +7,86 @@ Memory-augmented agent system. Postgres+pgvector data plane, FastAPI+MCP API, 60
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  API Service (FastAPI)                                  │
-│  ├── /mcp           → MCP tools (Bearer auth)          │
-│  ├── /health        → health check                     │
-│  ├── /search        → hybrid semantic+keyword search   │
-│  ├── /plugins/*     → REST endpoints per plugin tool   │
-│  └── /secrets       → secret management                │
-├─────────────────────────────────────────────────────────┤
-│  Plugin System (60+ plugins in plugins/)                │
-│  ├── On-demand tools: archiver, twitter, allium, etc.  │
-│  └── Indexed sources: slack, linear, gsuite, github    │
-├─────────────────────────────────────────────────────────┤
-│  ETL Pipeline (src/etl/pipeline.py + extractors/)      │
-│  └── Backfill/frontfill into PG from indexed sources   │
-├─────────────────────────────────────────────────────────┤
-│  Postgres + pgvector                                    │
-│  ├── raw_records (JSONB) — all ingested data            │
-│  ├── embeddings — vector search                         │
-│  ├── sync_cursors / sync_runs — ETL state               │
-│  └── people / entity_mappings — cross-source identity   │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Chat SDK (apps/slackbot)                                    │
+│  └── Slack adapter → spawn/execute via REST → post result    │
+├──────────────────────────────────────────────────────────────┤
+│  API Service (FastAPI)                                       │
+│  ├── /mcp           → MCP tools (Bearer auth, Docker bypass) │
+│  ├── /health        → health check                           │
+│  ├── /search        → hybrid semantic+keyword search         │
+│  ├── /plugins/*     → REST endpoints per plugin tool         │
+│  └── /secrets       → secret management                      │
+├──────────────────────────────────────────────────────────────┤
+│  Plugin System (60+ plugins in plugins/)                     │
+│  ├── On-demand tools: archiver, twitter, allium, etc.        │
+│  ├── Indexed sources: slack, linear, gsuite, github          │
+│  └── Agent plugin: Docker sandbox lifecycle (see below)      │
+├──────────────────────────────────────────────────────────────┤
+│  ETL Pipeline (src/etl/pipeline.py + extractors/)            │
+│  └── Backfill/frontfill into PG from indexed sources         │
+├──────────────────────────────────────────────────────────────┤
+│  Postgres + pgvector                                         │
+│  ├── raw_records (JSONB) — all ingested data                 │
+│  ├── embeddings — vector search                              │
+│  ├── sync_cursors / sync_runs — ETL state                    │
+│  └── people / entity_mappings — cross-source identity        │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Agent Plugin (Cloud Agent)
+
+The agent plugin (`plugins/agent/`) is the cloud coding agent. The Chat SDK
+(or any REST caller) triggers it via the API, and it manages Docker containers
+running harness CLIs (amp, claude-code, codex).
+
+```
+Chat SDK                  API                     Agent Plugin              Docker
+  │                        │                          │                       │
+  ├─ POST /plugins/agent/spawn ──────────────────────►│                       │
+  │                        │                          ├─ docker run ─────────►│
+  │                        │                          │   (sibling container) │
+  │◄─ { session_id, status } ◄────────────────────────┤                       │
+  │                        │                          │                       │
+  ├─ POST /plugins/agent/execute ────────────────────►│                       │
+  │                        │                          ├─ docker exec ────────►│
+  │                        │                          │   amp -x "message"    │
+  │                        │                          │◄── result ────────────┤
+  │◄─ { result } ◄───────────────────────────────────┤                       │
+  │                        │                          │                       │
+  │  ┌─────────────────────┼──────────────────────────┼───────────────────────┤
+  │  │ Inside the container, the harness (amp/claude) │                       │
+  │  │ has MCP configured → calls back to the API:    │                       │
+  │  │   Container ──── MCP /mcp/ ───► API            │                       │
+  │  │   (search, sql_query, call_plugin, etc.)       │                       │
+  │  └─────────────────────┼──────────────────────────┼───────────────────────┘
+```
+
+Key details:
+- **1 thread = 1 container**: Each Slack thread (or session key) gets its own Docker container
+- **Sibling containers**: API uses the mounted Docker socket (`/var/run/docker.sock`) — no docker-in-docker
+- **MCP access**: The entrypoint injects MCP configs (amp, claude-code, codex) using `AI_V2_API_KEY` from env
+- **Auth bypass**: Requests from Docker bridge networks (`172.17-22.*`) skip Bearer auth on `/mcp`
+- **Secrets forwarding**: API forwards `AMP_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GITHUB_TOKEN`, `API_SECRET_KEY` into containers
+- **Harnesses**: `amp`, `claude-code`, `codex` — each with JSON streaming output parsed by `_extract_result()`
+
+### Agent plugin files
+
+```
+plugins/agent/
+  __init__.py        # Plugin docstring
+  pyproject.toml     # Plugin config (depends on docker>=7.0.0)
+  .env.example       # Required secrets
+  client.py          # AgentClient: spawn, execute, status, stop, interrupt
+  cli.py             # Typer CLI for standalone use
+  Dockerfile         # Sandbox image (Ubuntu 24.04 + uv + gh + node + rust + amp)
+  entrypoint.sh      # Injects MCP configs from env, optional repo sync
 ```
 
 ## Structure
 
 - `src/api/` — FastAPI + MCP API service
-  - `app.py` — FastAPI application, MCP mount at `/mcp` with Bearer auth
+  - `app.py` — FastAPI application, MCP mount at `/mcp` with Bearer auth (Docker bridge bypass)
   - `mcp_server.py` — MCP server (search, sql_query, get_timeline, etc.)
   - `deps.py` — FastAPI dependencies (auth, pool, embedding service)
   - `routers/` — FastAPI route handlers (search, query, sync, secrets, health)
@@ -50,8 +103,11 @@ Memory-augmented agent system. Postgres+pgvector data plane, FastAPI+MCP API, 60
   - `plugin_sdk.py` — SDK for plugin authors (`secret()`, `PluginContext`)
   - `models.py` — Shared data models
   - `cursors.py` — Sync cursor management
-  - `sandbox/` — Docker sandbox image builder and repo sync
+- `apps/slackbot/` — Chat SDK bot (Next.js, Slack adapter, Redis state)
+  - `src/lib/bot.ts` — Chat SDK wiring: onMention → spawn → execute → post
+  - `src/lib/harness.ts` — REST client for the agent plugin API
 - `plugins/` — 60+ self-contained plugins (see Plugin System below)
+- `plugins/agent/` — Cloud agent sandbox (Dockerfile, entrypoint, container lifecycle)
 - `migrations/` — Alembic PG migrations
 - `scripts/` — Deployment and migration scripts
 
@@ -62,9 +118,9 @@ make install                    # Install all deps (uv sync)
 make lint                       # Lint (ruff check + format --check)
 make fmt                        # Auto-fix lint + format
 make test                       # Run tests (pytest)
-make migrate                    # Run Postgres migrations (alembic)
 make sync                       # Run ETL pipeline
 make api                        # Start API server
+make agent-build                # Build agent sandbox Docker image
 ```
 
 ## CLI
@@ -185,7 +241,6 @@ All secrets are loaded by the `PluginManager` and injected into `PluginContext`.
 - All secrets via environment variables, never hardcode credentials
 - Use `asyncpg` for Postgres connections, `pgvector` for embeddings
 - No staging views or mart views — query `raw_records` JSONB directly via `data->>'field'`
-- Alembic for all schema migrations — never modify the DB manually
 - All API endpoints require `Authorization: Bearer <key>` auth
 - Tests use pytest with pytest-asyncio in `tests/` directory
 - Follow conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`
@@ -201,20 +256,45 @@ uv run pytest
 uv run mypy src/api src/etl src/shared
 ```
 
+## Deployment
+
+- **Host**: `206.223.235.69` (ssh `ubuntu@206.223.235.69`)
+- **Repo on host**: `~/github/paradigmxyz/ai_v2`
+- **Orchestration**: `docker compose` (API, ETL, Postgres, Redis, Slackbot)
+- **Tunnel**: Cloudflare tunnel (`cloudflared`) → `https://svc-ai.paradigm.xyz/mcp/`
+- **MCP URL**: `https://svc-ai.paradigm.xyz/mcp/` (Bearer auth with API_SECRET_KEY)
+- **Agent image**: Built separately on host via `docker build -t agent:latest plugins/agent/`
+
+### Deploy steps
+
+```bash
+ssh ubuntu@206.223.235.69
+cd ~/github/paradigmxyz/ai_v2
+git pull --ff-only
+docker compose up -d --build api        # Rebuild + restart API
+docker build -t agent:latest plugins/agent/  # Rebuild agent image
+```
+
 ## Running Locally
 
 ```bash
 # 1. Start Postgres
 docker compose up -d postgres
 
-# 2. Run migrations
-make migrate
-
-# 3. Start API (loads all plugins, serves MCP at /mcp)
+# 2. Start API (loads all plugins, serves MCP at /mcp)
 make api
 # → http://localhost:8000/mcp (Bearer auth with API_SECRET_KEY)
 
-# 4. Connect from Claude Desktop — add to MCP config:
-#    URL: http://localhost:8000/mcp
-#    Headers: { "Authorization": "Bearer <API_SECRET_KEY>" }
+# 3. Build agent image
+make agent-build
+
+# 4. Test agent container directly
+source .env
+docker run --rm -e AMP_API_KEY="$AMP_API_KEY" -e AI_V2_API_KEY="$API_SECRET_KEY" \
+  agent:latest amp --no-ide --no-notifications --dangerously-allow-all -x "hello world"
+
+# 5. Connect from Claude CLI:
+#    claude mcp add --scope user --transport http \
+#      --header "Authorization: Bearer <API_SECRET_KEY>" \
+#      -- tempo-ai "https://svc-ai.paradigm.xyz/mcp/"
 ```
