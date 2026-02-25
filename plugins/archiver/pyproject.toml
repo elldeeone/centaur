@@ -1,0 +1,24 @@
+[project]
+name = "ai-v2-plugin-archiver"
+description = "Document archiver for investment materials (DocSend, Google Drive)"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "boto3>=1.42.42",
+    "browser-use-sdk>=2.0.14",
+    "httpx>=0.28.1",
+    "pillow>=12.1.0",
+    "playwright>=1.58.0",
+    "psycopg2-binary>=2.9.11",
+    "python-dotenv>=1.2.1",
+    "requests>=2.32.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ai-v2-plugin]
+module = "client.py"

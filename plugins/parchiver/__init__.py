@@ -1,1 +1,0 @@
-"""Document archiver plugin."""

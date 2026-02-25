@@ -1,24 +1,35 @@
 """Paradigm Twitter client."""
 
 import asyncio
+import os
+
+from .sdk import TwitterClient
 
 
 class PTwitterClient:
-    """Sync wrapper around twitter_sdk.TwitterClient."""
+    """Sync wrapper around the embedded TwitterClient SDK."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ):
+        self._api_key = api_key or os.environ.get("SYNOPTIC_API_KEY", "")
+        self._base_url = base_url or os.environ.get(
+            "SYNOPTIC_BASE_URL", "https://api.synoptic.com"
+        )
+
+    def _make_client(self) -> TwitterClient:
+        return TwitterClient(api_key=self._api_key, base_url=self._base_url)
 
     def _run(self, coro):
         return asyncio.run(coro)
-
-    def _get_sdk_client(self):
-        from twitter_sdk import TwitterClient
-
-        return TwitterClient()
 
     def get_user(self, handle: str) -> dict | None:
         """Get user profile by handle."""
 
         async def _do():
-            async with self._get_sdk_client() as client:
+            async with self._make_client() as client:
                 return await client.get_user_by_screen_name(handle)
 
         return self._run(_do())
@@ -29,7 +40,7 @@ class PTwitterClient:
         """Get followers with pagination."""
 
         async def _do():
-            async with self._get_sdk_client() as client:
+            async with self._make_client() as client:
                 all_followers = []
                 cursor = None
                 while len(all_followers) < limit:
@@ -50,7 +61,7 @@ class PTwitterClient:
         """Get following with pagination."""
 
         async def _do():
-            async with self._get_sdk_client() as client:
+            async with self._make_client() as client:
                 all_following = []
                 cursor = None
                 while len(all_following) < limit:
@@ -69,7 +80,7 @@ class PTwitterClient:
         """Lookup users by IDs."""
 
         async def _do():
-            async with self._get_sdk_client() as client:
+            async with self._make_client() as client:
                 return await client.lookup_users(ids)
 
         return self._run(_do())
@@ -80,7 +91,7 @@ class PTwitterClient:
         """Search tweets with pagination."""
 
         async def _do():
-            async with self._get_sdk_client() as client:
+            async with self._make_client() as client:
                 all_tweets = []
                 cursor = None
                 while len(all_tweets) < limit:
@@ -98,7 +109,7 @@ class PTwitterClient:
         """Lookup tweets by IDs."""
 
         async def _do():
-            async with self._get_sdk_client() as client:
+            async with self._make_client() as client:
                 return await client.lookup_tweets(ids)
 
         return self._run(_do())
@@ -107,7 +118,7 @@ class PTwitterClient:
         """Get user timeline. Returns (user, tweets, meta)."""
 
         async def _do():
-            async with self._get_sdk_client() as client:
+            async with self._make_client() as client:
                 user = await client.get_user_by_screen_name(handle)
                 if not user:
                     return None, [], None
@@ -128,7 +139,7 @@ class PTwitterClient:
         """Check API credit usage."""
 
         async def _do():
-            async with self._get_sdk_client() as client:
+            async with self._make_client() as client:
                 await client.get_user_by_screen_name("twitter")
                 return client.get_usage()
 

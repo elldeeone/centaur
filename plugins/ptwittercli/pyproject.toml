@@ -4,9 +4,12 @@ description = "Paradigm Twitter CLI for user profiles, followers, tweets, and se
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "twitter-sdk",
     "typer>=0.12.0",
     "rich>=13.0.0",
+    "httpx>=0.28.1",
+    "tenacity>=8.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
 ]
 
 [build-system]
