@@ -5,20 +5,16 @@
   "scripts": {
     "dev": "next dev --port 3001",
     "build": "next build",
-    "start": "next start --port 3001",
-    "lint": "next lint"
+    "start": "next start --port 3001"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "latest",
-    "@chat-adapter/slack": "latest",
-    "@chat-adapter/state-memory": "^4.14.0",
-    "@chat-adapter/state-redis": "latest",
-    "ai": "latest",
     "chat": "latest",
+    "@chat-adapter/slack": "latest",
+    "@chat-adapter/state-redis": "latest",
+    "@chat-adapter/state-memory": "latest",
     "next": "^15",
     "react": "^19",
-    "react-dom": "^19",
-    "zod": "^3"
+    "react-dom": "^19"
   },
   "devDependencies": {
     "@types/node": "^22",
