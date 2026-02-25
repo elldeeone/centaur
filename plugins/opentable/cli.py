@@ -8,20 +8,9 @@ import json
 from datetime import datetime
 
 import typer
-from ai_v2.cli_tables import Table
 from rich.console import Console
 
-from .locations import (
-    get_metro_id,
-    get_neighborhood_ids,
-    get_region_id,
-    get_zipcode_info,
-    list_metros,
-    list_neighborhoods,
-    list_regions,
-    list_zipcodes,
-)
-from .scraper import search_sync
+from .client import _client
 
 app = typer.Typer(
     name="opentable", help="Search OpenTable for available reservations (search only, cannot book)"
@@ -59,13 +48,15 @@ def search(
     markdown: bool = typer.Option(False, "--markdown", help="Output as markdown table"),
 ):
     """Search for available restaurant reservations."""
+    ot = _client()
+
     # If zipcode provided, use it to auto-configure metro and neighborhoods
     neighborhood_ids = None
     region_ids = None
     metro_id = None
 
     if zipcode:
-        zip_info = get_zipcode_info(zipcode)
+        zip_info = ot.get_zipcode_info(zipcode)
         if zip_info:
             metro_id = zip_info["metro_id"]
             region_ids = [zip_info["region_id"]] if zip_info.get("region_id") else None
@@ -77,13 +68,13 @@ def search(
             )
 
     if metro_id is None:
-        metro_id = get_metro_id(metro)
+        metro_id = ot.get_metro_id(metro)
         if metro_id is None:
             console.print(f"[red]Unknown metro: {metro}. Use: sf, nyc, la[/]")
             raise typer.Exit(1)
 
     if region_ids is None and region:
-        region_id = get_region_id(metro_id, region)
+        region_id = ot.get_region_id(metro_id, region)
         if region_id:
             region_ids = [region_id]
         else:
@@ -93,7 +84,7 @@ def search(
 
     if neighborhood_ids is None and neighborhoods and region_ids:
         neighborhood_list = [n.strip() for n in neighborhoods.split(",")]
-        neighborhood_ids = get_neighborhood_ids(region_ids[0], neighborhood_list)
+        neighborhood_ids = ot.get_neighborhood_ids(region_ids[0], neighborhood_list)
         if not neighborhood_ids:
             console.print(f"[yellow]No matching neighborhoods found for: {neighborhoods}[/]")
 
@@ -104,7 +95,7 @@ def search(
     console.print(f"[dim]Searching OpenTable for '{query or 'all'}' on {date} at {time}...[/]")
 
     try:
-        results = search_sync(
+        results = ot.search(
             term=query,
             covers=covers,
             date_time=date_time,
@@ -179,7 +170,8 @@ def list_metros_cmd(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """List available metro areas."""
-    metros = list_metros()
+    ot = _client()
+    metros = ot.list_metros()
 
     if json_output:
         print(json.dumps(metros, indent=2))
@@ -196,12 +188,13 @@ def list_regions_cmd(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """List regions within a metro area."""
-    metro_id = get_metro_id(metro)
+    ot = _client()
+    metro_id = ot.get_metro_id(metro)
     if metro_id is None:
         console.print(f"[red]Unknown metro: {metro}[/]")
         raise typer.Exit(1)
 
-    regions = list_regions(metro_id)
+    regions = ot.list_regions(metro_id)
 
     if json_output:
         print(json.dumps(regions, indent=2))
@@ -220,17 +213,18 @@ def list_neighborhoods_cmd(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """List neighborhoods within a region."""
-    metro_id = get_metro_id(metro)
+    ot = _client()
+    metro_id = ot.get_metro_id(metro)
     if metro_id is None:
         console.print(f"[red]Unknown metro: {metro}[/]")
         raise typer.Exit(1)
 
-    region_id = get_region_id(metro_id, region)
+    region_id = ot.get_region_id(metro_id, region)
     if region_id is None:
         console.print(f"[red]Unknown region: {region}[/]")
         raise typer.Exit(1)
 
-    neighborhoods = list_neighborhoods(region_id)
+    neighborhoods = ot.list_neighborhoods(region_id)
 
     if json_output:
         print(json.dumps(neighborhoods, indent=2))
@@ -251,14 +245,15 @@ def list_zipcodes_cmd(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """List mapped zipcodes with their neighborhood IDs."""
+    ot = _client()
     metro_id = None
     if metro:
-        metro_id = get_metro_id(metro)
+        metro_id = ot.get_metro_id(metro)
         if metro_id is None:
             console.print(f"[red]Unknown metro: {metro}[/]")
             raise typer.Exit(1)
 
-    zipcodes = list_zipcodes(metro_id)
+    zipcodes = ot.list_zipcodes(metro_id)
 
     if json_output:
         print(json.dumps(zipcodes, indent=2))

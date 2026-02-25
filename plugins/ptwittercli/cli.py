@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import asyncio
 import json
 from datetime import datetime
 
@@ -12,19 +11,10 @@ import typer
 from rich.console import Console
 from ai_v2.cli_tables import Table
 
+from .client import _client
+
 app = typer.Typer(name="ptwittercli", help="Paradigm Twitter CLI")
 console = Console()
-
-
-def get_client():
-    from twitter_sdk import TwitterClient
-
-    return TwitterClient()
-
-
-def run_async(coro):
-    """Run an async coroutine synchronously."""
-    return asyncio.run(coro)
 
 
 def format_number(value: int | None) -> str:
@@ -83,12 +73,8 @@ def user(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get user profile by handle."""
-
-    async def _get_user():
-        async with get_client() as client:
-            return await client.get_user_by_screen_name(handle)
-
-    data = run_async(_get_user())
+    client = _client()
+    data = client.get_user(handle)
 
     if data is None:
         console.print(f"[red]User @{handle} not found[/red]")
@@ -140,22 +126,8 @@ def followers(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get followers of a user."""
-
-    async def _get_followers():
-        async with get_client() as client:
-            all_followers = []
-            cursor = None
-            while len(all_followers) < limit:
-                batch_size = min(1000, limit - len(all_followers))
-                followers, cursor, meta = await client.get_followers(
-                    handle, cursor=cursor, ids_only=ids_only, max_results=batch_size
-                )
-                all_followers.extend(followers)
-                if not cursor:
-                    break
-            return all_followers[:limit], meta
-
-    followers_list, meta = run_async(_get_followers())
+    client = _client()
+    followers_list, meta = client.get_followers(handle, limit=limit, ids_only=ids_only)
 
     if json_output:
         print(json.dumps(followers_list, indent=2))
@@ -216,22 +188,8 @@ def following(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get accounts a user follows."""
-
-    async def _get_following():
-        async with get_client() as client:
-            all_following = []
-            cursor = None
-            while len(all_following) < limit:
-                batch_size = min(1000, limit - len(all_following))
-                following, cursor, meta = await client.get_following(
-                    handle, cursor=cursor, ids_only=ids_only, max_results=batch_size
-                )
-                all_following.extend(following)
-                if not cursor:
-                    break
-            return all_following[:limit], meta
-
-    following_list, meta = run_async(_get_following())
+    client = _client()
+    following_list, meta = client.get_following(handle, limit=limit, ids_only=ids_only)
 
     if json_output:
         print(json.dumps(following_list, indent=2))
@@ -296,11 +254,8 @@ def lookup(
         console.print("[red]No valid user IDs provided[/red]")
         raise typer.Exit(1)
 
-    async def _lookup():
-        async with get_client() as client:
-            return await client.lookup_users(ids)
-
-    users = run_async(_lookup())
+    client = _client()
+    users = client.lookup_users(ids)
 
     if json_output:
         print(json.dumps(users, indent=2))
@@ -348,21 +303,8 @@ def search(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Search for tweets."""
-
-    async def _search():
-        async with get_client() as client:
-            all_tweets = []
-            cursor = None
-            while len(all_tweets) < limit:
-                tweets, cursor, meta = await client.search_tweets(
-                    query, search_type=search_type, cursor=cursor
-                )
-                all_tweets.extend(tweets)
-                if not cursor or not tweets:
-                    break
-            return all_tweets[:limit], meta
-
-    tweets, meta = run_async(_search())
+    client = _client()
+    tweets, meta = client.search_tweets(query, search_type=search_type, limit=limit)
 
     if json_output:
         print(json.dumps(tweets, indent=2))
@@ -414,11 +356,8 @@ def tweets(
         console.print("[red]No valid tweet IDs provided[/red]")
         raise typer.Exit(1)
 
-    async def _lookup():
-        async with get_client() as client:
-            return await client.lookup_tweets(ids)
-
-    tweets_list = run_async(_lookup())
+    client = _client()
+    tweets_list = client.lookup_tweets(ids)
 
     if json_output:
         print(json.dumps(tweets_list, indent=2))
@@ -460,25 +399,8 @@ def timeline(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get a user's timeline (recent tweets)."""
-
-    async def _timeline():
-        async with get_client() as client:
-            # First get user ID from handle
-            user = await client.get_user_by_screen_name(handle)
-            if not user:
-                return None, None, None
-
-            user_id = user.get("user_id")
-            all_tweets = []
-            cursor = None
-            while len(all_tweets) < limit:
-                tweets, cursor, meta = await client.get_user_timeline(user_id, cursor=cursor)
-                all_tweets.extend(tweets)
-                if not cursor or not tweets:
-                    break
-            return user, all_tweets[:limit], meta
-
-    user, tweets, meta = run_async(_timeline())
+    client = _client()
+    user, tweets, meta = client.get_timeline(handle, limit=limit)
 
     if user is None:
         console.print(f"[red]User @{handle} not found[/red]")
@@ -527,14 +449,8 @@ def timeline(
 @app.command()
 def usage():
     """Check API credit usage."""
-
-    async def _usage():
-        async with get_client() as client:
-            # Make a minimal API call to get usage info
-            await client.get_user_by_screen_name("twitter")
-            return client.get_usage()
-
-    api_usage = run_async(_usage())
+    client = _client()
+    api_usage = client.get_usage()
 
     console.print("\n[bold]API Usage[/bold]\n")
     console.print(f"Remaining units: [green]{format_number(api_usage.remaining_units)}[/green]")

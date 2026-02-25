@@ -12,22 +12,12 @@ import typer
 from rich.console import Console
 from ai_v2.cli_tables import Table
 
-from .generator import generate_draft_email, generate_term_sheet_text
-from .template import generate_term_sheet_docx_strict
-from .template_filler import fill_template
-from .models import BoardRights, DealStatus, InstrumentType, TermSheet, TokenRights
-from .store import (
-    create_deal,
-    delete_deal,
-    get_deal,
-    get_deal_by_company,
-    get_deal_by_thread,
-    list_deals,
-    update_deal,
-)
+from .client import TermsheetClient
+from .models import BoardRights, DealStatus, InstrumentType, TokenRights
 
 app = typer.Typer(help="Term sheet generation and deal tracking for Paradigm")
 console = Console()
+client = TermsheetClient()
 
 
 def _format_money(amount: float) -> str:
@@ -129,7 +119,7 @@ def create_term_sheet(
         token_floor_percent=token_floor,
     )
 
-    term_sheet = TermSheet(
+    term_sheet = client.create_term_sheet(
         company_name=company,
         investment_amount=amount,
         instrument_type=instrument_type,
@@ -151,7 +141,7 @@ def create_term_sheet(
     )
 
     if save_deal and requester_id:
-        deal = create_deal(
+        deal = client.create_deal(
             company_name=company,
             term_sheet=term_sheet,
             requester_user_id=requester_id,
@@ -162,7 +152,7 @@ def create_term_sheet(
         console.print(f"[green]Created deal: {deal.id}[/green]")
 
     if output_format == "text":
-        text = generate_term_sheet_text(term_sheet)
+        text = client.generate_text(term_sheet)
         if output_file:
             Path(output_file).write_text(text)
             console.print(f"[green]Saved to {output_file}[/green]")
@@ -170,17 +160,13 @@ def create_term_sheet(
             console.print(text)
 
     elif output_format == "docx":
-        if template_file:
-            # Use template-based generation
-            try:
-                docx_bytes = fill_template(template_file, term_sheet)
+        try:
+            docx_bytes = client.generate_docx(term_sheet, template_file=template_file)
+            if template_file:
                 console.print(f"[blue]Using template: {template_file}[/blue]")
-            except FileNotFoundError:
-                console.print(f"[red]Template file not found: {template_file}[/red]")
-                raise typer.Exit(1)
-        else:
-            # Generate from scratch
-            docx_bytes = generate_term_sheet_docx_strict(term_sheet)
+        except FileNotFoundError:
+            console.print(f"[red]Template file not found: {template_file}[/red]")
+            raise typer.Exit(1)
         output_path = output_file or f"{company.replace(' ', '_')}_Term_Sheet.docx"
         Path(output_path).write_bytes(docx_bytes)
         console.print(f"[green]Saved to {output_path}[/green]")
@@ -209,7 +195,7 @@ def list_term_sheets(
             console.print("Valid statuses: draft, pending_approval, approved, sent")
             raise typer.Exit(1)
 
-    deals = list_deals(status_filter)
+    deals = client.list_deals(status_filter)
 
     if not deals:
         console.print("[yellow]No deals found[/yellow]")
@@ -252,7 +238,7 @@ def get_term_sheet(
     output_file: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
 ):
     """Get a specific deal by ID or company name."""
-    deal = get_deal(identifier) or get_deal_by_company(identifier)
+    deal = client.get_deal(identifier)
 
     if not deal:
         console.print(f"[red]Deal not found: {identifier}[/red]")
@@ -262,11 +248,11 @@ def get_term_sheet(
         console.print(json.dumps(deal.to_dict(), indent=2))
 
     elif output_format == "email":
-        email = generate_draft_email(deal.term_sheet)
+        email = client.generate_email(deal.term_sheet)
         console.print(email)
 
     elif output_format == "docx":
-        docx_bytes = generate_term_sheet_docx_strict(deal.term_sheet)
+        docx_bytes = client.generate_docx(deal.term_sheet)
         output_path = output_file or f"{deal.company_name.replace(' ', '_')}_Term_Sheet.docx"
         Path(output_path).write_bytes(docx_bytes)
         console.print(f"[green]Saved to {output_path}[/green]")
@@ -282,7 +268,7 @@ def get_term_sheet(
         if deal.sent_at:
             console.print(f"Sent: {deal.sent_at}")
         console.print()
-        console.print(generate_term_sheet_text(deal.term_sheet))
+        console.print(client.generate_text(deal.term_sheet))
 
 
 @app.command("status")
@@ -290,7 +276,7 @@ def check_status(
     company: str = typer.Argument(..., help="Company name to check status"),
 ):
     """Check the status of a deal by company name."""
-    deal = get_deal_by_company(company)
+    deal = client.get_deal(company)
 
     if not deal:
         console.print(f"[yellow]No deal found for: {company}[/yellow]")
@@ -329,7 +315,7 @@ def update_term_sheet(
     token_floor: Optional[float] = typer.Option(None, "--token-floor", help="Update token floor"),
 ):
     """Update an existing deal."""
-    deal = get_deal(deal_id)
+    deal = client.get_deal(deal_id)
     if not deal:
         console.print(f"[red]Deal not found: {deal_id}[/red]")
         raise typer.Exit(1)
@@ -372,7 +358,7 @@ def update_term_sheet(
     if updated:
         new_term_sheet = ts
 
-    result = update_deal(
+    result = client.update_deal(
         deal_id=deal_id,
         status=new_status,
         term_sheet=new_term_sheet,
@@ -388,12 +374,12 @@ def update_term_sheet(
 
 
 @app.command("approve")
-def approve_deal(
+def approve_deal_cmd(
     deal_id: str = typer.Argument(..., help="Deal ID to approve"),
     approved_by: str = typer.Option(..., "--by", "-b", help="Approver username"),
 ):
     """Approve a deal and move to approved status."""
-    deal = get_deal(deal_id)
+    deal = client.get_deal(deal_id)
     if not deal:
         console.print(f"[red]Deal not found: {deal_id}[/red]")
         raise typer.Exit(1)
@@ -402,12 +388,7 @@ def approve_deal(
         console.print("[yellow]Deal already approved[/yellow]")
         return
 
-    result = update_deal(
-        deal_id=deal_id,
-        status=DealStatus.APPROVED,
-        approved_by=approved_by,
-        revision_note=f"Approved by {approved_by}",
-    )
+    result = client.approve_deal(deal_id, approved_by)
 
     if result:
         console.print(f"[green]✅ Deal approved: {deal_id}[/green]")
@@ -417,40 +398,32 @@ def approve_deal(
 
 
 @app.command("submit")
-def submit_for_approval(
+def submit_for_approval_cmd(
     deal_id: str = typer.Argument(..., help="Deal ID to submit"),
 ):
     """Submit a deal for approval (changes status to pending_approval)."""
-    deal = get_deal(deal_id)
+    deal = client.get_deal(deal_id)
     if not deal:
         console.print(f"[red]Deal not found: {deal_id}[/red]")
         raise typer.Exit(1)
 
-    result = update_deal(
-        deal_id=deal_id,
-        status=DealStatus.PENDING_APPROVAL,
-        revision_note="Submitted for approval",
-    )
+    result = client.submit_for_approval(deal_id)
 
     if result:
         console.print(f"[green]⏳ Deal submitted for approval: {deal_id}[/green]")
 
 
 @app.command("sent")
-def mark_sent(
+def mark_sent_cmd(
     deal_id: str = typer.Argument(..., help="Deal ID to mark as sent"),
 ):
     """Mark a deal as sent to the company."""
-    deal = get_deal(deal_id)
+    deal = client.get_deal(deal_id)
     if not deal:
         console.print(f"[red]Deal not found: {deal_id}[/red]")
         raise typer.Exit(1)
 
-    result = update_deal(
-        deal_id=deal_id,
-        status=DealStatus.SENT,
-        revision_note="Marked as sent",
-    )
+    result = client.mark_sent(deal_id)
 
     if result:
         console.print(f"[green]📤 Deal marked as sent: {deal_id}[/green]")
@@ -462,7 +435,7 @@ def delete_term_sheet(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ):
     """Delete a deal."""
-    deal = get_deal(deal_id)
+    deal = client.get_deal(deal_id)
     if not deal:
         console.print(f"[red]Deal not found: {deal_id}[/red]")
         raise typer.Exit(1)
@@ -472,7 +445,7 @@ def delete_term_sheet(
         if not confirm:
             raise typer.Abort()
 
-    if delete_deal(deal_id):
+    if client.delete_deal(deal_id):
         console.print(f"[green]Deleted deal: {deal_id}[/green]")
     else:
         console.print("[red]Failed to delete deal[/red]")
@@ -484,13 +457,13 @@ def generate_email(
     dri: Optional[str] = typer.Option(None, "--dri", help="DRI name override"),
 ):
     """Generate a draft email for a deal."""
-    deal = get_deal(identifier) or get_deal_by_company(identifier)
+    deal = client.get_deal(identifier)
 
     if not deal:
         console.print(f"[red]Deal not found: {identifier}[/red]")
         raise typer.Exit(1)
 
-    email = generate_draft_email(deal.term_sheet, dri_name=dri)
+    email = client.generate_email(deal.term_sheet, dri_name=dri)
     console.print(email)
 
 
@@ -500,7 +473,7 @@ def get_by_thread(
     thread_ts: str = typer.Argument(..., help="Slack thread timestamp"),
 ):
     """Get deal by Slack thread."""
-    deal = get_deal_by_thread(channel, thread_ts)
+    deal = client.get_deal_by_thread(channel, thread_ts)
 
     if not deal:
         console.print("[yellow]No deal found for this thread[/yellow]")

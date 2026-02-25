@@ -11,8 +11,7 @@ import typer
 from rich.console import Console
 from ai_v2.cli_tables import Table
 
-from .graphs import generate_all_graphs, metrics_to_dataframe
-from .parser import parse_log_file
+from .client import _client
 
 app = typer.Typer(help="Parse reth logs and generate performance graphs")
 console = Console()
@@ -30,16 +29,14 @@ def parse(
         console.print(f"[red]Error: File not found: {log_file}[/red]")
         raise typer.Exit(1)
 
-    blocks = parse_log_file(log_file)
-    if not blocks:
+    client = _client()
+    df = client.parse(log_file, min_gas=min_gas)
+
+    if df.empty:
         console.print("[yellow]No blocks found in log file[/yellow]")
         raise typer.Exit(0)
 
-    df = metrics_to_dataframe(blocks)
-    if min_gas > 0:
-        df = df[df["gas_used_mgas"] > min_gas]
-
-    console.print(f"[green]Parsed {len(blocks)} blocks, {len(df)} after filtering[/green]")
+    console.print(f"[green]Parsed {len(df)} blocks[/green]")
 
     if output:
         df.to_csv(output, index=False)
@@ -93,26 +90,21 @@ def graphs(
         console.print(f"[red]Error: File not found: {log_file}[/red]")
         raise typer.Exit(1)
 
-    blocks = parse_log_file(log_file)
-    if not blocks:
-        console.print("[yellow]No blocks found in log file[/yellow]")
-        raise typer.Exit(0)
-
-    console.print(f"[green]Parsed {len(blocks)} blocks[/green]")
+    client = _client()
 
     try:
-        paths = generate_all_graphs(
-            blocks,
-            output_dir,
-            min_gas_mgas=min_gas,
-            title_suffix=title,
-        )
-        console.print(f"[green]Generated {len(paths)} graphs:[/green]")
-        for p in paths:
-            console.print(f"  - {p}")
+        paths = client.generate_graphs(log_file, output_dir, min_gas=min_gas, title_suffix=title)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
+
+    if not paths:
+        console.print("[yellow]No blocks found in log file[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(f"[green]Generated {len(paths)} graphs:[/green]")
+    for p in paths:
+        console.print(f"  - {p}")
 
 
 @app.command()
@@ -126,74 +118,73 @@ def summary(
         console.print(f"[red]Error: File not found: {log_file}[/red]")
         raise typer.Exit(1)
 
-    blocks = parse_log_file(log_file)
-    if not blocks:
+    client = _client()
+    stats = client.summary(log_file, min_gas=min_gas)
+
+    if not stats:
         console.print("[yellow]No blocks found in log file[/yellow]")
         raise typer.Exit(0)
 
-    df = metrics_to_dataframe(blocks)
-    total = len(df)
-    empty = len(df[df["gas_used_mgas"] == 0])
-    big_blocks = df[df["gas_used_mgas"] > min_gas]
+    block_min, block_max = stats["block_range"]
 
     if markdown:
         print("## Reth Big Blocks Performance Analysis\n")
         print("### Dataset Overview")
         print(
-            f"- **{total:,} blocks** analyzed ({df['block_number'].min()} - {df['block_number'].max()})"
+            f"- **{stats['total_blocks']:,} blocks** analyzed ({block_min} - {block_max})"
         )
-        print(f"- {empty:,} empty blocks, {total - empty:,} non-empty")
+        print(f"- {stats['empty_blocks']:,} empty blocks, {stats['non_empty_blocks']:,} non-empty")
         print(
-            f"- Max gas: **{df['gas_used_mgas'].max():.0f} Mgas** | Max latency: **{df['elapsed_ms'].max():.0f}ms**\n"
+            f"- Max gas: **{stats['max_gas_mgas']:.0f} Mgas** | Max latency: **{stats['max_latency_ms']:.0f}ms**\n"
         )
+
+        category_labels = {
+            "empty": "Empty",
+            "light": "Light (<10M)",
+            "medium": "Medium (10-50M)",
+            "big": "Big (50-500M)",
+            "huge": "Huge (>500M)",
+        }
 
         print("### Block Categories")
         print("| Category | Blocks | Avg Latency | State Root % | Execution % |")
         print("|----------|--------|-------------|--------------|-------------|")
 
-        for name, subset in [
-            ("Empty", df[df["gas_used_mgas"] == 0]),
-            ("Light (<10M)", df[(df["gas_used_mgas"] > 0) & (df["gas_used_mgas"] <= 10)]),
-            ("Medium (10-50M)", df[(df["gas_used_mgas"] > 10) & (df["gas_used_mgas"] <= 50)]),
-            ("Big (50-500M)", df[(df["gas_used_mgas"] > 50) & (df["gas_used_mgas"] <= 500)]),
-            ("Huge (>500M)", df[df["gas_used_mgas"] > 500]),
-        ]:
-            if len(subset) > 0:
-                avg_lat = subset["elapsed_ms"].mean()
-                avg_sr = subset["state_root_pct"].mean()
-                avg_ex = subset["execution_pct"].mean()
+        for key, label in category_labels.items():
+            cat = stats["categories"].get(key)
+            if cat:
                 print(
-                    f"| {name} | {len(subset):,} | {avg_lat:.1f}ms | {avg_sr:.1f}% | **{avg_ex:.1f}%** |"
+                    f"| {label} | {cat['count']:,} | {cat['avg_latency_ms']:.1f}ms | {cat['avg_state_root_pct']:.1f}% | **{cat['avg_execution_pct']:.1f}%** |"
                 )
 
-        if len(big_blocks) > 0:
-            print(f"\n### Key Findings (blocks >{min_gas:.0f}M gas)")
-            print(f"- **{len(big_blocks)} blocks** analyzed")
-            print(f"- **Avg throughput:** {big_blocks['gas_throughput_ggas_s'].mean():.2f} Ggas/s")
-            print(f"- **Execution:** {big_blocks['execution_pct'].mean():.1f}% of total time")
-            print(f"- **State root:** {big_blocks['state_root_pct'].mean():.1f}% of total time")
-
-            slowest = big_blocks.loc[big_blocks["elapsed_ms"].idxmax()]
+        big = stats.get("big_blocks")
+        if big:
+            print(f"\n### Key Findings (blocks >{big['min_gas_threshold']:.0f}M gas)")
+            print(f"- **{big['count']} blocks** analyzed")
+            print(f"- **Avg throughput:** {big['avg_throughput_ggas_s']:.2f} Ggas/s")
+            print(f"- **Execution:** {big['avg_execution_pct']:.1f}% of total time")
+            print(f"- **State root:** {big['avg_state_root_pct']:.1f}% of total time")
             print(
-                f"- **Slowest block:** #{int(slowest['block_number'])} at {slowest['elapsed_ms']:.0f}ms ({slowest['gas_used_mgas']:.0f}M gas)"
+                f"- **Slowest block:** #{big['slowest_block']} at {big['slowest_latency_ms']:.0f}ms ({big['slowest_gas_mgas']:.0f}M gas)"
             )
     else:
         console.print("[bold]Reth Big Blocks Performance Analysis[/bold]\n")
         console.print(
-            f"Blocks analyzed: {total:,} ({df['block_number'].min()} - {df['block_number'].max()})"
+            f"Blocks analyzed: {stats['total_blocks']:,} ({block_min} - {block_max})"
         )
-        console.print(f"Empty: {empty:,} | Non-empty: {total - empty:,}")
+        console.print(f"Empty: {stats['empty_blocks']:,} | Non-empty: {stats['non_empty_blocks']:,}")
         console.print(
-            f"Max gas: {df['gas_used_mgas'].max():.0f} Mgas | Max latency: {df['elapsed_ms'].max():.0f}ms\n"
+            f"Max gas: {stats['max_gas_mgas']:.0f} Mgas | Max latency: {stats['max_latency_ms']:.0f}ms\n"
         )
 
-        if len(big_blocks) > 0:
-            console.print(f"[bold]Big blocks (>{min_gas:.0f}M gas): {len(big_blocks)}[/bold]")
+        big = stats.get("big_blocks")
+        if big:
+            console.print(f"[bold]Big blocks (>{big['min_gas_threshold']:.0f}M gas): {big['count']}[/bold]")
             console.print(
-                f"  Avg throughput: {big_blocks['gas_throughput_ggas_s'].mean():.2f} Ggas/s"
+                f"  Avg throughput: {big['avg_throughput_ggas_s']:.2f} Ggas/s"
             )
-            console.print(f"  Avg execution %: {big_blocks['execution_pct'].mean():.1f}%")
-            console.print(f"  Avg state root %: {big_blocks['state_root_pct'].mean():.1f}%")
+            console.print(f"  Avg execution %: {big['avg_execution_pct']:.1f}%")
+            console.print(f"  Avg state root %: {big['avg_state_root_pct']:.1f}%")
 
 
 if __name__ == "__main__":

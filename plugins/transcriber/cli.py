@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import platform
 import queue
 import shutil
 import signal
@@ -19,270 +18,12 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from .client import DEFAULT_MODEL, END_PHRASE, IS_MACOS, TranscriberClient
+
 app = typer.Typer(help="Local-first voice transcription with live streaming")
 console = Console()
 
-IS_MACOS = platform.system() == "Darwin"
-IS_LINUX = platform.system() == "Linux"
-
-MODELS = {
-    "tiny": ("mlx-community/whisper-tiny", "tiny"),
-    "base": ("mlx-community/whisper-base", "base"),
-    "small": ("mlx-community/whisper-small", "small"),
-    "medium": ("mlx-community/whisper-medium", "medium"),
-    "large": ("mlx-community/whisper-large-v3", "large-v3"),
-    "turbo": ("mlx-community/whisper-large-v3-turbo", "large-v3-turbo"),
-}
-DEFAULT_MODEL = "turbo"
-END_PHRASE = "over and out"
-
-# Common Whisper hallucinations on silence
-HALLUCINATIONS = {
-    "thank you",
-    "thanks for watching",
-    "thanks for listening",
-    "subscribe",
-    "like and subscribe",
-    "see you next time",
-    "bye",
-    "goodbye",
-    "thank you for watching",
-    "you",
-    ".",
-    "",
-    " ",
-}
-
-
-def get_model_name(model: str) -> str:
-    """Get platform-specific model name."""
-    if model in MODELS:
-        return MODELS[model][0] if IS_MACOS else MODELS[model][1]
-    return model
-
-
-def find_recorder() -> str:
-    """Find available audio recorder."""
-    if shutil.which("sox") or shutil.which("rec"):
-        return "sox"
-    if shutil.which("ffmpeg"):
-        return "ffmpeg"
-    if shutil.which("arecord"):
-        return "arecord"
-
-    if IS_MACOS:
-        raise typer.Exit("No audio recorder found. Install sox: brew install sox")
-    else:
-        raise typer.Exit("No audio recorder found. Install sox: apt install sox")
-
-
-def get_default_audio_device() -> str:
-    """Get the default audio input device index for macOS."""
-    if not IS_MACOS:
-        return "default"
-
-    # List devices and find the first real microphone
-    result = subprocess.run(
-        ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
-        capture_output=True,
-        text=True,
-    )
-    output = result.stderr
-
-    # Look for microphone in the audio devices section
-    # Format: [AVFoundation ...] [0] Device Name
-    import re
-
-    in_audio = False
-    for line in output.split("\n"):
-        if "audio devices" in line.lower():
-            in_audio = True
-            continue
-        if in_audio:
-            # Match pattern like [1] MacBook Pro Microphone
-            match = re.search(r"\[(\d+)\]\s+(.+)", line)
-            if match:
-                idx, name = match.groups()
-                # Prefer real microphone, skip virtual devices
-                name_lower = name.lower()
-                if "microphone" in name_lower and "virtual" not in name_lower:
-                    return f":{idx}"
-
-    # Fallback to device 1 (usually the built-in mic)
-    return ":1"
-
-
-def record_chunk_ffmpeg(output: Path, duration: float):
-    """Record a chunk of audio using ffmpeg."""
-    if IS_MACOS:
-        device = get_default_audio_device()
-        input_device = ["-f", "avfoundation", "-i", device]
-    else:
-        input_device = ["-f", "alsa", "-i", "default"]
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "quiet",
-        *input_device,
-        "-ar",
-        "16000",
-        "-ac",
-        "1",
-        "-acodec",
-        "pcm_s16le",
-        "-t",
-        str(duration),
-        str(output),
-    ]
-    subprocess.run(cmd, check=True, capture_output=True)
-
-
-def record_chunk_sox(output: Path, duration: float):
-    """Record a chunk using sox."""
-    cmd = [
-        "rec",
-        "-q",
-        "-r",
-        "16000",
-        "-c",
-        "1",
-        "-b",
-        "16",
-        str(output),
-        "trim",
-        "0",
-        str(duration),
-    ]
-    subprocess.run(cmd, check=True, capture_output=True)
-
-
-def record_chunk(output: Path, duration: float):
-    """Record a chunk of audio."""
-    recorder = find_recorder()
-    if recorder == "sox":
-        record_chunk_sox(output, duration)
-    else:
-        record_chunk_ffmpeg(output, duration)
-
-
-def is_hallucination(text: str) -> bool:
-    """Check if text is a known Whisper hallucination."""
-    cleaned = text.lower().strip().rstrip(".!?,")
-    return cleaned in HALLUCINATIONS or len(cleaned) < 2
-
-
-# Global model cache
-_model_cache: dict = {}
-
-
-def get_whisper_model(model: str):
-    """Get or create cached Whisper model."""
-    model_name = get_model_name(model)
-
-    if model_name in _model_cache:
-        return _model_cache[model_name]
-
-    with console.status(f"[bold blue]Loading model {model_name}...[/]"):
-        if IS_MACOS:
-            import mlx_whisper
-
-            # Warm up by loading the model (it caches internally)
-            # Create a tiny silent audio to force model load
-            tmp = Path(tempfile.mktemp(suffix=".wav"))
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "anullsrc=r=16000:cl=mono",
-                    "-t",
-                    "0.1",
-                    "-acodec",
-                    "pcm_s16le",
-                    str(tmp),
-                ],
-                capture_output=True,
-                check=True,
-            )
-            try:
-                mlx_whisper.transcribe(str(tmp), path_or_hf_repo=model_name)
-            finally:
-                tmp.unlink(missing_ok=True)
-            _model_cache[model_name] = ("mlx", model_name)
-        else:
-            from faster_whisper import WhisperModel
-
-            whisper = WhisperModel(model_name, device="auto", compute_type="auto")
-            _model_cache[model_name] = ("faster", whisper)
-
-    console.print("[dim]Model loaded[/]")
-    return _model_cache[model_name]
-
-
-def transcribe_audio(path: Path, model: str, language: Optional[str] = None) -> str:
-    """Transcribe audio file."""
-    cached = get_whisper_model(model)
-
-    if cached[0] == "mlx":
-        import mlx_whisper
-
-        result = mlx_whisper.transcribe(
-            str(path),
-            path_or_hf_repo=cached[1],
-            language=language,
-            condition_on_previous_text=False,
-        )
-        text = result["text"].strip()
-    else:
-        whisper = cached[1]
-        segments, _ = whisper.transcribe(
-            str(path),
-            language=language,
-            condition_on_previous_text=False,
-        )
-        text = " ".join(seg.text for seg in segments).strip()
-
-    return "" if is_hallucination(text) else text
-
-
-def merge_wav_files(files: list[Path], output: Path):
-    """Merge multiple WAV files into one."""
-    if not files:
-        return
-
-    if len(files) == 1:
-        shutil.copy(files[0], output)
-        return
-
-    # Use sox to concatenate
-    if shutil.which("sox"):
-        cmd = ["sox"] + [str(f) for f in files] + [str(output)]
-        subprocess.run(cmd, check=True, capture_output=True)
-    else:
-        # Use ffmpeg
-        list_file = output.parent / "concat.txt"
-        with open(list_file, "w") as f:
-            for file in files:
-                f.write(f"file '{file}'\n")
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(list_file),
-            "-c",
-            "copy",
-            str(output),
-        ]
-        subprocess.run(cmd, check=True, capture_output=True)
-        list_file.unlink(missing_ok=True)
+_client = TranscriberClient()
 
 
 def _recorder_thread(
@@ -293,7 +34,7 @@ def _recorder_thread(
     while not stop_event.is_set():
         chunk_path = tmpdir / f"chunk_{chunk_num:04d}.wav"
         try:
-            record_chunk(chunk_path, chunk_size)
+            _client.record_chunk(chunk_path, chunk_size)
             if chunk_path.exists() and chunk_path.stat().st_size > 500:
                 chunk_queue.put(chunk_path)
             chunk_num += 1
@@ -322,14 +63,14 @@ def record(
     ),
 ):
     """Record with live streaming transcription. Say 'over and out' to stop."""
-    import queue
-
     if not streaming:
         _record_simple(output, model, duration, language, copy)
         return
 
     # Pre-load model before recording
-    get_whisper_model(model)
+    with console.status(f"[bold blue]Loading model {_client.get_model_name(model)}...[/]"):
+        _client.get_whisper_model(model)
+    console.print("[dim]Model loaded[/]")
 
     tmpdir = Path(tempfile.mkdtemp())
     chunks: list[Path] = []
@@ -362,7 +103,7 @@ def record(
 
             # Transcribe chunk (recording continues in background)
             try:
-                text = transcribe_audio(chunk_path, model, language)
+                text = _client.transcribe_audio(chunk_path, model, language)
                 if text:
                     transcripts.append(text)
                     console.print(f"[cyan]>[/] {text}")
@@ -387,10 +128,10 @@ def record(
     # Final transcription of full audio for accuracy
     console.print("\n[dim]Finalizing transcription...[/]")
     merged_path = tmpdir / "merged.wav"
-    merge_wav_files(chunks, merged_path)
+    _client.merge_wav_files(chunks, merged_path)
 
     try:
-        final_text = transcribe_audio(merged_path, model, language)
+        final_text = _client.transcribe_audio(merged_path, model, language)
         # Remove end phrase from final text
         final_text = final_text.lower().replace(END_PHRASE, "").strip()
         final_text = " ".join(final_text.split())  # Clean whitespace
@@ -414,16 +155,7 @@ def record(
         console.print(f"[dim]Saved to {output}[/]")
 
     if copy:
-        try:
-            if IS_MACOS:
-                subprocess.run(["pbcopy"], input=final_text.encode(), check=True)
-            else:
-                subprocess.run(
-                    ["xclip", "-selection", "clipboard"], input=final_text.encode(), check=True
-                )
-            console.print("[dim]Copied to clipboard[/]")
-        except Exception:
-            pass
+        _copy_to_clipboard(final_text)
 
     typer.echo(final_text)
 
@@ -442,14 +174,14 @@ def _record_simple(
 
     try:
         if duration:
-            record_chunk(tmp, duration)
+            _client.record_chunk(tmp, duration)
         else:
             # Record until Ctrl+C
-            recorder = find_recorder()
+            recorder = _client.find_recorder()
             if recorder == "sox":
                 cmd = ["rec", "-q", "-r", "16000", "-c", "1", "-b", "16", str(tmp)]
             elif IS_MACOS:
-                device = get_default_audio_device()
+                device = _client.get_default_audio_device()
                 cmd = [
                     "ffmpeg",
                     "-y",
@@ -495,7 +227,7 @@ def _record_simple(
     console.print(f"[dim]Recorded {tmp.stat().st_size // 1024}KB[/]")
 
     with console.status("[bold blue]Transcribing...[/]"):
-        text = transcribe_audio(tmp, model, language)
+        text = _client.transcribe_audio(tmp, model, language)
 
     tmp.unlink(missing_ok=True)
 
@@ -509,15 +241,7 @@ def _record_simple(
         output.write_text(text)
 
     if copy:
-        try:
-            if IS_MACOS:
-                subprocess.run(["pbcopy"], input=text.encode(), check=True)
-            else:
-                subprocess.run(
-                    ["xclip", "-selection", "clipboard"], input=text.encode(), check=True
-                )
-        except Exception:
-            pass
+        _copy_to_clipboard(text)
 
     typer.echo(text)
 
@@ -539,7 +263,7 @@ def file(
         raise typer.Exit(1)
 
     with console.status("[bold blue]Transcribing...[/]"):
-        text = transcribe_audio(path, model, language)
+        text = _client.transcribe_audio(path, model, language)
 
     console.print(Panel(text, title="Transcription", border_style="green"))
 
@@ -580,11 +304,11 @@ def listen(
             try:
                 while True:
                     chunk_path = tmpdir / f"listen_{chunk_num:04d}.wav"
-                    record_chunk(chunk_path, chunk_size)
+                    _client.record_chunk(chunk_path, chunk_size)
 
                     if chunk_path.exists() and chunk_path.stat().st_size > 500:
                         chunks.append(chunk_path)
-                        text = transcribe_audio(chunk_path, model, language)
+                        text = _client.transcribe_audio(chunk_path, model, language)
                         if text:
                             transcripts.append(text)
                             console.print(f"  {text}")
@@ -598,8 +322,8 @@ def listen(
                 result = " ".join(transcripts)
                 if END_PHRASE in result.lower():
                     result = result.lower().split(END_PHRASE)[0].strip()
-                output = f"{prefix}{result}" if prefix else result
-                console.print(f"[green]>[/green] {output}\n")
+                out = f"{prefix}{result}" if prefix else result
+                console.print(f"[green]>[/green] {out}\n")
 
             # Cleanup chunks
             for c in chunks:
@@ -616,23 +340,27 @@ def models():
     """List available Whisper models."""
     console.print("[bold]Available models:[/]\n")
 
-    model_info = [
-        ("tiny", "~75MB", "Fastest, least accurate"),
-        ("base", "~140MB", "Fast, basic accuracy"),
-        ("small", "~460MB", "Good balance"),
-        ("medium", "~1.5GB", "High accuracy"),
-        ("large", "~3GB", "Best accuracy"),
-        ("turbo", "~1.6GB", "Best speed/accuracy (default)"),
-    ]
-
-    backend = "MLX" if IS_MACOS else "faster-whisper"
+    model_list = _client.list_models()
+    backend = model_list[0]["backend"] if model_list else "unknown"
     console.print(f"[dim]Backend: {backend}[/]\n")
 
-    for name, size, desc in model_info:
-        mlx_name, fw_name = MODELS[name]
-        actual = mlx_name if IS_MACOS else fw_name
-        console.print(f"  [cyan]{name}[/] -> {actual}")
-        console.print(f"    Size: {size} | {desc}\n")
+    for m in model_list:
+        console.print(f"  [cyan]{m['name']}[/] -> {m['model_id']}")
+        console.print(f"    Size: {m['size']} | {m['description']}\n")
+
+
+def _copy_to_clipboard(text: str):
+    """Copy text to system clipboard."""
+    try:
+        if IS_MACOS:
+            subprocess.run(["pbcopy"], input=text.encode(), check=True)
+        else:
+            subprocess.run(
+                ["xclip", "-selection", "clipboard"], input=text.encode(), check=True
+            )
+        console.print("[dim]Copied to clipboard[/]")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
