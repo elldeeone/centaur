@@ -410,17 +410,15 @@ def plugins_group() -> None:
 
 
 @plugins_group.command("list")
-@click.option("--profile", default=None, help="Optional profile name from profiles/*.json")
-def plugins_list(profile: str | None) -> None:
+def plugins_list() -> None:
     """List discovered plugins and tools from the plugin manager."""
     from .plugin_manager import PluginManager
 
     app_root = Path(__file__).resolve().parent.parent.parent
     plugins_dir = Path(app_root / "plugins")
-    profiles_dir = Path(app_root / "profiles")
 
-    manager = PluginManager(plugins_dir, profiles_dir)
-    manager.discover(profile=profile)
+    manager = PluginManager(plugins_dir)
+    manager.discover()
 
     rows = []
     for plugin in manager.plugin_test_matrix():
@@ -447,22 +445,20 @@ def plugins_list(profile: str | None) -> None:
 
 
 @plugins_group.command("run")
-@click.option("--profile", default=None, help="Optional profile name from profiles/*.json")
 @click.argument("tool")
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-def plugins_run(profile: str | None, tool: str, args: tuple[str, ...]) -> None:
+def plugins_run(tool: str, args: tuple[str, ...]) -> None:
     """Run a plugin CLI by plugin name or script alias."""
     from .plugin_manager import PluginManager
 
     app_root = Path(__file__).resolve().parent.parent.parent
     plugins_dir = Path(app_root / "plugins")
-    profiles_dir = Path(app_root / "profiles")
 
-    manager = PluginManager(plugins_dir, profiles_dir)
+    manager = PluginManager(plugins_dir)
     if (plugins_dir / tool).is_dir():
-        manager.discover(profile=profile, only_plugins={tool})
+        manager.discover(only_plugins={tool})
     else:
-        manager.discover(profile=profile)
+        manager.discover()
 
     output = manager.run_cli(tool, list(args))
     try:
@@ -479,23 +475,21 @@ def plugins_run(profile: str | None, tool: str, args: tuple[str, ...]) -> None:
 
 
 @plugins_group.command("test")
-@click.option("--profile", default=None, help="Optional profile name from profiles/*.json")
 @click.option(
     "--cli-args",
     default="--help",
     show_default=True,
     help="Arguments passed to each plugin CLI for smoke testing.",
 )
-def plugins_test(profile: str | None, cli_args: str) -> None:
+def plugins_test(cli_args: str) -> None:
     """Run plugin smoke tests across imports, registry, CLIs, and aliases."""
     from .plugin_manager import PluginManager
 
     app_root = Path(__file__).resolve().parent.parent.parent
     plugins_dir = Path(app_root / "plugins")
-    profiles_dir = Path(app_root / "profiles")
 
-    manager = PluginManager(plugins_dir, profiles_dir)
-    manager.discover(profile=profile)
+    manager = PluginManager(plugins_dir)
+    manager.discover()
 
     registry_results = manager.smoke_test_registry()
     import_and_discovery = manager.plugin_test_matrix()

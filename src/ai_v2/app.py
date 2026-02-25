@@ -57,10 +57,9 @@ app.include_router(secrets.router)
 # Load plugins before creating MCP starlette app
 _app_root = Path(__file__).resolve().parent.parent.parent
 _plugins_dir = Path(os.environ.get("PLUGINS_DIR", _app_root / "plugins"))
-_profiles_dir = Path(os.environ.get("PROFILES_DIR", _app_root / "profiles"))
 
-plugin_manager = PluginManager(_plugins_dir, _profiles_dir)
-plugin_manager.discover(profile=os.environ.get("ACTIVE_PROFILE"))
+plugin_manager = PluginManager(_plugins_dir)
+plugin_manager.discover()
 set_plugin_manager(plugin_manager)
 plugin_manager.register_mcp_tools(mcp)
 app.include_router(plugin_manager.create_rest_router())

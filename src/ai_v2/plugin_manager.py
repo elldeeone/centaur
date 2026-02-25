@@ -94,11 +94,9 @@ class PluginManager:
     def __init__(
         self,
         plugins_dir: Path,
-        profiles_dir: Path | None = None,
         root_env_path: Path | None = None,
     ):
         self.plugins_dir = plugins_dir
-        self.profiles_dir = profiles_dir
         self.plugins: dict[str, LoadedPlugin] = {}
         # Load root .env once — all plugins inherit these secrets
         self._root_secrets: dict[str, str] = {}
@@ -107,19 +105,8 @@ class PluginManager:
             root_env_path = plugins_dir.parent / ".env"
         self._root_secrets = _load_env_file(root_env_path)
 
-    def _get_enabled_plugins(self, profile: str | None) -> set[str] | None:
-        """Return set of enabled plugin names, or None for all."""
-        if not profile or not self.profiles_dir:
-            return None
-        profile_path = self.profiles_dir / f"{profile}.json"
-        if not profile_path.exists():
-            log.warning("profile_not_found", profile=profile)
-            return None
-        data = json.loads(profile_path.read_text())
-        return set(data.get("plugins", []))
-
     def _collect_plugins(self, enabled: set[str] | None) -> list[tuple[Path, dict]]:
-        """Read pyproject.toml from each plugin dir and filter by profile."""
+        """Read pyproject.toml from each plugin dir, optionally filtering."""
         plugins = []
         for plugin_dir in sorted(self.plugins_dir.iterdir()):
             if not plugin_dir.is_dir() or plugin_dir.name.startswith((".", "_")):
@@ -135,10 +122,9 @@ class PluginManager:
             project = pyproject.get("project", {})
             plugin_conf = pyproject.get("tool", {}).get("ai-v2-plugin", {})
 
-            # Use directory name as the plugin name for profiles
             name = plugin_dir.name
             if enabled is not None and name not in enabled:
-                log.debug("plugin_skipped_by_profile", plugin=name)
+                log.debug("plugin_skipped", plugin=name)
                 continue
 
             meta = {
@@ -154,7 +140,6 @@ class PluginManager:
 
     def discover(
         self,
-        profile: str | None = None,
         only_plugins: set[str] | None = None,
     ) -> list[LoadedPlugin]:
         """Discover and load all plugins."""
@@ -162,7 +147,7 @@ class PluginManager:
             log.info("plugins_dir_missing", path=str(self.plugins_dir))
             return []
 
-        enabled = only_plugins if only_plugins is not None else self._get_enabled_plugins(profile)
+        enabled = only_plugins
         plugin_entries = self._collect_plugins(enabled)
 
         # Collect all dependencies across enabled plugins and install in one shot
