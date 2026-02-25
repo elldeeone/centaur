@@ -7,6 +7,7 @@ from typing import Any
 import asyncpg
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from toon_format import encode as toon_encode
 
 from api.deps import EmbeddingService
 from shared.plugin_manager import PluginManager
@@ -48,8 +49,16 @@ def _get_pool() -> asyncpg.Pool:
     return _pool
 
 
+def _to_toon(data: Any) -> str:
+    """Encode data as TOON for token-efficient LLM responses."""
+    try:
+        return toon_encode(data)
+    except Exception:
+        return json.dumps(data, default=str)
+
+
 def _serialize(rows: list[asyncpg.Record]) -> str:
-    return json.dumps([dict(r) for r in rows], default=str)
+    return _to_toon([dict(r) for r in rows])
 
 
 @mcp.tool()
@@ -132,7 +141,7 @@ async def list_plugins() -> str:
     what plugins and tools are available, then use describe_plugin to get full
     method schemas before calling call_plugin."""
     manager = _get_plugin_manager()
-    return json.dumps(manager.list_plugins(), indent=2)
+    return _to_toon(manager.list_plugins())
 
 
 @mcp.tool()
@@ -140,7 +149,7 @@ async def describe_plugin(plugin: str) -> str:
     """Get full method schemas (parameters, types, defaults) for a plugin's tools.
     Call this before call_plugin to know the exact arguments a tool expects."""
     manager = _get_plugin_manager()
-    return json.dumps(manager.describe_plugin(plugin), indent=2, default=str)
+    return _to_toon(manager.describe_plugin(plugin))
 
 
 @mcp.tool()

@@ -18,6 +18,7 @@ from typing import Any, get_type_hints
 
 import structlog
 from click.testing import CliRunner
+from toon_format import encode as toon_encode
 from fastapi import APIRouter, Body, Depends
 from pydantic import create_model
 from typer.main import get_command
@@ -41,6 +42,14 @@ class LoadedTool:
 
 
 _LIFECYCLE_METHODS = frozenset({"close", "connect", "disconnect", "shutdown"})
+
+
+def _to_toon(data: Any) -> str:
+    """Encode data as TOON for token-efficient LLM responses, falling back to JSON."""
+    try:
+        return toon_encode(data)
+    except Exception:
+        return json.dumps(data, default=str)
 
 # Mapping from Python built-in types to clean names for schema output
 _BUILTIN_TYPE_NAMES: dict[type, str] = {
@@ -685,7 +694,7 @@ class PluginManager:
         }
 
     async def call_tool(self, plugin_name: str, tool_name: str, args: dict[str, Any]) -> str:
-        """Call a plugin tool by name and return the result as a JSON string."""
+        """Call a plugin tool by name and return the result as a TOON string."""
         plugin = self.plugins.get(plugin_name)
         if not plugin:
             return json.dumps({"error": f"Plugin '{plugin_name}' not found"})
@@ -704,7 +713,7 @@ class PluginManager:
                 result = tool.fn(**args)
             if isinstance(result, str):
                 return result
-            return json.dumps(result, default=str)
+            return _to_toon(result)
         except SystemExit as e:
             return json.dumps(
                 {"error": f"Plugin called sys.exit({e.code})", "plugin": plugin_name, "tool": tool_name}
