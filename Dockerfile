@@ -11,9 +11,8 @@ RUN uv sync --frozen --no-install-project --no-dev
 COPY src/ src/
 RUN uv sync --frozen --no-dev
 
-# Copy plugins and profiles
+# Copy plugins
 COPY plugins/ plugins/
-COPY profiles/ profiles/
 
 # Install all plugin dependencies at build time
 RUN python -c "import tomllib, pathlib; deps = set(); [deps.update(tomllib.load(open(p,'rb')).get('project',{}).get('dependencies',[])) for p in pathlib.Path('plugins').glob('*/pyproject.toml')]; open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" && uv pip install -r /tmp/pd.txt --quiet && rm /tmp/pd.txt
