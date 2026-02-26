@@ -38,8 +38,7 @@ services:
       DATABASE_URL: postgresql://tempo:tempo_dev@postgres:5432/ai_v2
       SLACKBOT_URL: http://slackbot:3001
       OP_VAULT: AI-V2
-    secrets:
-      - op_token
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -56,8 +55,7 @@ services:
     environment:
       DATABASE_URL: postgresql://tempo:tempo_dev@postgres:5432/ai_v2
       OP_VAULT: AI-V2
-    secrets:
-      - op_token
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,11 +79,6 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-
-secrets:
-  op_token:
-    environment: OP_SERVICE_ACCOUNT_TOKEN
-    required: false
 
 volumes:
   pgdata:
