@@ -1,0 +1,3 @@
+model_auto_compact_token_limit = 120000
+[mcp_servers.tempo-ai]
+url = "${MCP_URL}"

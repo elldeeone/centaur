@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config cmake ninja-build \
     libssl-dev libclang-dev protobuf-compiler \
     # Utilities
-    ripgrep fd-find jq tree tmux unzip xz-utils \
+    ripgrep fd-find jq tree tmux unzip xz-utils gettext-base \
     # Python
     python3 python3-pip python3-venv python3-dev \
     # Process management
@@ -81,9 +81,12 @@ RUN git config --global init.defaultBranch main \
     && git config --global --add safe.directory '*'
 
 # ── Workspace ────────────────────────────────────────────────────────────────
-# Host repos are bind-mounted read-only at ~/github by the agent client.
-# Writable worktrees/clones go into ~/workspace.
 RUN mkdir -p ~/github ~/workspace
+
+# ── Bake config templates (envsubst'd at runtime) ───────────────────────────
+COPY --chown=agent:agent config/amp-settings.json   /home/agent/.config/amp/settings.json.tmpl
+COPY --chown=agent:agent config/claude-settings.json /home/agent/.claude.json.tmpl
+COPY --chown=agent:agent config/codex-config.toml    /home/agent/.codex/config.toml.tmpl
 
 # ── System prompt ────────────────────────────────────────────────────────────
 COPY --chown=agent:agent SYSTEM_PROMPT.md /home/agent/AGENTS.md
