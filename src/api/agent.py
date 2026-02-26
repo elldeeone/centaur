@@ -126,17 +126,22 @@ def _docker_client() -> docker.DockerClient:
     return docker.from_env()
 
 
-def _wait_ready(container: Any, timeout: int = 15) -> None:
-    """Wait for the entrypoint to signal readiness (touch ~/.ready)."""
-    deadline = time.monotonic() + timeout
+def _wait_ready(container: Any, timeout: int = 15) -> float:
+    """Wait for the entrypoint to signal readiness (touch ~/.ready).
+
+    Returns the number of seconds waited.
+    """
+    t0 = time.monotonic()
+    deadline = t0 + timeout
     while time.monotonic() < deadline:
         exit_code, _ = container.exec_run(
             ["test", "-f", "/home/agent/.ready"], demux=False
         )
         if exit_code == 0:
-            return
+            return round(time.monotonic() - t0, 3)
         time.sleep(0.1)
     log.warning("container_ready_timeout", timeout=timeout)
+    return round(time.monotonic() - t0, 3)
 
 
 def _image() -> str:
@@ -151,8 +156,12 @@ def _create_container(
     client: Any,
     name: str | None = None,
     repo: str | None = None,
-) -> Any:
-    """Create a ready-to-use agent container."""
+) -> tuple[Any, dict[str, float]]:
+    """Create a ready-to-use agent container.
+
+    Returns (container, timings_dict).
+    """
+    t0 = time.monotonic()
     workdir = "/home/agent/workspace" if repo else "/home/agent/github"
     env = _container_env()
     if repo:
@@ -176,8 +185,9 @@ def _create_container(
         },
         **({"name": name} if name else {}),
     )
-    _wait_ready(container)
-    return container
+    docker_run_s = round(time.monotonic() - t0, 3)
+    wait_ready_s = _wait_ready(container)
+    return container, {"docker_run_s": docker_run_s, "wait_ready_s": wait_ready_s}
 
 
 def _claim_from_pool() -> Any | None:
@@ -208,10 +218,10 @@ def _refill_pool() -> None:
         client = _docker_client()
         for _ in range(needed):
             try:
-                container = _create_container(client)
+                container, _timings = _create_container(client)
                 with _pool_lock:
                     _pool.append(container.id)
-                log.info("pool_container_added", pool_size=len(_pool))
+                log.info("pool_container_added", pool_size=len(_pool), **_timings)
             except Exception as exc:
                 log.warning("pool_fill_failed", error=str(exc))
                 break
@@ -345,6 +355,7 @@ class AgentClient:
         slack_thread_key: str,
         harness: str = "amp",
         repo: str | None = None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         """Spawn a new sandbox container for a Slack thread.
 
@@ -352,7 +363,11 @@ class AgentClient:
             slack_thread_key: Unique thread ID (e.g. "C04ABC:1234567890.123456")
             harness: Agent CLI to use — amp, claude-code, or codex
             repo: Optional repo path to set as working directory
+            request_id: Correlation ID for end-to-end latency tracing
         """
+        rid = request_id or ""
+        log.info("spawn_start", request_id=rid, thread=slack_thread_key, harness=harness)
+
         if harness not in HARNESSES:
             raise RuntimeError(f"Unknown harness: {harness}. Use one of {HARNESSES}")
 
@@ -363,6 +378,8 @@ class AgentClient:
                 client = _docker_client()
                 container = client.containers.get(existing["container_id"])
                 if container.status == "running":
+                    log.info("spawn_done", request_id=rid, thread=slack_thread_key,
+                             status="already_running")
                     return {
                         "session_id": slack_thread_key,
                         "container_id": existing["container_id"],
@@ -371,6 +388,8 @@ class AgentClient:
                     }
                 container.start()
                 existing["state"] = "running"
+                log.info("spawn_done", request_id=rid, thread=slack_thread_key,
+                         status="restarted")
                 return {
                     "session_id": slack_thread_key,
                     "container_id": existing["container_id"],
@@ -387,16 +406,19 @@ class AgentClient:
             container = _claim_from_pool()
             if container:
                 status = "claimed_from_pool"
-                log.info("pool_container_claimed", thread=slack_thread_key)
+                log.info("spawn_pool_claimed", request_id=rid, thread=slack_thread_key)
 
         # Otherwise create a new one
         if not container:
+            log.info("spawn_creating_container", request_id=rid, thread=slack_thread_key)
             client = _docker_client()
-            container = _create_container(
+            container, create_timings = _create_container(
                 client,
                 name=f"tempo-agent-{slack_thread_key.replace(':', '-')[:40]}",
                 repo=repo,
             )
+            log.info("spawn_container_created", request_id=rid, thread=slack_thread_key,
+                     **create_timings)
 
         # Refill pool in background after claiming
         _refill_pool()
@@ -413,6 +435,7 @@ class AgentClient:
         _sessions[slack_thread_key] = session
         _persist_session(session, slack_thread_key)
 
+        log.info("spawn_done", request_id=rid, thread=slack_thread_key, status=status)
         return {
             "session_id": slack_thread_key,
             "container_id": container.id,
@@ -433,12 +456,14 @@ class AgentClient:
         message: str,
         harness: str = "amp",
         repo: str | None = None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         """Execute a message in a sandbox, spawning one if needed.
 
         Runs the harness CLI via docker exec, waits for completion,
         and returns the final result text.
         """
+        rid = request_id or ""
         session = _sessions.get(slack_thread_key)
 
         # Auto-spawn if no session or container is gone
@@ -451,7 +476,8 @@ class AgentClient:
                 session = None
 
         if not session:
-            self.spawn(slack_thread_key, harness, repo)
+            log.info("exec_auto_spawn", request_id=rid, thread=slack_thread_key)
+            self.spawn(slack_thread_key, harness, repo, request_id)
             session = _sessions[slack_thread_key]
             client = _docker_client()
             container = client.containers.get(session["container_id"])
@@ -462,10 +488,10 @@ class AgentClient:
         session["last_activity"] = time.time()
         started_ts = time.time()
         log.info(
-            "agent_exec_start",
+            "exec_start",
+            request_id=rid,
             thread=slack_thread_key,
             harness=session["harness"],
-            cmd=cmd[:5],
         )
 
         # Create the turn on the session immediately so SSE can stream it live
@@ -501,6 +527,7 @@ class AgentClient:
         buf = ""
         err_buf = ""
         timed_out = False
+        first_output_logged = False
         started = time.monotonic()
 
         for stdout_chunk, stderr_chunk in output:
@@ -509,6 +536,11 @@ class AgentClient:
                 log.warning("agent_exec_timeout", thread=slack_thread_key, timeout=EXEC_TIMEOUT)
                 break
             if stdout_chunk:
+                if not first_output_logged:
+                    first_output_logged = True
+                    log.info("exec_first_output", request_id=rid,
+                             thread=slack_thread_key,
+                             elapsed_s=round(time.monotonic() - started, 3))
                 buf += stdout_decoder.decode(stdout_chunk)
                 while "\n" in buf:
                     idx = buf.index("\n")
@@ -575,10 +607,13 @@ class AgentClient:
         session["last_activity"] = time.time()
         _persist_session(session, slack_thread_key)
         log.info(
-            "agent_exec_done",
+            "exec_done",
+            request_id=rid,
             thread=slack_thread_key,
+            harness=session["harness"],
             exit_code=exit_code,
             timed_out=timed_out,
+            duration_s=live_turn["duration_s"],
             result_len=len(result_text),
         )
 

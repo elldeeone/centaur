@@ -37,6 +37,7 @@ services:
     environment:
       DATABASE_URL: postgresql://tempo:tempo_dev@postgres:5432/ai_v2
       SLACKBOT_URL: http://slackbot:3001
+      AI_V2_LOG_LEVEL: info
       OP_VAULT: AI-V2
       OP_EMAIL: ${OP_EMAIL:-}
       OP_SECRET_KEY: ${OP_SECRET_KEY:-}

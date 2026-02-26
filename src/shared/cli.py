@@ -36,13 +36,19 @@ _LOG_LEVELS = {
 _default_level = os.getenv("AI_V2_LOG_LEVEL", "warning").lower()
 _log_level = _LOG_LEVELS.get(_default_level, 30)
 
+_renderer: structlog.types.Processor = (
+    structlog.dev.ConsoleRenderer()
+    if sys.stderr.isatty()
+    else structlog.processors.JSONRenderer()
+)
+
 structlog.configure(
     wrapper_class=structlog.make_filtering_bound_logger(_log_level),
     processors=[
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer(),
+        _renderer,
     ],
 )
 log = structlog.get_logger()

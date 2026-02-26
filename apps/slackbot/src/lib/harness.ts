@@ -3,6 +3,8 @@
  *
  * spawn() → creates a Docker container for the thread
  * execute() → runs a message in the container, returns result text
+ *
+ * All calls accept a request_id for end-to-end latency tracing.
  */
 
 const API_URL = process.env.AI_V2_API_URL || "http://api:8000";
@@ -12,6 +14,7 @@ async function agentCall(
   endpoint: string,
   args: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
+  const t0 = performance.now();
   const res = await fetch(`${API_URL}/agent/${endpoint}`, {
     method: "POST",
     headers: {
@@ -26,7 +29,18 @@ async function agentCall(
     throw new Error(`agent/${endpoint} failed (${res.status}): ${text}`);
   }
 
-  return await res.json();
+  const data = await res.json();
+  const elapsed = Math.round(performance.now() - t0);
+  console.log(
+    JSON.stringify({
+      event: "api_call",
+      endpoint: `agent/${endpoint}`,
+      request_id: args.request_id ?? null,
+      thread: args.slack_thread_key ?? null,
+      elapsed_ms: elapsed,
+    })
+  );
+  return data;
 }
 
 export type Harness = "amp" | "claude-code" | "codex";
@@ -51,12 +65,14 @@ export function extractHarness(text: string): {
 export async function spawn(
   threadKey: string,
   harness: Harness = "amp",
-  repo?: string
+  repo?: string,
+  requestId?: string
 ): Promise<{ sessionId: string; status: string }> {
   const result = await agentCall("spawn", {
     slack_thread_key: threadKey,
     harness,
     ...(repo ? { repo } : {}),
+    ...(requestId ? { request_id: requestId } : {}),
   });
   return {
     sessionId: result.session_id as string,
@@ -68,12 +84,14 @@ export async function spawn(
 export async function execute(
   threadKey: string,
   message: string,
-  harness: Harness = "amp"
+  harness: Harness = "amp",
+  requestId?: string
 ): Promise<string> {
   const result = await agentCall("execute", {
     slack_thread_key: threadKey,
     message,
     harness,
+    ...(requestId ? { request_id: requestId } : {}),
   });
   return (result.result as string) || "No response from agent.";
 }

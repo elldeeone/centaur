@@ -7,6 +7,7 @@
  *   3. thread.post() → posts the result back to Slack
  */
 
+import crypto from "node:crypto";
 import { Chat, parseMarkdown, type Root } from "chat";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createRedisState } from "@chat-adapter/state-redis";
@@ -79,14 +80,22 @@ function createBot() {
     messageText: string,
     isFirstMessage: boolean
   ) {
+    const t0 = performance.now();
+    const requestId = crypto.randomUUID().slice(0, 8);
     const { harness, cleanedText } = extractHarness(messageText);
     const threadKey = thread.id;
+    const timings: Record<string, number> = {};
 
     // On first message, spawn container and immediately post the viewer link
     if (isFirstMessage) {
-      await spawn(threadKey, harness);
+      const tSpawn = performance.now();
+      await spawn(threadKey, harness, undefined, requestId);
+      timings.spawn_ms = Math.round(performance.now() - tSpawn);
+
+      const tViewerPost = performance.now();
       const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
       await thread.post(renderSlackMessage(`[🔗 Thread Viewer](${viewerUrl})`));
+      timings.viewer_post_ms = Math.round(performance.now() - tViewerPost);
     }
 
     await thread.startTyping("Running...");
@@ -97,9 +106,25 @@ function createBot() {
       : cleanedText;
 
     // Execute message in the container
-    const result = await execute(threadKey, message, harness);
+    const tExec = performance.now();
+    const result = await execute(threadKey, message, harness, requestId);
+    timings.execute_ms = Math.round(performance.now() - tExec);
 
+    const tPost = performance.now();
     await thread.post(renderSlackMessage(result));
+    timings.post_ms = Math.round(performance.now() - tPost);
+
+    timings.total_ms = Math.round(performance.now() - t0);
+    console.log(
+      JSON.stringify({
+        event: "message_handled",
+        request_id: requestId,
+        thread: threadKey,
+        harness,
+        is_first: isFirstMessage,
+        ...timings,
+      })
+    );
   }
 
   // First @mention — subscribe and run

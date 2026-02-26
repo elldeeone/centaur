@@ -21,6 +21,7 @@ class SpawnRequest(BaseModel):
     slack_thread_key: str
     harness: str = "amp"
     repo: str | None = None
+    request_id: str | None = None
 
 
 class ExecuteRequest(BaseModel):
@@ -28,6 +29,7 @@ class ExecuteRequest(BaseModel):
     message: str
     harness: str = "amp"
     repo: str | None = None
+    request_id: str | None = None
 
 
 class StopRequest(BaseModel):
@@ -42,14 +44,14 @@ class InterruptRequest(BaseModel):
 async def spawn(req: SpawnRequest) -> dict[str, Any]:
     """Spawn a sandbox container for a Slack thread."""
     agent = get_agent()
-    return agent.spawn(req.slack_thread_key, req.harness, req.repo)
+    return agent.spawn(req.slack_thread_key, req.harness, req.repo, req.request_id)
 
 
 @router.post("/execute")
 async def execute(req: ExecuteRequest) -> dict[str, Any]:
     """Execute a message in a sandbox. Auto-spawns if needed."""
     agent = get_agent()
-    return agent.execute(req.slack_thread_key, req.message, req.harness, req.repo)
+    return agent.execute(req.slack_thread_key, req.message, req.harness, req.repo, req.request_id)
 
 
 @router.post("/stop")
