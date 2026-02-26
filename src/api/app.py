@@ -13,7 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
 from api.mcp_server import mcp, set_plugin_manager, set_pool
-from api.routers import health, query, search, secrets
+from api.routers import health, query, search, secrets, threads, ui
 from shared.config import settings
 from shared.db import close_pool, create_pool
 from shared.plugin_manager import PluginManager
@@ -53,6 +53,8 @@ app.include_router(health.router)
 app.include_router(search.router)
 app.include_router(query.router)
 app.include_router(secrets.router)
+app.include_router(threads.router)
+app.include_router(ui.router)
 
 # Load plugins before creating MCP starlette app
 _app_root = Path(__file__).resolve().parent.parent.parent

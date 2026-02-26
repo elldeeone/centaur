@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     port: int = 8000
     cors_origins: list[str] = ["*"]
 
+    # UI password for the thread viewer (set UI_PASSWORD env var)
+    ui_password: str = Field(default="", alias="UI_PASSWORD")
+
 
 
 settings = Settings()
