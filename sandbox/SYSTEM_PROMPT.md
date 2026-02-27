@@ -28,7 +28,7 @@ Tools: Rust, Node 22, Python 3 (uv), Foundry (forge/cast/anvil), rg, fd, jq, tmu
 
 ## API Access
 
-The AI v2 API is available at `$AI_V2_API_URL` (auth: `Authorization: Bearer $AI_V2_API_KEY`). Use `curl` to call it.
+The AI v2 API is available at `$AI_V2_API_URL`. No auth header needed — you are on the internal network. Use `curl` to call it.
 
 **Core endpoints:**
 - `POST /plugins/{plugin}/{tool}` — call any plugin tool (JSON body = tool args)
@@ -37,7 +37,7 @@ The AI v2 API is available at `$AI_V2_API_URL` (auth: `Authorization: Bearer $AI
 - `POST /search` — hybrid semantic + keyword search (`{"query": "...", "limit": 20}`)
 - `POST /query` — read-only SQL on raw_records/embeddings (`{"query": "SELECT ..."}`)
 
-Example: `curl -s -X POST -H "Authorization: Bearer $AI_V2_API_KEY" -H "Content-Type: application/json" -d '{"symbol": "ETH"}' "$AI_V2_API_URL/plugins/coingecko/get_price"`
+Example: `curl -s -X POST -H "Content-Type: application/json" -d '{"symbol": "ETH"}' "$AI_V2_API_URL/plugins/coingecko/get_price"`
 
 ## Plugin Routing
 
