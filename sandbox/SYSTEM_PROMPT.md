@@ -28,46 +28,41 @@ Tools: Rust, Node 22, Python 3 (uv), Foundry (forge/cast/anvil), rg, fd, jq, tmu
 
 ## API Access
 
-The AI v2 API is available at `$AI_V2_API_URL`. No auth header needed — you are on the internal network. Use `curl` to call it.
+The AI v2 API is at `$AI_V2_API_URL`. No auth needed. Call plugins directly — do NOT discover/describe plugins first.
 
-**Core endpoints:**
-- `POST /plugins/{plugin}/{tool}` — call any plugin tool (JSON body = tool args)
-- `GET /plugins/{plugin}` — describe a plugin's tools and schemas
-- `GET /plugins` — list all plugins
-- `POST /search` — hybrid semantic + keyword search (`{"query": "...", "limit": 20}`)
-- `POST /query` — read-only SQL on raw_records/embeddings (`{"query": "SELECT ..."}`)
+**Pattern:** `curl -s -X POST -H "Content-Type: application/json" -d '{...}' "$AI_V2_API_URL/plugins/{plugin}/{tool}"`
 
-Example: `curl -s -X POST -H "Content-Type: application/json" -d '{"symbol": "ETH"}' "$AI_V2_API_URL/plugins/coingecko/get_price"`
+Other endpoints: `POST /search` (semantic search: `{"query":"...","limit":20}`), `POST /query` (read-only SQL), `GET /plugins/{plugin}` (only if you need to discover unknown tool parameters)
 
-## Plugin Routing
+## Plugin Quick Reference
 
-60+ plugins. Use `GET /plugins/{plugin}` to discover methods, then `POST /plugins/{plugin}/{tool}` to invoke.
+Call these directly. Parameters shown are the most common — pass as JSON body.
 
-| Task | Plugin(s) |
-|------|-----------|
-| Anchorage balances/vaults/staking | `anchorage` |
-| Coinbase Prime balances/portfolios/staking | `coinbase` |
-| BitGo balances/wallets/staking | `bitgo` |
-| Unit410 staking/balances | `unit410` |
-| FalconX balances/trades/quotes | `falconx` |
-| pmadmin SQL, funds, assets, transactions | `paradigmdb` |
-| BigQuery (historical perf, BQ views) | `paradigmdb` |
-| Shift notes (investment memos) | `paradigmdb` |
-| Gmail, Calendar, Drive, Docs, Sheets | `gsuite` |
-| Recruiting, candidates, jobs | `ashby` |
-| Bloomberg data | `bloomberg` |
-| Crypto prices/market data | `coingecko`, `coinmetrics`, `messari` |
-| On-chain analytics | `allium`, `dune`, `nansen`, `arkham`, `debank` |
-| DeFi TVL/volumes/stablecoins | `defillama` |
-| Company/funding data | `crunchbase`, `harmonic` |
-| Portfolio company metrics | `standard-metrics` |
-| Prediction markets | `kalshi`, `polymarket` |
-| Market intelligence | `alphasense` |
-| News | `newsapi`, `googlenews`, `coindesk`, `theblock` |
-| Twitter/X | `ptwittercli`, `social-monitor` |
-| Productivity | `gsuite`, `linear`, `notion`, `slack`, `granola` |
-| Analytics | `posthog`, `sensortower`, `similarweb` |
-| Internal knowledge base | `POST /search` or `POST /query` |
+**Slack**: `slack/get_channel_history` `{"channel":"investing","limit":10}` | `slack/search_messages` `{"query":"..."}` | `slack/get_thread_replies` `{"channel":"...","thread_ts":"..."}` | `slack/list_channels` `{}` | `slack/send_message` `{"channel":"...","text":"..."}`
+
+**Crypto prices**: `coingecko/get_price` `{"symbol":"ETH"}` | `coingecko/get_markets` `{"vs_currency":"usd","per_page":10}` | `coinmetrics/get_asset_metrics` `{"assets":"btc","metrics":"PriceUSD"}`
+
+**Balances**: `anchorage/get_balances` `{}` | `coinbase/get_portfolio_balances` `{"portfolio":"pf"}` | `bitgo/get_total_balances` `{}` | `unit410/get_balances` `{}` | `falconx/get_balances` `{}`
+
+**On-chain**: `arkham/get_transfers` `{"address":"0x..."}` | `debank/get_user_total_balance` `{"id":"0x..."}` | `nansen/get_address_labels` `{"address":"0x..."}` | `dune/execute_query` `{"query_id":123}`
+
+**BigQuery/pmadmin**: `paradigmdb/bq_query` `{"query":"SELECT ..."}` | `paradigmdb/db_query` `{"query":"SELECT ..."}` | `paradigmdb/bq_transactions` `{}`
+
+**Productivity**: `gsuite/calendar_events` `{"calendar":"dan@paradigm.xyz"}` | `gsuite/gmail_search` `{"query":"...","user":"investing@paradigm.xyz"}` | `linear/search_issues` `{"query":"..."}` | `notion/search` `{"query":"..."}`
+
+**Recruiting**: `ashby/candidates` `{}` | `ashby/jobs` `{}` | `ashby/applications` `{}`
+
+**News**: `googlenews/search` `{"query":"..."}` | `newsapi/search` `{"query":"..."}` | `coindesk/search` `{"query":"..."}`
+
+**Markets**: `defillama/get_tvl` `{}` | `polymarket/search` `{"query":"..."}` | `kalshi/list_events` `{}`
+
+**Company data**: `crunchbase/search_organizations` `{"query":"..."}` | `harmonic/search_companies_natural_language` `{"query":"..."}`
+
+**Twitter/X**: `ptwittercli/search_tweets` `{"query":"..."}` | `ptwittercli/get_user` `{"username":"..."}`
+
+**Analytics**: `posthog/pageviews` `{}` | `similarweb/get_visits` `{"domain":"..."}` | `sensortower/search_apps` `{"query":"..."}`
+
+For plugins not listed: `GET /plugins/{plugin}` to see available tools and parameters.
 
 ## Finance Domain Knowledge
 
