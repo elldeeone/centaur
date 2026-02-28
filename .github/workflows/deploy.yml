@@ -59,8 +59,8 @@ jobs:
         run: |
           test ! -f apps/slackbot/package-lock.json
           cd apps/slackbot
-          corepack enable pnpm
-          pnpm install --frozen-lockfile
+          # Avoid writing /usr/bin shims on self-hosted runners without root.
+          corepack pnpm install --frozen-lockfile
 
       # API+ETL share the same Dockerfile — build once, deploy both in parallel
       - name: Deploy API + ETL
