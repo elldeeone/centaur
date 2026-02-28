@@ -57,6 +57,27 @@ def _is_unsupported_output_config_error(exc: Exception) -> bool:
     )
 
 
+def _is_retryable_request_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    retryable_type_names = {
+        "APITimeoutError",
+        "APIConnectionError",
+        "RateLimitError",
+        "InternalServerError",
+    }
+    return exc.__class__.__name__ in retryable_type_names
+
+
+def _format_request_error(exc: Exception, request_timeout_seconds: int) -> str:
+    if isinstance(exc, TimeoutError):
+        return f"TimeoutError: request timed out after {request_timeout_seconds}s"
+    detail = str(exc).strip()
+    if detail:
+        return f"{exc.__class__.__name__}: {detail}"
+    return exc.__class__.__name__
+
+
 def _can_parallelize_tool_calls(tool_calls: list[dict[str, Any]]) -> bool:
     if len(tool_calls) <= 1:
         return False
@@ -187,18 +208,28 @@ async def run_agent_loop(
                 )
             raise AgentLoopError(str(exc)) from exc
 
-        try:
-            async with asyncio.timeout(float(request_timeout_seconds)):
-                async with client.messages.stream(
-                    **create_kwargs,
-                    messages=cast(Any, messages),
-                ) as stream:
-                    response = await stream.get_final_message()
-        except Exception as exc:
-            if "output_config" in create_kwargs and _is_unsupported_output_config_error(exc):
-                create_kwargs.pop("output_config", None)
-                continue
-            raise AgentLoopError(f"Anthropic request failed: {exc}") from exc
+        response = None
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with asyncio.timeout(float(request_timeout_seconds)):
+                    async with client.messages.stream(
+                        **create_kwargs,
+                        messages=cast(Any, messages),
+                    ) as stream:
+                        response = await stream.get_final_message()
+                break
+            except Exception as exc:
+                if "output_config" in create_kwargs and _is_unsupported_output_config_error(exc):
+                    create_kwargs.pop("output_config", None)
+                    break
+                if _is_retryable_request_error(exc) and attempt < max_attempts:
+                    await asyncio.sleep(1.0)
+                    continue
+                detail = _format_request_error(exc, request_timeout_seconds)
+                raise AgentLoopError(f"Model request failed: {detail}") from exc
+        if response is None:
+            continue
 
         last_stop_reason = str(getattr(response, "stop_reason", "unknown"))
         content_blocks = list(getattr(response, "content", []))

@@ -11,8 +11,8 @@ class EngineerSettings(BaseSettings):
     anthropic_model: str = "claude-opus-4-6"
     anthropic_model_fallback: str = "claude-opus-4-6"
     anthropic_max_tokens: int = 16000
-    anthropic_effort: str = "max"
-    anthropic_request_timeout_seconds: int = 240
+    anthropic_effort: str = "high"
+    anthropic_request_timeout_seconds: int = 600
 
     github_token: str = Field(default="", alias="GITHUB_TOKEN")
     github_repo_owner: str = "paradigmxyz"
@@ -47,10 +47,10 @@ class EngineerSettings(BaseSettings):
     turn_budget_implement_floor: int = 40
     turn_budget_implement_cap: int = 120
     turn_budget_fail_soft: bool = True
-    plan_parallel_branches_min: int = 2
-    plan_parallel_branches_max: int = 4
+    plan_parallel_branches_min: int = 1
+    plan_parallel_branches_max: int = 1
     parallel_min_completed_before_early_stop: int = 2
-    branch_timeout_seconds: int = 360
+    branch_timeout_seconds: int = 1200
 
     command_allowlist: str = "uv,ruff,pytest,mypy,python,python3,rg,fd,tree,ls,pwd,jq,yq,timeout"
     protected_write_paths: str = ".github/workflows,.env,.env.example"

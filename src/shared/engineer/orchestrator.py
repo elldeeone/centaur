@@ -347,7 +347,11 @@ class EngineerOrchestrator:
             if session.model_preference or self.model_preference:
                 await send(f"Using model: `{model}` (effort: {effort})")
 
-            thread_name = await self._generate_thread_name(session.task, model)
+            thread_name = (
+                None
+                if use_harness
+                else await self._generate_thread_name(session.task, model)
+            )
             if thread_name:
                 session.thread_name = thread_name
 
@@ -655,6 +659,17 @@ class EngineerOrchestrator:
                 branch_name=session.branch_name,
                 error=str(exc),
             )
+        except Exception as exc:
+            log.exception("engineer_run_failed", run_id=session.run_id, error=str(exc))
+            session.phase = Phase.FAILED
+            session.error = f"{exc.__class__.__name__}: {exc}"
+            return EngineerResult(
+                run_id=session.run_id,
+                success=False,
+                status="failed",
+                branch_name=session.branch_name,
+                error=session.error,
+            )
         finally:
             should_cleanup = (
                 session.worktree is not None and self.settings.cleanup_worktree and not self.dry_run
@@ -712,9 +727,13 @@ class EngineerOrchestrator:
             await send(assistant_text)
             messages.append({"role": "assistant", "content": assistant_text})
 
-            user_reply = await session.wait_for_user_reply(
-                timeout=float(self.settings.max_wall_time_seconds)
-            )
+            session.waiting_for_reply = True
+            try:
+                user_reply = await session.wait_for_user_reply(
+                    timeout=float(self.settings.max_wall_time_seconds)
+                )
+            finally:
+                session.waiting_for_reply = False
             if user_reply is None:
                 await send("Timed out waiting for reply. Proceeding with current information.")
                 return self._fallback_spec(session, messages)

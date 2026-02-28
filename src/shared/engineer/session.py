@@ -48,6 +48,7 @@ class EngineerSession:
     worktree: Path | None = None
     pr_url: str | None = None
     error: str | None = None
+    waiting_for_reply: bool = False
 
     _user_reply_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     _pending_user_reply: str = field(default="", repr=False)

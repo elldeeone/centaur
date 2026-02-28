@@ -292,6 +292,8 @@ def _route_reply_to_session(thread_key: str, reply_text: str) -> str:
     session = get_session(thread_key)
     if session is None:
         return "no_active_session"
+    if not session.waiting_for_reply:
+        return "not_waiting_for_reply"
     session.receive_user_reply(reply_text)
     return "accepted"
 
