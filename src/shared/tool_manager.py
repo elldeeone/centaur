@@ -30,16 +30,16 @@ from shared.tool_sdk import ToolContext, reset_tool_context, set_tool_context
 log = structlog.get_logger()
 
 
-class LoadedTool:
-    def __init__(self, integration_name: str, tool_name: str, fn: Callable, ctx: ToolContext):
-        self.integration_name = integration_name
+class ToolMethod:
+    def __init__(self, tool_name: str, method_name: str, fn: Callable, ctx: ToolContext):
         self.tool_name = tool_name
+        self.method_name = method_name
         self.fn = fn
         self.ctx = ctx
 
     @property
     def qualified_name(self) -> str:
-        return f"{self.integration_name}.{self.tool_name}"
+        return f"{self.tool_name}.{self.method_name}"
 
 
 _LIFECYCLE_METHODS = frozenset({"close", "connect", "disconnect", "shutdown"})
@@ -91,7 +91,7 @@ def _friendly_type_name(annotation: Any) -> str:
     return str(annotation)
 
 
-class LoadedIntegration:
+class LoadedTool:
     def __init__(
         self,
         name: str,
@@ -100,7 +100,7 @@ class LoadedIntegration:
         cli_module: str,
         scripts: dict[str, str],
         ctx: ToolContext,
-        tools: list[LoadedTool],
+        methods: list[ToolMethod],
     ):
         self.name = name
         self.description = description
@@ -108,7 +108,7 @@ class LoadedIntegration:
         self.cli_module = cli_module
         self.scripts = scripts
         self.ctx = ctx
-        self.tools = tools
+        self.methods = methods
 
     @property
     def cli_path(self) -> Path:
@@ -149,7 +149,7 @@ class ToolManager:
         root_env_path: Path | None = None,
     ):
         self.tools_dir = tools_dir
-        self.integrations: dict[str, LoadedIntegration] = {}
+        self.tools: dict[str, LoadedTool] = {}
         self._reload_lock = threading.Lock()
         # Load root .env once — all tools inherit these secrets
         self._root_secrets: dict[str, str] = {}
@@ -158,7 +158,7 @@ class ToolManager:
             root_env_path = tools_dir.parent / ".env"
         self._root_secrets = _load_env_file(root_env_path)
 
-    def _collect_integrations(self, enabled: set[str] | None) -> list[tuple[Path, dict]]:
+    def _collect_tools(self, enabled: set[str] | None) -> list[tuple[Path, dict]]:
         """Read pyproject.toml from each tool dir, optionally filtering."""
         tools = []
         for tool_dir in sorted(self.tools_dir.iterdir()):
@@ -189,19 +189,19 @@ class ToolManager:
                 "cli_module": tool_conf.get("cli_module", "cli.py"),
             }
             tools.append((tool_dir, meta))
-        return integrations
+        return tools
 
     def discover(
         self,
         only_names: set[str] | None = None,
-    ) -> list[LoadedIntegration]:
+    ) -> list[LoadedTool]:
         """Discover and load all tools."""
         if not self.tools_dir.exists():
             log.info("tools_dir_missing", path=str(self.tools_dir))
             return []
 
         enabled = only_names
-        tool_entries = self._collect_integrations(enabled)
+        tool_entries = self._collect_tools(enabled)
 
         # Collect all dependencies across enabled tools and install in one shot
         all_deps: list[str] = []
@@ -217,9 +217,9 @@ class ToolManager:
         loaded = []
         for tool_dir, meta in tool_entries:
             try:
-                integration = self._load_integration(tool_dir, meta)
-                if integration:
-                    loaded.append(tool)
+                lt = self._load_tool(tool_dir, meta)
+                if lt:
+                    loaded.append(lt)
             except Exception as exc:
                 log.warning(
                     "tool_load_failed",
@@ -227,7 +227,7 @@ class ToolManager:
                     error=str(exc),
                 )
 
-        self.integrations = {p.name: p for p in loaded}
+        self.tools = {p.name: p for p in loaded}
         return loaded
 
     def reload(self) -> dict[str, Any]:
@@ -243,7 +243,7 @@ class ToolManager:
                 "tools": [p.name for p in loaded],
             }
 
-    def _load_integration(self, tool_dir: Path, manifest: dict) -> LoadedIntegration | None:
+    def _load_tool(self, tool_dir: Path, manifest: dict) -> LoadedTool | None:
         name = manifest["name"]
 
         # Build secrets: root .env (base) → tool .env (override)
@@ -304,7 +304,7 @@ class ToolManager:
         # Set tool context so _client() factories can call secret()
         token = set_tool_context(ctx)
         try:
-            tools = self._collect_tools(name, module, ctx)
+            methods = self._collect_methods(name, module, ctx)
         finally:
             reset_tool_context(token)
             for key, previous in original_env.items():
@@ -314,29 +314,29 @@ class ToolManager:
                     os.environ[key] = previous
 
         description = manifest.get("description", "")
-        integration = LoadedIntegration(
+        loaded_tool = LoadedTool(
             name=name,
             description=description,
             tool_dir=tool_dir,
             cli_module=manifest.get("cli_module", "cli.py"),
             scripts=manifest.get("scripts", {}),
             ctx=ctx,
-            tools=tools,
+            methods=methods,
         )
         log.info(
             "tool_loaded",
             tool=name,
-            tools=[t.tool_name for t in tools],
+            methods=[m.method_name for m in methods],
         )
-        return integration
+        return loaded_tool
 
-    def _resolve_integration_for_cli(self, tool: str) -> LoadedIntegration | None:
-        integration = self.integrations.get(tool)
-        if integration:
-            return integration
+    def _resolve_tool_for_cli(self, tool: str) -> LoadedTool | None:
+        lt = self.tools.get(tool)
+        if lt:
+            return lt
 
         # Allow script aliases from [project.scripts] to map back to tools.
-        for candidate in self.integrations.values():
+        for candidate in self.tools.values():
             if tool in candidate.scripts:
                 return candidate
         return None
@@ -344,31 +344,31 @@ class ToolManager:
     def list_cli_tools(self) -> dict[str, dict[str, Any]]:
         """Return dynamic CLI tool metadata for all loaded tools."""
         cli_tools: dict[str, dict[str, Any]] = {}
-        for integration in self.integrations.values():
-            if not integration.cli_path.exists():
+        for lt in self.tools.values():
+            if not lt.cli_path.exists():
                 continue
-            aliases = sorted(integration.scripts.keys())
-            cli_tools[integration.name] = {
-                "tool": integration.name,
-                "description": integration.description,
-                "cli_path": str(integration.cli_path),
-                "tool_count": len(integration.tools),
+            aliases = sorted(lt.scripts.keys())
+            cli_tools[lt.name] = {
+                "tool": lt.name,
+                "description": lt.description,
+                "cli_path": str(lt.cli_path),
+                "method_count": len(lt.methods),
                 "aliases": aliases,
             }
             for alias in aliases:
                 cli_tools[alias] = {
-                    "tool": integration.name,
-                    "description": integration.description,
-                    "cli_path": str(integration.cli_path),
-                    "tool_count": len(integration.tools),
+                    "tool": lt.name,
+                    "description": lt.description,
+                    "cli_path": str(lt.cli_path),
+                    "method_count": len(lt.methods),
                     "aliases": aliases,
                 }
         return cli_tools
 
     def run_cli(self, tool: str, args: list[str]) -> str:
         """Run a tool CLI dynamically without static allowlists."""
-        integration = self._resolve_integration_for_cli(tool)
-        if integration is None:
+        loaded_tool = self._resolve_tool_for_cli(tool)
+        if loaded_tool is None:
             available = sorted(self.list_cli_tools().keys())
             return json.dumps(
                 {
@@ -377,31 +377,31 @@ class ToolManager:
                 }
             )
 
-        cli_path = integration.cli_path
+        cli_path = loaded_tool.cli_path
         if not cli_path.exists():
             return json.dumps(
                 {
-                    "error": f"CLI not found for tool '{integration.name}'",
+                    "error": f"CLI not found for tool '{loaded_tool.name}'",
                     "expected_path": str(cli_path),
                 }
             )
 
-        cli_module_name = f"shared.tools_runtime.{integration.name}.{cli_path.stem}"
+        cli_module_name = f"shared.tools_runtime.{loaded_tool.name}.{cli_path.stem}"
         cli_spec = importlib.util.spec_from_file_location(cli_module_name, cli_path)
         if not cli_spec or not cli_spec.loader:
             return json.dumps(
                 {
-                    "error": f"Unable to load CLI module for tool '{integration.name}'",
+                    "error": f"Unable to load CLI module for tool '{loaded_tool.name}'",
                     "cli_path": str(cli_path),
                 }
             )
 
         cli_module = importlib.util.module_from_spec(cli_spec)
-        cli_module.__package__ = f"shared.tools_runtime.{integration.name}"  # type: ignore[attr-defined]
+        cli_module.__package__ = f"shared.tools_runtime.{loaded_tool.name}"  # type: ignore[attr-defined]
         sys.modules[cli_module_name] = cli_module
 
         original_env: dict[str, str | None] = {}
-        for key, value in integration.ctx.secrets.items():
+        for key, value in loaded_tool.ctx.secrets.items():
             original_env[key] = os.environ.get(key)
             os.environ[key] = value
         try:
@@ -410,7 +410,7 @@ class ToolManager:
             if app is None:
                 return json.dumps(
                     {
-                        "error": f"CLI app not found for tool '{integration.name}'",
+                        "error": f"CLI app not found for tool '{loaded_tool.name}'",
                         "expected_object": "app",
                     }
                 )
@@ -419,11 +419,11 @@ class ToolManager:
                 app = get_command(app)
 
             runner = CliRunner()
-            result = runner.invoke(app, args, prog_name=integration.name)
+            result = runner.invoke(app, args, prog_name=loaded_tool.name)
             output = (result.output or "").strip()
             if result.exit_code != 0:
                 details: dict[str, Any] = {
-                    "error": f"CLI failed for tool '{integration.name}'",
+                    "error": f"CLI failed for tool '{loaded_tool.name}'",
                     "exit_code": result.exit_code,
                     "output": output,
                 }
@@ -434,7 +434,7 @@ class ToolManager:
         except Exception as exc:
             return json.dumps(
                 {
-                    "error": f"CLI raised for tool '{integration.name}'",
+                    "error": f"CLI raised for tool '{loaded_tool.name}'",
                     "detail": str(exc),
                 }
             )
@@ -445,40 +445,40 @@ class ToolManager:
                 else:
                     os.environ[key] = previous
 
-    def integration_test_matrix(self) -> list[dict[str, Any]]:
+    def tool_test_matrix(self) -> list[dict[str, Any]]:
         """Summarize import/discovery/CLI readiness for loaded tools."""
         matrix: list[dict[str, Any]] = []
-        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
+        for lt in sorted(self.tools.values(), key=lambda p: p.name):
             matrix.append(
                 {
-                    "tool": integration.name,
+                    "tool": lt.name,
                     "library_import": True,
-                    "discovered_tools": [tool.tool_name for tool in integration.tools],
-                    "cli_available": integration.cli_path.exists(),
-                    "cli_path": str(integration.cli_path),
-                    "aliases": sorted(integration.scripts.keys()),
+                    "discovered_methods": [m.method_name for m in lt.methods],
+                    "cli_available": lt.cli_path.exists(),
+                    "cli_path": str(lt.cli_path),
+                    "aliases": sorted(lt.scripts.keys()),
                 }
             )
         return matrix
 
     def smoke_test_registry(self) -> list[dict[str, Any]]:
-        """Verify registry integrity for tools, tools, and CLI aliases."""
+        """Verify registry integrity for tools and CLI aliases."""
         entries = self.list_cli_tools()
         results: list[dict[str, Any]] = []
 
-        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
+        for lt in sorted(self.tools.values(), key=lambda p: p.name):
             problems: list[str] = []
-            if not integration.tools:
-                problems.append("no_discovered_tools")
-            if integration.cli_path.exists() and integration.name not in entries:
+            if not lt.methods:
+                problems.append("no_discovered_methods")
+            if lt.cli_path.exists() and lt.name not in entries:
                 problems.append("tool_missing_from_cli_registry")
-            for alias in integration.scripts:
+            for alias in lt.scripts:
                 if alias not in entries:
                     problems.append(f"missing_alias:{alias}")
 
             results.append(
                 {
-                    "tool": integration.name,
+                    "tool": lt.name,
                     "status": "ok" if not problems else "failed",
                     "problems": problems,
                 }
@@ -500,23 +500,23 @@ class ToolManager:
         """Run a CLI smoke test for each loaded tool that has a cli.py."""
         args = cli_args or ["--help"]
         results: list[dict[str, Any]] = []
-        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
-            if not integration.cli_path.exists():
+        for lt in sorted(self.tools.values(), key=lambda p: p.name):
+            if not lt.cli_path.exists():
                 results.append(
                     {
-                        "tool": integration.name,
+                        "tool": lt.name,
                         "status": "missing_cli",
-                        "cli_path": str(integration.cli_path),
+                        "cli_path": str(lt.cli_path),
                     }
                 )
                 continue
 
-            output = self.run_cli(integration.name, args)
+            output = self.run_cli(lt.name, args)
             parsed = self._parse_cli_output(output)
             if parsed is not None:
                 results.append(
                     {
-                        "tool": integration.name,
+                        "tool": lt.name,
                         "status": "failed",
                         "details": parsed,
                     }
@@ -525,9 +525,9 @@ class ToolManager:
 
             results.append(
                 {
-                    "tool": integration.name,
+                    "tool": lt.name,
                     "status": "ok",
-                    "cli_path": str(integration.cli_path),
+                    "cli_path": str(lt.cli_path),
                 }
             )
         return results
@@ -537,10 +537,10 @@ class ToolManager:
         args = cli_args or ["--help"]
         results: list[dict[str, Any]] = []
 
-        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
-            aliases = sorted(integration.scripts)
+        for lt in sorted(self.tools.values(), key=lambda p: p.name):
+            aliases = sorted(lt.scripts)
             if not aliases:
-                results.append({"tool": integration.name, "status": "missing_aliases"})
+                results.append({"tool": lt.name, "status": "missing_aliases"})
                 continue
 
             for alias in aliases:
@@ -549,7 +549,7 @@ class ToolManager:
                 if parsed is not None:
                     results.append(
                         {
-                            "tool": integration.name,
+                            "tool": lt.name,
                             "alias": alias,
                             "status": "failed",
                             "details": parsed,
@@ -559,7 +559,7 @@ class ToolManager:
 
                 results.append(
                     {
-                        "tool": integration.name,
+                        "tool": lt.name,
                         "alias": alias,
                         "status": "ok",
                     }
@@ -570,13 +570,13 @@ class ToolManager:
     def smoke_test_rest_routes(self) -> list[dict[str, Any]]:
         """Verify that every tool function is callable via the dispatcher."""
         results: list[dict[str, Any]] = []
-        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
+        for lt in sorted(self.tools.values(), key=lambda p: p.name):
             results.append(
                 {
-                    "tool": integration.name,
+                    "tool": lt.name,
                     "status": "ok",
-                    "registered_tools": len(integration.tools),
-                    "total_tools": len(integration.tools),
+                    "registered_methods": len(lt.methods),
+                    "total_methods": len(lt.methods),
                 }
             )
         return results
@@ -585,13 +585,13 @@ class ToolManager:
         """Validate describe_tool output for every loaded tool."""
         bad_pattern = re.compile(r"<class '")
         results: list[dict[str, Any]] = []
-        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
-            schema = self.describe_tool(integration.name)
+        for lt in sorted(self.tools.values(), key=lambda p: p.name):
+            schema = self.describe_tool(lt.name)
             problems: list[str] = []
             if "error" in schema:
                 problems.append(f"describe_error: {schema['error']}")
             else:
-                for tool_schema in schema.get("tools", []):
+                for tool_schema in schema.get("methods", []):
                     for pname, pinfo in tool_schema.get("parameters", {}).items():
                         ptype = pinfo.get("type", "")
                         if bad_pattern.search(str(ptype)):
@@ -600,7 +600,7 @@ class ToolManager:
                             )
             results.append(
                 {
-                    "tool": integration.name,
+                    "tool": lt.name,
                     "status": "ok" if not problems else "failed",
                     "problems": problems,
                 }
@@ -608,13 +608,13 @@ class ToolManager:
         return results
 
     @staticmethod
-    def _collect_tools(integration_name: str, module: Any, ctx: ToolContext) -> list[LoadedTool]:
+    def _collect_methods(tool_name: str, module: Any, ctx: ToolContext) -> list[ToolMethod]:
         """Collect tools from a tool module.
 
         The module must have a _client() factory. Call it once to get a cached
         instance and expose every public method as a tool.
         """
-        tools: list[LoadedTool] = []
+        methods: list[ToolMethod] = []
         seen: set[str] = set()
 
         factory = getattr(module, "_client", None)
@@ -633,38 +633,38 @@ class ToolManager:
                 method = getattr(instance, method_name, None)
                 if not inspect.ismethod(method):
                     continue
-                tools.append(LoadedTool(integration_name, method_name, method, ctx))
+                methods.append(ToolMethod(tool_name, method_name, method, ctx))
                 seen.add(method_name)
 
-        return tools
+        return methods
 
     def list_tools(self) -> list[dict[str, Any]]:
-        """List all loaded tools with their tool names (no schemas)."""
+        """List all loaded tools with their method names (no schemas)."""
         items: list[dict[str, Any]] = []
-        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
+        for lt in sorted(self.tools.values(), key=lambda p: p.name):
             items.append(
                 {
-                    "tool": integration.name,
-                    "description": integration.description,
-                    "tools": [t.tool_name for t in sorted(integration.tools, key=lambda t: t.tool_name)],
+                    "tool": lt.name,
+                    "description": lt.description,
+                    "methods": [m.method_name for m in sorted(lt.methods, key=lambda m: m.method_name)],
                 }
             )
         return items
 
-    def describe_tool(self, integration_name: str) -> dict[str, Any]:
-        """Return full method schemas for a tool's tools."""
-        integration = self.integrations.get(integration_name)
-        if not integration:
-            return {"error": f"Tool '{integration_name}' not found"}
-        tools: list[dict[str, Any]] = []
-        for tool in sorted(integration.tools, key=lambda t: t.tool_name):
+    def describe_tool(self, tool_name: str) -> dict[str, Any]:
+        """Return full method schemas for a tool's methods."""
+        lt = self.tools.get(tool_name)
+        if not lt:
+            return {"error": f"Tool '{tool_name}' not found"}
+        method_schemas: list[dict[str, Any]] = []
+        for method in sorted(lt.methods, key=lambda m: m.method_name):
             try:
-                sig = inspect.signature(tool.fn)
+                sig = inspect.signature(method.fn)
             except (TypeError, ValueError) as exc:
-                tools.append(
+                method_schemas.append(
                     {
-                        "name": tool.tool_name,
-                        "description": (tool.fn.__doc__ or "").strip().split("\n")[0],
+                        "name": method.method_name,
+                        "description": (method.fn.__doc__ or "").strip().split("\n")[0],
                         "parameters": {},
                         "signature_error": str(exc),
                     }
@@ -683,48 +683,48 @@ class ToolManager:
                 else:
                     pinfo["required"] = True
                 params[pname] = pinfo
-            tools.append(
+            method_schemas.append(
                 {
-                    "name": tool.tool_name,
-                    "description": (tool.fn.__doc__ or "").strip().split("\n")[0],
+                    "name": method.method_name,
+                    "description": (method.fn.__doc__ or "").strip().split("\n")[0],
                     "parameters": params,
                 }
             )
         return {
-            "tool": integration.name,
-            "description": integration.description,
-            "tools": tools,
+            "tool": lt.name,
+            "description": lt.description,
+            "methods": method_schemas,
         }
 
-    async def call_tool(self, integration_name: str, tool_name: str, args: dict[str, Any]) -> str:
-        """Call a tool function by name and return the result as a TOON string."""
-        integration = self.integrations.get(integration_name)
-        if not integration:
-            return json.dumps({"error": f"Tool '{integration_name}' not found"})
+    async def call_tool(self, tool_name: str, method_name: str, args: dict[str, Any]) -> str:
+        """Call a tool method by name and return the result as a TOON string."""
+        lt = self.tools.get(tool_name)
+        if not lt:
+            return json.dumps({"error": f"Tool '{tool_name}' not found"})
 
-        tool = next((t for t in integration.tools if t.tool_name == tool_name), None)
-        if not tool:
+        method = next((m for m in lt.methods if m.method_name == method_name), None)
+        if not method:
             return json.dumps(
-                {"error": f"Tool '{tool_name}' not found in tool '{integration_name}'"}
+                {"error": f"Method '{method_name}' not found in tool '{tool_name}'"}
             )
 
-        token = set_tool_context(tool.ctx)
+        token = set_tool_context(method.ctx)
         try:
-            if inspect.iscoroutinefunction(tool.fn):
-                result = await tool.fn(**args)
+            if inspect.iscoroutinefunction(method.fn):
+                result = await method.fn(**args)
             else:
                 loop = asyncio.get_running_loop()
-                result = await loop.run_in_executor(None, lambda: tool.fn(**args))
+                result = await loop.run_in_executor(None, lambda: method.fn(**args))
             if isinstance(result, str):
                 return result
             return _to_toon(result)
         except SystemExit as e:
             return json.dumps(
-                {"error": f"Tool called sys.exit({e.code})", "tool": integration_name, "tool": tool_name}
+                {"error": f"Tool called sys.exit({e.code})", "tool": tool_name, "method": method_name}
             )
         except Exception as e:
             return json.dumps(
-                {"error": str(e), "tool": integration_name, "tool": tool_name}
+                {"error": str(e), "tool": tool_name, "method": method_name}
             )
         finally:
             reset_tool_context(token)
@@ -733,7 +733,7 @@ class ToolManager:
         """Create a stable FastAPI router that dispatches to tools via live lookup.
 
         Routes are fixed at registration time — tool calls resolve through
-        ``self.integrations`` at request time so hot-reloads take effect without
+        ``self.tools`` at request time so hot-reloads take effect without
         swapping routes.
         """
         pm = self
@@ -747,26 +747,26 @@ class ToolManager:
             return {
                 name: {
                     "description": p.description,
-                    "tools": [t.tool_name for t in p.tools],
+                    "methods": [m.method_name for m in p.methods],
                 }
-                for name, p in pm.integrations.items()
+                for name, p in pm.tools.items()
             }
 
-        @router.get("/{integration_name}")
-        async def describe_tool(integration_name: str) -> dict:
-            return pm.describe_tool(integration_name)
+        @router.get("/{tool_name}")
+        async def describe_tool(tool_name: str) -> dict:
+            return pm.describe_tool(tool_name)
 
-        @router.post("/{integration_name}/{tool_name}")
-        async def call_tool(integration_name: str, tool_name: str, request: Request) -> dict:
+        @router.post("/{tool_name}/{method_name}")
+        async def call_tool(tool_name: str, method_name: str, request: Request) -> dict:
             body = await request.json() if await request.body() else {}
-            result = await pm.call_tool(integration_name, tool_name, body)
-            return {"tool": integration_name, "tool": tool_name, "result": result}
+            result = await pm.call_tool(tool_name, method_name, body)
+            return {"tool": tool_name, "method": method_name, "result": result}
 
         return router
 
 
-def _make_wrapper(tool: LoadedTool) -> Callable:
-    """Wrap a tool function function to inject context and handle errors."""
+def _make_wrapper(tool: ToolMethod) -> Callable:
+    """Wrap a tool method to inject context and handle errors."""
 
     async def wrapper(**kwargs: Any) -> str:
         token = set_tool_context(tool.ctx)
@@ -783,16 +783,16 @@ def _make_wrapper(tool: LoadedTool) -> Callable:
             return json.dumps(
                 {
                     "error": f"Tool called sys.exit({e.code})",
-                    "tool": tool.integration_name,
                     "tool": tool.tool_name,
+                    "method": tool.method_name,
                 }
             )
         except Exception as e:
             return json.dumps(
                 {
                     "error": str(e),
-                    "tool": tool.integration_name,
                     "tool": tool.tool_name,
+                    "method": tool.method_name,
                 }
             )
         finally:
@@ -800,7 +800,7 @@ def _make_wrapper(tool: LoadedTool) -> Callable:
 
     # Preserve original signature for schema generation
     wrapper.__name__ = tool.qualified_name.replace(".", "_")
-    wrapper.__doc__ = tool.fn.__doc__ or f"{tool.integration_name} — {tool.tool_name}"
+    wrapper.__doc__ = tool.fn.__doc__ or f"{tool.tool_name} — {tool.method_name}"
     wrapper.__signature__ = inspect.signature(tool.fn)  # type: ignore[attr-defined]
     try:
         wrapper.__annotations__ = get_type_hints(tool.fn)
@@ -809,7 +809,7 @@ def _make_wrapper(tool: LoadedTool) -> Callable:
     return wrapper
 
 
-def _register_mcp_tool(mcp: Any, tool: LoadedTool) -> None:
+def _register_mcp_tool(mcp: Any, tool: ToolMethod) -> None:
     """Register a single tool function as an MCP tool."""
     wrapper = _make_wrapper(tool)
     # FastMCP uses the function name as the tool name

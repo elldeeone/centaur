@@ -497,11 +497,11 @@ def tools_list() -> None:
     manager.discover()
 
     rows = []
-    for tool in manager.integration_test_matrix():
+    for entry in manager.tool_test_matrix():
         rows.append(
             {
                 "tool": entry["tool"],
-                "tools": str(len(entry["discovered_tools"])),
+                "tools": str(len(entry["discovered_methods"])),
                 "aliases": ", ".join(entry["aliases"]) or "-",
                 "cli": "yes" if entry["cli_available"] else "no",
                 "cli_path": entry["cli_path"],
@@ -564,7 +564,7 @@ def tools_test(cli_args: str) -> None:
     manager.discover()
 
     registry_results = manager.smoke_test_registry()
-    import_and_discovery = manager.integration_test_matrix()
+    import_and_discovery = manager.tool_test_matrix()
     cli_results = manager.smoke_test_clis(shlex.split(cli_args))
     alias_results = manager.smoke_test_aliases(shlex.split(cli_args))
     rest_results = manager.smoke_test_rest_routes()

@@ -16,7 +16,7 @@ Rebuild of the Tempo AI system: **Postgres+pgvector** for data + search, **FastA
                     │  /api/query   (JSONB queries) │
                     │  /api/search/sql (raw SQL)    │
                     │  /mcp         (core + dynamic │
-                    │                tool tools)  │
+                    │                tools)       │
                     └──────────────┬───────────────┘
                                    │
                     ┌──────────────▼───────────────┐
@@ -48,7 +48,7 @@ External tools (allium, defillama, etc.) are called on-demand — not ingested.
 - **`POST /api/search`** — Hybrid vector + FTS search with RRF ranking
 - **`POST /api/search/sql`** — Run read-only SQL directly against `raw_records` JSONB
 - **`GET /api/query/*`** — Structured endpoints (slack/messages, linear/issues, github/prs, timeline, people)
-- **`/mcp`** — core MCP tools plus dynamically discovered in-process tool tools from `tools/`
+- **`/mcp`** — core MCP tools plus dynamically discovered in-process tools from `tools/`
 
 ### Sandbox
 

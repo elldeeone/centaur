@@ -39,16 +39,16 @@ def manager() -> ToolManager:
 class TestImportAndDiscovery:
     def tests_loaded(self, manager: ToolManager) -> None:
         """At least some tools should load successfully."""
-        assert len(manager.integrations) > 0, "No tools were loaded"
+        assert len(manager.tools) > 0, "No tools were loaded"
 
     def test_every_has_tools(self, manager: ToolManager) -> None:
         """Every loaded tool should have at least one discovered tool."""
-        matrix = manager.integration_test_matrix()
+        matrix = manager.tool_test_matrix()
         for entry in matrix:
             assert entry["library_import"] is True, (
                 f"Tool {entry['tool']} failed library import"
             )
-            assert len(entry["discovered_tools"]) > 0, (
+            assert len(entry["discovered_methods"]) > 0, (
                 f"Tool {entry['tool']} has no discovered tools"
             )
 
@@ -99,12 +99,12 @@ class TestRESTRoutes:
             pytest.fail(f"REST route registration failures:\n{details}")
 
     def test_route_count_matches_tools(self, manager: ToolManager) -> None:
-        """Total registered routes should match total tool count."""
+        """Total registered routes should match total method count."""
         results = manager.smoke_test_rest_routes()
         for r in results:
-            assert r["registered_tools"] == r["total_tools"], (
-                f"Tool {r['tool']}: {r['registered_tools']}/{r['total_tools']} "
-                f"tools registered, missing: {r['missing_routes']}"
+            assert r["registered_methods"] == r["total_methods"], (
+                f"Tool {r['tool']}: {r['registered_methods']}/{r['total_methods']} "
+                f"methods registered"
             )
 
 
@@ -122,20 +122,20 @@ class TestSchemaValidation:
             details = json.dumps(failures, indent=2)
             pytest.fail(f"Schema validation failures:\n{details}")
 
-    def test_describe_tool_returns_tools(self, manager: ToolManager) -> None:
-        """describe_tool should return a non-empty tools list for each tool."""
-        for name in manager.integrations:
+    def test_describe_tool_returns_methods(self, manager: ToolManager) -> None:
+        """describe_tool should return a non-empty methods list for each tool."""
+        for name in manager.tools:
             schema = manager.describe_tool(name)
             assert "error" not in schema, f"describe_tool({name}) returned error: {schema}"
-            assert len(schema.get("tools", [])) > 0, (
-                f"describe_tool({name}) returned no tools"
+            assert len(schema.get("methods", [])) > 0, (
+                f"describe_tool({name}) returned no methods"
             )
 
     def test_all_tool_params_have_type(self, manager: ToolManager) -> None:
         """Every parameter should have a type field that is a non-empty string."""
-        for name in manager.integrations:
+        for name in manager.tools:
             schema = manager.describe_tool(name)
-            for tool_schema in schema.get("tools", []):
+            for tool_schema in schema.get("methods", []):
                 for pname, pinfo in tool_schema.get("parameters", {}).items():
                     ptype = pinfo.get("type", "")
                     assert ptype and isinstance(ptype, str), (

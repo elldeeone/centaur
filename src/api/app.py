@@ -53,11 +53,11 @@ def _warm_tool_caches() -> None:
 
     def _warm() -> None:
         try:
-            slack_tool = tool_manager.integrations.get("slack")
-            if not slack_tool or not slack_tool.tools:
+            slack_tool = tool_manager.tools.get("slack")
+            if not slack_tool or not slack_tool.methods:
                 return
             # Get the client instance from any bound tool method
-            client = slack_tool.tools[0].fn.__self__
+            client = slack_tool.methods[0].fn.__self__
             client._get_user_cache()
             client.list_bot_channels()
             log.info("slack_cache_warmed")

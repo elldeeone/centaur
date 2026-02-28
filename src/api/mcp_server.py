@@ -39,7 +39,7 @@ def set_tool_manager(tool_manager: ToolManager) -> None:
 
 def _get_tool_manager() -> ToolManager:
     if _tool_manager is None:
-        raise RuntimeError("Plugin manager not initialized")
+        raise RuntimeError("Tool manager not initialized")
     return _tool_manager
 
 
@@ -137,25 +137,25 @@ async def sql_query(query: str) -> str:
 
 @mcp.tool()
 async def list_tools() -> str:
-    """List all available tools and their tool names. Call this first to discover
-    what tools and tools are available, then use describe_tool to get full
-    method schemas before calling call_tool."""
+    """List all available tools and their methods. Call this first to discover
+    what tools are available, then use describe_tool to get full method schemas
+    before calling call_tool."""
     manager = _get_tool_manager()
     return _to_toon(manager.list_tools())
 
 
 @mcp.tool()
 async def describe_tool(tool: str) -> str:
-    """Get full method schemas (parameters, types, defaults) for a tool integration's methods.
-    Call this before call_tool to know the exact arguments a tool expects."""
+    """Get full method schemas (parameters, types, defaults) for a tool's methods.
+    Call this before call_tool to know the exact arguments a method expects."""
     manager = _get_tool_manager()
     return _to_toon(manager.describe_tool(tool))
 
 
 @mcp.tool()
-async def call_tool(tool: str, tool: str, args: dict | None = None) -> str:
-    """Call a tool function. Use list_tools to discover tools, describe_tool
-    to get method schemas, then call this with the tool name, tool name, and
-    a dict of arguments."""
+async def call_tool(tool: str, method: str, args: dict | None = None) -> str:
+    """Call a tool method. Use list_tools to discover tools, describe_tool
+    to get method schemas, then call this with the tool name, method name,
+    and a dict of arguments."""
     manager = _get_tool_manager()
-    return await manager.call_tool(tool, tool, args or {})
+    return await manager.call_tool(tool, method, args or {})

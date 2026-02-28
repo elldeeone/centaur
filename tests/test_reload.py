@@ -54,8 +54,8 @@ class TestReload:
         result = fresh_manager.reload()
         assert "reloaded" in result
         assert "tools" in result
-        assert result["reloaded"] == len(fresh_manager.integrations)
-        assert set(result["tools"]) == set(fresh_manager.integrations.keys())
+        assert result["reloaded"] == len(fresh_manager.tools)
+        assert set(result["tools"]) == set(fresh_manager.tools.keys())
 
     def test_reload_clears_module_cache(self, fresh_manager: ToolManager) -> None:
         runtime_mods_before = [
@@ -115,15 +115,15 @@ class TestStableDispatcher:
         """The router should use a wildcard dispatcher, not per-tool routes."""
         router = manager.create_rest_router()
         paths = [getattr(r, "path", "") for r in router.routes]
-        assert "/tools/{integration_name}/{tool_name}" in paths
+        assert "/tools/{tool_name}/{method_name}" in paths
 
     def test_dispatcher_reflects_reload(self, fresh_manager: ToolManager) -> None:
         """After reload, the same router sees new tools via live lookup."""
         fresh_manager.create_rest_router()
-        tools_before = set(fresh_manager.integrations.keys())
+        tools_before = set(fresh_manager.tools.keys())
 
         fresh_manager.reload()
-        tools_after = set(fresh_manager.integrations.keys())
+        tools_after = set(fresh_manager.tools.keys())
 
         assert tools_before == tools_after
 
@@ -157,7 +157,7 @@ class TestAdminEndpoint:
         assert "tools" in data
         assert data["reloaded"] > 0
 
-    async def test_reload_endpoint_returns_integration_names(self, app) -> None:
+    async def test_reload_endpoint_returns_tool_names(self, app) -> None:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post("/admin/reload-tools")
