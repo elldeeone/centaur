@@ -244,7 +244,6 @@ class EngineerOrchestrator:
         tasks = [asyncio.create_task(run_branch(index)) for index in range(branch_count)]
         completed: list[AgentLoopResult] = []
         acceptable: list[AgentLoopResult] = []
-        failures: list[str] = []
         early_stop_triggered = False
 
         for finished in asyncio.as_completed(tasks):
@@ -254,7 +253,6 @@ class EngineerOrchestrator:
                 )
             except Exception as exc:
                 log.warning("parallel_branch_failed", phase=phase_name, error=str(exc))
-                failures.append(str(exc))
                 continue
             completed.append(result)
             if is_acceptable(result.text):
@@ -274,11 +272,6 @@ class EngineerOrchestrator:
             await asyncio.gather(*tasks, return_exceptions=True)
 
         if not completed:
-            detail = "; ".join(msg for msg in failures[:3] if msg.strip())
-            if detail:
-                raise AgentLoopError(
-                    f"{phase_name} phase failed across all parallel branches: {detail}"
-                )
             raise AgentLoopError(f"{phase_name} phase failed across all parallel branches")
 
         winners = acceptable or completed

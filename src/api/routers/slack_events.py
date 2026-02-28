@@ -15,9 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
 
-from api.agent import has_active_non_engineer_session
 from api.deps import verify_api_key
-from shared.engineer.models import EngineerResult, Phase
+from shared.engineer.models import Phase
 from shared.engineer.orchestrator import EngineerOrchestrator
 from shared.engineer.session import (
     create_session,
@@ -27,7 +26,6 @@ from shared.engineer.session import (
     remove_session,
 )
 from shared.engineer.settings import EngineerSettings, engineer_settings
-from shared.engineer.thread_bridge import EngineerThreadBridge
 
 router = APIRouter(prefix="/slack")
 log = structlog.get_logger()
@@ -38,8 +36,6 @@ _seen_events_lock = asyncio.Lock()
 _SEEN_EVENT_TTL_SECONDS = 3600.0
 _MAX_SEEN_EVENTS = 4000
 _MAX_SLACK_MESSAGE_CHARS = 3800
-_SLACK_POST_MAX_RETRIES = 3
-_SLACK_POST_DEFAULT_RETRY_AFTER_SECONDS = 2
 _ENG_FLAG_RE = re.compile(r"(^|\s)--eng(?=\s|$)", re.IGNORECASE)
 _HARNESS_EQ_RE = re.compile(r"\bharness\s*=\s*(amp|claude-code|codex|pi-mono)\b", re.IGNORECASE)
 _ENGINE_FLAG_RE = re.compile(
@@ -70,32 +66,6 @@ _PHASE_LABELS: dict[Phase, str] = {
 
 def _build_slack_thread_key(channel: str, thread_ts: str) -> str:
     return f"slack:{channel}:{thread_ts}"
-
-
-def _split_slack_thread_key(thread_key: str) -> tuple[str, str]:
-    parts = thread_key.split(":")
-    if len(parts) == 3 and parts[0] == "slack" and parts[1] and parts[2]:
-        return parts[1], parts[2]
-    if len(parts) == 2 and parts[0] and parts[1]:
-        return parts[0], parts[1]
-    raise ValueError(f"Invalid thread key: {thread_key}")
-
-
-def _canonicalize_thread_key(thread_key: str, channel: str, thread_ts: str) -> tuple[str, str, str]:
-    ch = channel.strip()
-    ts = thread_ts.strip()
-    raw = thread_key.strip()
-
-    if ch and ts:
-        return _build_slack_thread_key(ch, ts), ch, ts
-    if raw:
-        parsed_channel, parsed_thread_ts = _split_slack_thread_key(raw)
-        return (
-            _build_slack_thread_key(parsed_channel, parsed_thread_ts),
-            parsed_channel,
-            parsed_thread_ts,
-        )
-    raise ValueError("Missing channel/thread_ts and invalid thread_key")
 
 
 def _normalize_attachments(items: list[dict[str, str]] | None) -> list[dict[str, str]]:
@@ -236,8 +206,6 @@ async def _post_thread_message(
     text: str,
 ) -> None:
     safe_text = text.strip()
-    if not safe_text:
-        return
     if len(safe_text) > _MAX_SLACK_MESSAGE_CHARS:
         safe_text = safe_text[: _MAX_SLACK_MESSAGE_CHARS - 18].rstrip() + "\n\n... (truncated)"
     headers = {"Authorization": f"Bearer {token}"}
@@ -247,43 +215,16 @@ async def _post_thread_message(
         "text": safe_text,
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
-        last_error: str | None = None
-        for attempt in range(_SLACK_POST_MAX_RETRIES):
-            resp = await client.post(
-                "https://slack.com/api/chat.postMessage",
-                headers=headers,
-                json=payload,
-            )
-            if resp.status_code == 429:
-                retry_after_raw = resp.headers.get("Retry-After", "").strip()
-                try:
-                    retry_after = max(int(retry_after_raw), 1)
-                except ValueError:
-                    retry_after = _SLACK_POST_DEFAULT_RETRY_AFTER_SECONDS
-                last_error = f"rate_limited retry_after={retry_after}"
-                if attempt < _SLACK_POST_MAX_RETRIES - 1:
-                    await asyncio.sleep(retry_after)
-                    continue
-            if resp.status_code >= 300:
-                raise RuntimeError(f"Slack message failed: {resp.status_code} {resp.text}")
-
-            data = resp.json()
-            if data.get("ok"):
-                return
-            # Slack can return ok=false with ratelimited in body too.
-            if data.get("error") == "ratelimited":
-                retry_after_raw = resp.headers.get("Retry-After", "").strip()
-                try:
-                    retry_after = max(int(retry_after_raw), 1)
-                except ValueError:
-                    retry_after = _SLACK_POST_DEFAULT_RETRY_AFTER_SECONDS
-                last_error = f"rate_limited retry_after={retry_after}"
-                if attempt < _SLACK_POST_MAX_RETRIES - 1:
-                    await asyncio.sleep(retry_after)
-                    continue
-            raise RuntimeError(f"Slack message failed: {data}")
-
-        raise RuntimeError(f"Slack message failed after retries: {last_error or 'unknown error'}")
+        resp = await client.post(
+            "https://slack.com/api/chat.postMessage",
+            headers=headers,
+            json=payload,
+        )
+    if resp.status_code >= 300:
+        raise RuntimeError(f"Slack message failed: {resp.status_code} {resp.text}")
+    data = resp.json()
+    if not data.get("ok"):
+        raise RuntimeError(f"Slack message failed: {data}")
 
 
 def _route_reply_to_session(thread_key: str, reply_text: str) -> str:
@@ -294,6 +235,62 @@ def _route_reply_to_session(thread_key: str, reply_text: str) -> str:
         return "no_active_session"
     session.receive_user_reply(reply_text)
     return "accepted"
+
+
+def _first_text_block(payload: dict) -> str:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return ""
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            text = str(block.get("text", "")).strip()
+            if text:
+                return text
+    return ""
+
+
+def _format_event_update(event: dict) -> str | None:
+    event_type = str(event.get("type", "")).strip()
+    if not event_type:
+        return None
+
+    if event_type == "error":
+        return f"❌ {event.get('error') or event.get('message') or 'unknown error'}"
+
+    if event_type == "thread.started":
+        thread_id = str(event.get("thread_id", "")).strip()
+        return f"🧵 Agent thread started: `{thread_id}`" if thread_id else "🧵 Agent thread started"
+
+    if event_type == "system" and event.get("subtype") == "init":
+        session_id = str(event.get("session_id", "")).strip()
+        return f"✅ Session initialized: `{session_id}`" if session_id else "✅ Session initialized"
+
+    if event_type == "assistant":
+        text = _first_text_block(event)
+        if text:
+            return f"💬 {text[:500]}"
+        return None
+
+    if event_type == "item.completed":
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") == "agent_message":
+            text = str(item.get("text", "")).strip()
+            if text:
+                return f"💬 {text[:500]}"
+        return None
+
+    if event_type == "result":
+        result_text = str(event.get("result", "")).strip()
+        if result_text:
+            return f"📌 {result_text[:500]}"
+        return None
+
+    return None
 
 
 async def _start_engineer_session(
@@ -311,17 +308,8 @@ async def _start_engineer_session(
             existing = get_session(thread_key)
             return {"status": "already_running", "run_id": existing.run_id if existing else ""}
 
-        conflict, harness = has_active_non_engineer_session(thread_key)
-        if conflict:
-            return {
-                "status": "rejected",
-                "error": f"Active {harness} session in progress for this thread. Complete or stop it first.",
-            }
-
         session = create_session(thread_key, task_text)
         session.model_preference = model_preference
-        bridge = EngineerThreadBridge(thread_key, session)
-        bridge.start()
 
         async def _send(text: str) -> None:
             try:
@@ -334,35 +322,23 @@ async def _start_engineer_session(
             except Exception:
                 log.exception("engineer_message_failed", channel=channel)
 
-        async def _fail_preflight(message: str) -> None:
-            await bridge.start_phase(Phase.FAILED, "preflight")
-            await bridge.send_message(message)
-            bridge.finalize(
-                EngineerResult(
-                    run_id=session.run_id,
-                    success=False,
-                    status="failed",
-                    error=message,
-                )
-            )
-            await _send(message)
-
         async def _run() -> None:
             try:
                 if shutil.which("git") is None:
-                    await _fail_preflight(
-                        "Engineer failed preflight: `git` is not available in the API container."
-                    )
+                    await _send("Engineer failed preflight: `git` is not available in the API container.")
+                    remove_session(thread_key)
                     return
                 if not settings.github_token:
-                    await _fail_preflight(
+                    await _send(
                         "Engineer failed preflight: `GITHUB_TOKEN` is missing, so PR creation cannot run."
                     )
+                    remove_session(thread_key)
                     return
                 if not settings.anthropic_api_key:
-                    await _fail_preflight(
+                    await _send(
                         "Engineer failed preflight: `ANTHROPIC_API_KEY` is missing."
                     )
+                    remove_session(thread_key)
                     return
                 preference_msg = f" (model preference: {model_preference})" if model_preference else ""
                 await _send(f"Engineer started{preference_msg}: `{task_text}`")
@@ -370,18 +346,35 @@ async def _start_engineer_session(
                     settings=settings,
                     model_preference=model_preference,
                 )
+                last_event_preview = ""
+                last_event_at = 0.0
 
                 async def _on_phase(phase: Phase, label: str) -> None:
                     phase_name = _PHASE_LABELS.get(phase, phase.value)
                     suffix = f" — {label}" if label else ""
                     await _send(f"⏱️ Phase: *{phase_name}*{suffix}")
+
+                async def _on_event(event: dict[str, object]) -> None:
+                    nonlocal last_event_preview, last_event_at
+                    preview = _format_event_update(event)
+                    if not preview:
+                        return
+                    now = time.monotonic()
+                    # Avoid flooding Slack with repetitive stream chunks.
+                    if preview == last_event_preview and now - last_event_at < 8.0:
+                        return
+                    if now - last_event_at < 2.0:
+                        return
+                    last_event_preview = preview
+                    last_event_at = now
+                    await _send(preview)
+
                 result = await orchestrator.run(
                     session,
-                    post_message=bridge.send_message,
+                    post_message=_send,
                     on_phase=_on_phase,
-                    on_event=bridge.on_event,
+                    on_event=_on_event,
                 )
-                bridge.finalize(result)
 
                 if result.success and result.pr_url:
                     await _send(f"Engineer complete! PR: {result.pr_url}")
@@ -394,17 +387,8 @@ async def _start_engineer_session(
                     await _send(f"Engineer failed: {result.error or 'unknown error'}")
             except Exception:
                 log.exception("engineer_task_crashed", thread_key=thread_key)
-                bridge.finalize(
-                    EngineerResult(
-                        run_id=session.run_id,
-                        success=False,
-                        status="failed",
-                        error="crashed unexpectedly",
-                    )
-                )
                 await _send("Engineer crashed unexpectedly. Check logs.")
             finally:
-                bridge.cleanup()
                 remove_session(thread_key)
 
         task = asyncio.create_task(_run())
@@ -438,12 +422,11 @@ async def start_engineer(payload: EngineerStartRequest) -> JSONResponse:
     if not task_text:
         raise HTTPException(status_code=400, detail="Task must not be empty")
 
-    try:
-        thread_key, channel, thread_ts = _canonicalize_thread_key(
-            payload.thread_key, payload.channel, payload.thread_ts
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    thread_key = payload.thread_key.strip() or _build_slack_thread_key(payload.channel, payload.thread_ts)
+    channel = payload.channel.strip()
+    thread_ts = payload.thread_ts.strip()
+    if not channel or not thread_ts:
+        raise HTTPException(status_code=400, detail="channel and thread_ts are required")
 
     result = await _start_engineer_session(
         settings=settings,
@@ -459,10 +442,7 @@ async def start_engineer(payload: EngineerStartRequest) -> JSONResponse:
 
 @router.post("/reply", dependencies=[Depends(verify_api_key)])
 async def reply_engineer(payload: EngineerReplyRequest) -> JSONResponse:
-    try:
-        thread_key, _, _ = _canonicalize_thread_key(payload.thread_key, "", "")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    thread_key = payload.thread_key.strip()
     reply_text = _append_attachments(payload.reply.strip(), payload.attachments)
     if not thread_key:
         raise HTTPException(status_code=400, detail="thread_key is required")

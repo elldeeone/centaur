@@ -147,10 +147,7 @@ function createBot() {
           const statusLine =
             result.status === "already_running"
               ? "Engineer flow is already running for this thread."
-              : result.status === "rejected"
-                ? (result.error ??
-                  "Engineer flow could not start because another harness session is active in this thread.")
-                : "Engineer flow started.";
+              : "Engineer flow started.";
           await thread.post(
             renderSlackMessage(
               `${statusLine}${preferenceLine}\n\n[🔗 Thread Viewer](${viewerUrl})`
