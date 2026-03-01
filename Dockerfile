@@ -12,15 +12,17 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 WORKDIR /app
 
-# 1. Install core dependencies (cached unless pyproject.toml/uv.lock change)
-COPY pyproject.toml uv.lock README.md ./
+# 1. Install core dependencies from pyproject metadata.
+#    `uv.lock` is intentionally git-ignored in this repo, so we cannot rely on
+#    it being present in clean checkouts or CI workspaces.
+COPY pyproject.toml README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
+    uv sync --no-install-project --no-dev
 
 # 2. Install project with source
 COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+    uv sync --no-dev
 
 # 3. Install tool dependencies via bind mount (doesn't create a layer from tools/)
 #    The uv cache mount means even on rebuild this is fast.
@@ -47,4 +49,4 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 8000
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["uv", "run", "uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/.venv/bin/uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -118,6 +118,33 @@ jobs:
           echo "Health check failed after 60s"
           exit 1
 
+      - name: Secret manager health check
+        if: steps.changes.outputs.api == 'true' || steps.changes.outputs.etl == 'true' || steps.changes.outputs.infra == 'true'
+        run: |
+          for i in $(seq 1 90); do
+            CID=$(docker compose ps -q secrets)
+            if [ -z "$CID" ]; then
+              echo "Secret manager container not found yet"
+              sleep 1
+              continue
+            fi
+
+            STATUS=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CID")
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Secret manager healthy after ${i}s"
+              exit 0
+            fi
+            if [ "$STATUS" = "unhealthy" ]; then
+              echo "Secret manager reported unhealthy"
+              docker compose logs --tail 120 secrets || true
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "Secret manager health check failed after 90s"
+          docker compose logs --tail 120 secrets || true
+          exit 1
+
       # Notify #ai-v2 with LLM summary of what changed
       - name: Notify Slack
         if: always() && steps.changes.outputs.diff != ''
