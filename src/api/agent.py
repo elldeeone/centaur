@@ -896,15 +896,17 @@ def _container_env() -> list[str]:
     use API-key auth flows instead of interactive/browser login.
     """
     firewall_host = os.getenv("FIREWALL_HOST", "firewall")
-    _stub = "FIREWALL_INJECTED"
 
     return [
         f"AI_V2_API_URL={os.getenv('AGENT_API_URL', 'http://api:8000')}",
         f"AI_V2_API_KEY={os.getenv('API_SECRET_KEY', '')}",
-        f"ANTHROPIC_API_KEY={_stub}",
-        f"OPENAI_API_KEY={_stub}",
-        f"AMP_API_KEY={_stub}",
-        f"GITHUB_TOKEN={_stub}",
+        # Stubs must look like valid keys so CLIs use direct-to-API auth
+        # flows (BYOK) instead of provider proxies or interactive login.
+        # The firewall overwrites these at the HTTP level with real keys.
+        "ANTHROPIC_API_KEY=sk-ant-proxy-managed-000000000000000000000000000000000000000000000000",
+        "OPENAI_API_KEY=sk-proxy-managed-000000000000000000000000000000000000000000",
+        "AMP_API_KEY=FIREWALL_INJECTED",
+        "GITHUB_TOKEN=ghp_proxy_managed_0000000000000000000000000000",
         f"HTTPS_PROXY=http://{firewall_host}:8080",
         f"HTTP_PROXY=http://{firewall_host}:8080",
         f"https_proxy=http://{firewall_host}:8080",
