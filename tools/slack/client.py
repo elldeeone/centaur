@@ -724,19 +724,28 @@ class SlackClient:
 
     def upload_file(self, 
         channel: str,
-        file_path: str,
+        file_path: str | None = None,
         title: str | None = None,
         comment: str | None = None,
         thread_ts: str | None = None,
+        content_base64: str | None = None,
+        filename: str | None = None,
     ) -> dict:
-        """Upload a file to a channel."""
+        """Upload a file to a channel. Accepts file_path OR content_base64."""
         channel_id = self._resolve_channel(channel)
 
         try:
             kwargs = {
                 "channel": channel_id,
-                "file": file_path,
             }
+            if content_base64:
+                import base64
+                kwargs["content"] = base64.b64decode(content_base64)
+                kwargs["filename"] = filename or "upload.png"
+            elif file_path:
+                kwargs["file"] = file_path
+            else:
+                raise ValueError("Either file_path or content_base64 is required")
             if title:
                 kwargs["title"] = title
             if comment:
