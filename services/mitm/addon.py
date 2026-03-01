@@ -202,10 +202,10 @@ class CredentialInjector:
     # ── mitmproxy hooks ──────────────────────────────────────────────
 
     def request(self, flow: http.HTTPFlow) -> None:
-        host = flow.request.pretty_host
+        host = flow.request.pretty_host.lower()
 
         # Block access to sensitive internal services
-        if host in BLOCKED_HOSTS:
+        if host.rstrip(".") in BLOCKED_HOSTS:
             flow.response = http.Response.make(
                 403,
                 b"Blocked by security policy",
