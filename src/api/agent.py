@@ -890,21 +890,15 @@ def _refill_pool() -> None:
 def _container_env() -> list[str]:
     """Build env vars for sandbox containers.
 
-    Containers never receive real API keys.  Stub values are injected so
-    harness CLIs initialise normally, and the firewall proxy overwrites
-    HTTP headers with real credentials in-flight.
+    Containers never receive real API keys.  The firewall proxy
+    unconditionally injects credentials into HTTP headers based on
+    the target host, so no stub API key values are needed here.
     """
     firewall_host = os.getenv("FIREWALL_HOST", "firewall")
-    _stub = "PROXY_MANAGED_PLACEHOLDER_KEY"
 
     return [
         f"AI_V2_API_URL={os.getenv('AGENT_API_URL', 'http://api:8000')}",
         f"AI_V2_API_KEY={os.getenv('API_SECRET_KEY', '')}",
-        f"ANTHROPIC_API_KEY={_stub}",
-        f"OPENAI_API_KEY={_stub}",
-        f"CODEX_API_KEY={_stub}",
-        f"AMP_API_KEY={_stub}",
-        f"GITHUB_TOKEN={_stub}",
         f"HTTPS_PROXY=http://{firewall_host}:8080",
         f"HTTP_PROXY=http://{firewall_host}:8080",
         f"https_proxy=http://{firewall_host}:8080",

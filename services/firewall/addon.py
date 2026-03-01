@@ -1,22 +1,10 @@
-"""Firewall addon — stateless credential injection via secrets service.
+"""Firewall addon — host-based credential injection.
 
-Intercepts outgoing HTTP/HTTPS requests from sandbox containers and injects
-real API credentials.  The proxy itself holds NO persistent state — credentials
-are fetched from the secrets service (backed by 1Password) and cached in
-memory with a short TTL.
+Intercepts ALL outgoing HTTPS requests from sandbox containers. For known
+API hosts, unconditionally injects the appropriate credential header with
+real secrets fetched on demand from the secret manager service.
 
-Architecture::
-
-    Sandbox Container ──► Firewall ──► Upstream API
-    (placeholder keys)    (injects real   (sees real
-                           credentials)    credentials)
-
-Security properties:
-    • Sandboxes never see real API keys (only placeholders)
-    • Credentials exist only in-memory in this process
-    • Secrets service is the single source of truth (1Password-backed)
-    • Firewall is stateless — horizontally scalable
-    • Requests to the secrets service are blocked (no exfiltration)
+No placeholder detection — credentials are set based solely on the target host.
 """
 
 from __future__ import annotations
@@ -25,110 +13,68 @@ import base64
 import json
 import logging
 import os
-import re
 import threading
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from mitmproxy import http
 
-log = logging.getLogger("firewall.secrets")
-
-# ── Configuration ──────────────────────────────────────────────────────────
+log = logging.getLogger("firewall")
 
 SECRET_MANAGER_URL = os.environ.get("SECRET_MANAGER_URL", "http://secrets:8100")
-CACHE_TTL = int(os.environ.get("FIREWALL_CACHE_TTL", os.environ.get("MITM_CACHE_TTL", "30")))  # seconds
+CACHE_TTL = int(os.environ.get("FIREWALL_CACHE_TTL", "30"))
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8081"))
 
-# Hosts that sandboxes must NEVER reach through the proxy.
 BLOCKED_HOSTS: frozenset[str] = frozenset({
     "secrets",
-    "169.254.169.254",  # cloud metadata
+    "169.254.169.254",
 })
 
-# ── Injection rules ───────────────────────────────────────────────────────
-# host → list of (header_name, value_template)
-# Templates use {SECRET_KEY} placeholders resolved from the secrets service.
-
-_DEFAULT_RULES: dict[str, list[tuple[str, str]]] = {
-    # LLM providers (used by harness CLIs)
-    "api.anthropic.com": [
-        ("x-api-key", "{ANTHROPIC_API_KEY}"),
-    ],
-    "api.openai.com": [
-        ("authorization", "Bearer {OPENAI_API_KEY}"),
-    ],
-    # GitHub (git + gh CLI)
-    "api.github.com": [
-        ("authorization", "token {GITHUB_TOKEN}"),
-    ],
-    "github.com": [
-        ("authorization", "Basic {_GITHUB_BASIC}"),
-    ],
-    # Amp CLI (uses ampcode.com, not api.ampcode.com)
-    "ampcode.com": [
-        ("authorization", "Bearer {AMP_API_KEY}"),
-    ],
+# Host → (secret_key, header_name, style)
+# Styles: "raw"    → value is the secret itself
+#         "bearer" → "Bearer {secret}"
+#         "token"  → "token {secret}"
+#         "basic"  → "Basic base64(x-access-token:{secret})"
+_HOST_RULES: dict[str, tuple[str, str, str]] = {
+    "api.anthropic.com": ("ANTHROPIC_API_KEY", "x-api-key", "raw"),
+    "api.openai.com": ("OPENAI_API_KEY", "authorization", "bearer"),
+    "ampcode.com": ("AMP_API_KEY", "authorization", "bearer"),
+    "api.ampcode.com": ("AMP_API_KEY", "authorization", "bearer"),
+    "api.github.com": ("GITHUB_TOKEN", "authorization", "token"),
+    "github.com": ("GITHUB_TOKEN", "authorization", "basic"),
+    "uploads.github.com": ("GITHUB_TOKEN", "authorization", "token"),
 }
 
-_SECRET_RE = re.compile(r"\{(\w+)\}")
 
-
-def _load_rules() -> dict[str, list[tuple[str, str]]]:
-    """Load injection rules, merging defaults with any FIREWALL_EXTRA_RULES."""
-    rules = dict(_DEFAULT_RULES)
-    extra = os.environ.get("FIREWALL_EXTRA_RULES", os.environ.get("MITM_EXTRA_RULES"))
-    if extra:
-        for host, entries in json.loads(extra).items():
-            rules[host] = [(h, v) for h, v in entries]
-    return rules
-
-
-# ── Addon ──────────────────────────────────────────────────────────────────
+def _format_header(secret: str, style: str) -> str:
+    if style == "bearer":
+        return f"Bearer {secret}"
+    if style == "token":
+        return f"token {secret}"
+    if style == "basic":
+        raw = f"x-access-token:{secret}"
+        return f"Basic {base64.b64encode(raw.encode()).decode()}"
+    return secret
 
 
 class CredentialInjector:
-    """Firewall addon that injects credentials from the secrets service."""
-
     def __init__(self) -> None:
-        self._secrets: dict[str, str] = {}
-        self._last_refresh: float = 0.0
+        self._cache: dict[str, tuple[str | None, float]] = {}
         self._lock = threading.Lock()
-        self._rules = _load_rules()
-
-        # Collect all secret keys referenced in rules (skip derived _keys)
-        self._needed_keys: set[str] = set()
-        for entries in self._rules.values():
-            for _, template in entries:
-                self._needed_keys.update(
-                    m.group(1)
-                    for m in _SECRET_RE.finditer(template)
-                    if not m.group(1).startswith("_")
-                )
-
-        log.info(
-            "credential injector: %d host rules, %d secrets needed",
-            len(self._rules),
-            len(self._needed_keys),
-        )
-
+        log.info("credential injector started (host rules: %s)", ", ".join(sorted(_HOST_RULES)))
         self._start_health_server()
-        self._start_background_refresh()
-
-    # ── Health endpoint ───────────────────────────────────────────────
 
     def _start_health_server(self) -> None:
         parent = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802
+            def do_GET(self) -> None:
                 if self.path == "/health":
                     with parent._lock:
-                        count = len(parent._secrets)
-                    body = json.dumps({"status": "ok", "secrets_loaded": count})
+                        cached = sum(1 for v, _ in parent._cache.values() if v is not None)
+                    body = json.dumps({"status": "ok", "secrets_cached": cached})
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
@@ -137,121 +83,57 @@ class CredentialInjector:
                     self.send_response(404)
                     self.end_headers()
 
-            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            def log_message(self, fmt: str, *args: object) -> None:
                 pass
 
         def serve() -> None:
-            server = HTTPServer(("0.0.0.0", HEALTH_PORT), Handler)  # noqa: S104
+            server = HTTPServer(("0.0.0.0", HEALTH_PORT), Handler)
             server.serve_forever()
 
         threading.Thread(target=serve, daemon=True).start()
-        log.info("health server listening on :%d", HEALTH_PORT)
 
-    # ── Background refresh ──────────────────────────────────────────
+    def _get_secret(self, key: str) -> str | None:
+        now = time.monotonic()
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached and (now - cached[1]) < CACHE_TTL:
+                return cached[0]
 
-    def _start_background_refresh(self) -> None:
-        def _poll() -> None:
-            while True:
-                with self._lock:
-                    all_resolved = len(self._secrets) >= len(self._needed_keys)
-                # Retry every 10s if missing secrets, else every 60s
-                time.sleep(10 if not all_resolved else 60)
-                self._last_refresh = 0  # force next refresh
-                self._refresh_if_needed()
-
-        threading.Thread(target=_poll, daemon=True).start()
-
-    # ── Secret fetching ───────────────────────────────────────────────
-
-    def _fetch_secret(self, key: str) -> str | None:
-        """Fetch a single secret from the secrets service."""
         try:
             url = f"{SECRET_MANAGER_URL}/secrets/{urllib.parse.quote(key, safe='')}"
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode())
-                return data.get("value")
-        except urllib.error.HTTPError as e:
-            log.warning("secret %s: HTTP %d from secret manager", key, e.code)
-            return None
-        except Exception as e:
-            log.warning("secret %s: fetch failed: %s", key, e)
-            return None
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                val = json.loads(resp.read().decode()).get("value")
+        except Exception:
+            val = None
 
-    def _refresh_if_needed(self) -> None:
-        """Refresh the in-memory secret cache if TTL has expired."""
-        now = time.monotonic()
-        if now - self._last_refresh < CACHE_TTL:
-            return
         with self._lock:
-            # Double-check after acquiring lock
-            if time.monotonic() - self._last_refresh < CACHE_TTL:
-                return
-            new_secrets: dict[str, str] = {}
-            resolved: list[str] = []
-            missing: list[str] = []
-            for key in self._needed_keys:
-                val = self._fetch_secret(key)
-                if val:
-                    new_secrets[key] = val
-                    resolved.append(key)
-                else:
-                    missing.append(key)
+            self._cache[key] = (val, now)
 
-            # Compute derived keys
-            gh_token = new_secrets.get("GITHUB_TOKEN", "")
-            if gh_token:
-                new_secrets["_GITHUB_BASIC"] = base64.b64encode(
-                    f"x-access-token:{gh_token}".encode()
-                ).decode()
-
-            self._secrets = new_secrets
-            self._last_refresh = time.monotonic()
-            log.info(
-                "refreshed secrets: resolved=[%s], missing=[%s]",
-                ", ".join(sorted(resolved)),
-                ", ".join(sorted(missing)),
-            )
-
-    def _resolve(self, template: str) -> str:
-        """Resolve {KEY} placeholders in a template string."""
-
-        def _repl(m: re.Match) -> str:
-            key = m.group(1)
-            val = self._secrets.get(key)
-            if val is None:
-                log.warning("secret %s not resolved", key)
-                return m.group(0)  # leave placeholder intact
-            return val
-
-        return _SECRET_RE.sub(_repl, template)
-
-    # ── mitmproxy hooks (firewall) ──────────────────────────────────
+        if val is None:
+            log.warning("secret %s: not found in secret manager", key)
+        return val
 
     def request(self, flow: http.HTTPFlow) -> None:
-        host = flow.request.pretty_host.lower()
+        host = flow.request.pretty_host.lower().rstrip(".")
 
-        # Block access to sensitive internal services
-        if host.rstrip(".") in BLOCKED_HOSTS:
+        if host in BLOCKED_HOSTS:
             flow.response = http.Response.make(
-                403,
-                b"Blocked by security policy",
-                {"content-type": "text/plain"},
+                403, b"Blocked by security policy", {"content-type": "text/plain"},
             )
             log.warning("blocked request to %s", host)
             return
 
-        # Check if this host has injection rules
-        rules = self._rules.get(host)
-        if not rules:
+        rule = _HOST_RULES.get(host)
+        if rule is None:
             return
 
-        self._refresh_if_needed()
+        secret_key, header_name, style = rule
+        secret = self._get_secret(secret_key)
+        if secret is None:
+            log.warning("no secret for %s (key=%s) — passing request unmodified", host, secret_key)
+            return
 
-        for header, template in rules:
-            value = self._resolve(template)
-            if "{" not in value:  # fully resolved (no unresolved placeholders)
-                flow.request.headers[header] = value
+        flow.request.headers[header_name] = _format_header(secret, style)
 
 
 addons = [CredentialInjector()]
