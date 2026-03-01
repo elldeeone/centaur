@@ -134,25 +134,39 @@ class SensorTowerClient:
 
         Args:
             platform: 'ios' or 'android'
-            category: Category ID (e.g., '6014' for Games on iOS). None = overall
+            category: Category ID (e.g., '6014' for Games, '36' for overall on iOS). Required.
             country: Country code (e.g., 'US')
             chart_type: 'free', 'paid', or 'grossing'
             limit: Number of results (max 400)
-            date: Date for rankings (None = today)
+            date: Date for rankings (YYYY-MM-DD). Required.
         """
         os_type = self._os_to_platform(platform)
 
+        # Map simple chart_type to API-expected values
+        chart_type_map = {
+            "free": "topfreeapplications",
+            "paid": "toppaidapplications",
+            "grossing": "topgrossingapplications",
+        }
+        api_chart_type = chart_type_map.get(chart_type, chart_type)
+
         params = {
             "country": country,
-            "chart_type": chart_type,
+            "chart_type": api_chart_type,
             "limit": min(limit, 400),
         }
 
         if category:
             params["category"] = category
+        else:
+            params["category"] = "36"  # Overall apps
 
         if date:
             params["date"] = self._format_date(date)
+        else:
+            from datetime import date as date_cls
+
+            params["date"] = date_cls.today().isoformat()
 
         endpoint = f"/v1/{os_type}/ranking"
         return self._request(endpoint, params=params)
