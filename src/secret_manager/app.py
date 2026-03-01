@@ -223,8 +223,22 @@ def list_keys() -> dict:
     return {"keys": sorted(_cache.keys()), "count": len(_cache)}
 
 
+@app.post("/reload")
+async def reload_secrets() -> dict:
+    """Force an immediate refresh from 1Password."""
+    count = await _load_all()
+    return {"status": "ok", "cached_keys": count}
+
+
 @app.get("/secrets/{key}")
-def get_secret(key: str) -> dict:
+async def get_secret(key: str) -> dict:
+    value = _cache.get(key)
+    if value is not None:
+        return {"value": value}
+
+    # Cache miss — force a refresh and retry once
+    log.info("cache miss for '%s', triggering refresh", key)
+    await _load_all()
     value = _cache.get(key)
     if value is None:
         raise HTTPException(status_code=404, detail="not found")
