@@ -57,6 +57,14 @@ def _normalize(title: str) -> str:
     return re.sub(r"[^A-Z0-9]", "_", title.upper()).strip("_")
 
 
+# Map common env var names to 1Password item titles that differ.
+_ALIASES: dict[str, list[str]] = {
+    "ANTHROPIC_API_KEY": ["CLAUDE_API"],
+    "OPENAI_API_KEY": ["CHATGPT_API"],
+    "GITHUB_TOKEN": ["GITHUB", "SVC_PARADIGM_GITHUB"],
+}
+
+
 async def _init_client() -> Client:
     """Create and authenticate a 1Password SDK client."""
     token = os.environ.get("OP_SERVICE_ACCOUNT_TOKEN", "")
@@ -128,19 +136,17 @@ async def _load_all() -> int:
         if not item_id:
             continue
 
-        ref = f"op://{vault_id}/{item_id}/password"
-        try:
-            value = await _client.secrets.resolve(ref)
-        except Exception:
-            # Try 'credential' field for API_CREDENTIAL items
+        _FIELDS = ("password", "credential", "api_key", "key", "token", "secret", "value")
+        value = None
+        for field in _FIELDS:
             try:
-                ref_alt = f"op://{vault_id}/{item_id}/credential"
-                value = await _client.secrets.resolve(ref_alt)
+                value = await _client.secrets.resolve(f"op://{vault_id}/{item_id}/{field}")
+                if value:
+                    break
             except Exception:
-                log.debug("skipping item %s — no password/credential field", item_title)
                 continue
-
         if not value:
+            log.debug("skipping item %s — no resolvable field (tried %s)", item_title, _FIELDS)
             continue
 
         title = item_title
@@ -148,6 +154,15 @@ async def _load_all() -> int:
         norm = _normalize(title)
         if norm != title:
             new_cache[norm] = value
+
+    # Apply aliases: if a canonical env var name is missing, resolve it
+    # from known 1Password item names.
+    for alias, sources in _ALIASES.items():
+        if alias not in new_cache:
+            for source in sources:
+                if source in new_cache:
+                    new_cache[alias] = new_cache[source]
+                    break
 
     # Atomic swap — avoids readers seeing an empty cache during refresh
     _cache = new_cache
