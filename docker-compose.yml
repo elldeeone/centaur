@@ -99,7 +99,7 @@ services:
       AI_V2_API_KEY: ${API_SECRET_KEY}
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped

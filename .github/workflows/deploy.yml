@@ -66,12 +66,14 @@ jobs:
       # Infra change → rebuild entire stack (docker-compose, Dockerfile, services/, monitoring/)
       - name: Deploy all services
         if: steps.changes.outputs.infra == 'true'
-        run: docker compose up -d --build
+        run: docker compose up -d --build --wait
 
-      # API+ETL share the same Dockerfile — build once, deploy both
+      # API+ETL share the same Dockerfile — build once, deploy both.
+      # --wait blocks until health checks pass, preventing slackbot from
+      # hitting a half-started API.
       - name: Deploy API + ETL
         if: steps.changes.outputs.api == 'true' && steps.changes.outputs.infra != 'true'
-        run: docker compose up -d --build api etl
+        run: docker compose up -d --build --wait api etl
 
       # ETL-only change (src/etl or src/shared but not src/api) — still same image
       - name: Deploy ETL only

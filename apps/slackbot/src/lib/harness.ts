@@ -1,51 +1,4 @@
-const API_URL = process.env.AI_V2_API_URL || "http://api:8000";
-const API_KEY = process.env.AI_V2_API_KEY || "";
-
-async function agentCall(
-  endpoint: string,
-  args: Record<string, unknown>
-): Promise<Record<string, unknown>> {
-  const t0 = performance.now();
-  // Only apply a client-side timeout for short control-plane calls (spawn,
-  // interrupt, etc.).  Execute calls run as long as the backend needs — the
-  // backend already enforces its own EXEC_TIMEOUT.
-  const useTimeout = endpoint !== "execute";
-  const controller = useTimeout ? new AbortController() : undefined;
-  const timer = useTimeout
-    ? setTimeout(() => controller!.abort(), 30_000)
-    : undefined;
-  try {
-    const res = await fetch(`${API_URL}/agent/${endpoint}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(args),
-      ...(controller ? { signal: controller.signal } : {}),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`agent/${endpoint} failed (${res.status}): ${text}`);
-    }
-
-    const data = await res.json();
-    const elapsed = Math.round(performance.now() - t0);
-    console.log(
-      JSON.stringify({
-        event: "api_call",
-        endpoint: `agent/${endpoint}`,
-        request_id: args.request_id ?? null,
-        thread: args.slack_thread_key ?? null,
-        elapsed_ms: elapsed,
-      })
-    );
-    return data;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
+import { apiPost, apiGet, ApiError, API_URL, API_KEY } from "./api-client";
 
 export type Harness = "amp" | "claude-code" | "codex" | "pi-mono";
 export type AgentMode = "default" | "eng";
@@ -183,12 +136,12 @@ export async function spawn(
   repo?: string,
   requestId?: string
 ): Promise<{ sessionId: string; status: string }> {
-  const result = await agentCall("spawn", {
+  const result = await apiPost("/agent/spawn", {
     slack_thread_key: threadKey,
     harness,
     ...(repo ? { repo } : {}),
     ...(requestId ? { request_id: requestId } : {}),
-  });
+  }, { timeoutMs: 30_000 });
   return {
     sessionId: result.session_id as string,
     status: result.status as string,
@@ -204,7 +157,7 @@ export async function execute(
   userId?: string,
   source: ExecuteSource = "slack",
 ): Promise<string> {
-  const result = await agentCall("execute", {
+  const result = await apiPost("/agent/execute", {
     slack_thread_key: threadKey,
     message,
     harness,
@@ -214,7 +167,7 @@ export async function execute(
     source,
   });
   if (typeof result.error === "string" && result.error.trim()) {
-    throw new Error(result.error);
+    throw new ApiError(result.error, 200, false);
   }
   return (result.result as string) || "No response from agent.";
 }
@@ -223,61 +176,17 @@ export async function interrupt(
   threadKey: string,
   requestId?: string
 ): Promise<{ sessionId: string; status: string }> {
-  const result = await agentCall("interrupt", {
+  const result = await apiPost("/agent/interrupt", {
     slack_thread_key: threadKey,
     ...(requestId ? { request_id: requestId } : {}),
-  });
+  }, { timeoutMs: 30_000 });
   if (typeof result.error === "string" && result.error.trim()) {
-    throw new Error(result.error);
+    throw new ApiError(result.error, 200, false);
   }
   return {
     sessionId: String(result.session_id ?? threadKey),
     status: String(result.status ?? "interrupted"),
   };
-}
-
-async function apiCall(
-  path: string,
-  payload: Record<string, unknown>
-): Promise<Record<string, unknown>> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30_000);
-  try {
-    const res = await fetch(`${API_URL}${path}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`api ${path} failed (${res.status}): ${text}`);
-    }
-    return (await res.json()) as Record<string, unknown>;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function splitThreadKey(threadKey: string): { channel: string; threadTs: string } {
-  const parts = threadKey.trim().split(":");
-  // Canonical format used by backend APIs.
-  if (parts.length === 2 && parts[0] && parts[1]) {
-    return { channel: parts[0], threadTs: parts[1] };
-  }
-  // Chat SDK Slack adapter format.
-  if (parts.length === 3 && parts[1] && parts[2]) {
-    return { channel: parts[1], threadTs: parts[2] };
-  }
-  throw new Error(`Invalid thread key format (expected <channel>:<thread_ts>): ${threadKey}`);
-}
-
-export function normalizeThreadKey(threadKey: string): string {
-  const { channel, threadTs } = splitThreadKey(threadKey);
-  return `${channel}:${threadTs}`;
 }
 
 export async function postThreadContextMessage(
@@ -301,7 +210,7 @@ export async function postThreadContextMessage(
       ? { attachments: options.attachments }
       : {}),
   };
-  const result = await apiCall("/api/threads/context-message", payload);
+  const result = await apiPost("/api/threads/context-message", payload, { timeoutMs: 30_000 });
   return { status: String(result.status ?? "accepted") };
 }
 
@@ -314,7 +223,7 @@ export async function startEngineerFlow(
 ): Promise<{ status: string; runId?: string; error?: string }> {
   const normalizedThreadKey = normalizeThreadKey(threadKey);
   const { channel, threadTs } = splitThreadKey(normalizedThreadKey);
-  const result = await apiCall("/slack/start", {
+  const result = await apiPost("/slack/start", {
     thread_key: normalizedThreadKey,
     channel,
     thread_ts: threadTs,
@@ -322,7 +231,7 @@ export async function startEngineerFlow(
     model_preference: modelPreference ?? null,
     budget_mode: budgetMode ?? null,
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
-  });
+  }, { timeoutMs: 30_000 });
   return {
     status: (result.status as string) || "started",
     runId: result.run_id as string | undefined,
@@ -341,22 +250,33 @@ export async function replyEngineerFlow(
   },
 ): Promise<{ status: string }> {
   const normalizedThreadKey = normalizeThreadKey(threadKey);
-  const result = await apiCall("/slack/reply", {
+  const result = await apiPost("/slack/reply", {
     thread_key: normalizedThreadKey,
     reply,
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
     ...(options?.source ? { source: options.source } : {}),
     ...(options?.userId ? { user_id: options.userId } : {}),
     ...(options?.messageId ? { message_id: options.messageId } : {}),
-  });
+  }, { timeoutMs: 30_000 });
   return { status: (result.status as string) || "accepted" };
 }
 
-/**
- * Subscribe to the backend SSE stream for a thread and call `onStatus`
- * with human-readable progress descriptions as events arrive.
- * Returns a cleanup function that tears down the connection.
- */
+function splitThreadKey(threadKey: string): { channel: string; threadTs: string } {
+  const parts = threadKey.trim().split(":");
+  if (parts.length === 2 && parts[0] && parts[1]) {
+    return { channel: parts[0], threadTs: parts[1] };
+  }
+  if (parts.length === 3 && parts[1] && parts[2]) {
+    return { channel: parts[1], threadTs: parts[2] };
+  }
+  throw new Error(`Invalid thread key format (expected <channel>:<thread_ts>): ${threadKey}`);
+}
+
+export function normalizeThreadKey(threadKey: string): string {
+  const { channel, threadTs } = splitThreadKey(threadKey);
+  return `${channel}:${threadTs}`;
+}
+
 export function watchProgress(
   threadKey: string,
   onStatus: (status: string) => void,
@@ -403,7 +323,7 @@ export function watchProgress(
             const status = describeEvent(evt);
             if (status) onStatus(status);
           } catch {
-            // ignore malformed chunks
+            // ignore malformed SSE chunks
           }
         }
       }
@@ -430,13 +350,8 @@ function describeEvent(evt: Record<string, unknown>): string | null {
     return "Generating response...";
   }
 
-  if (type === "tool") {
-    return null; // tool results are noisy; keep showing the tool name
-  }
-
-  if (type === "reasoning") {
-    return "Thinking...";
-  }
+  if (type === "tool") return null;
+  if (type === "reasoning") return "Thinking...";
 
   if (type === "command_execution") {
     const cmd = typeof evt.command === "string" ? evt.command : "";

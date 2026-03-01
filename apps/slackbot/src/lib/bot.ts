@@ -18,7 +18,26 @@ import {
   type FileAttachment,
   type Harness,
 } from "./harness";
+import { ApiError } from "./api-client";
 import { truncateSlackText } from "./slack-text";
+
+function formatErrorForSlack(error: unknown, context: string): string {
+  if (error instanceof ApiError) {
+    if (error.retryable && error.status === null) {
+      return `${context}: API is unreachable (retried ${RETRY_DEFAULTS_MAX} times). The service may be restarting — try again in ~30s.`;
+    }
+    if (error.status && error.status >= 500) {
+      return `${context}: API returned ${error.status}. The service may be overloaded — try again shortly.`;
+    }
+    return `${context}: ${error.message}`;
+  }
+  if (error instanceof Error) {
+    return `${context}: ${error.message}`;
+  }
+  return `${context}: unknown error`;
+}
+
+const RETRY_DEFAULTS_MAX = 4;
 
 const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.paradigm.xyz";
 const MAX_TRACKED_THREAD_MODES = 500;
@@ -301,11 +320,7 @@ function createBot() {
         return;
       } catch (error) {
         await thread.post(
-          toSlackMessage(
-            `Engineer flow request failed: ${
-              error instanceof Error ? error.message : "unknown error"
-            }`
-          )
+          toSlackMessage(formatErrorForSlack(error, "Engineer flow request failed"))
         );
         return;
       }
@@ -377,11 +392,7 @@ function createBot() {
       await thread.post(toSlackMessage(finalMessage));
     } catch (error) {
       await thread.post(
-        toSlackMessage(
-          `Agent request failed: ${
-            error instanceof Error ? error.message : "unknown error"
-          }`
-        )
+        toSlackMessage(formatErrorForSlack(error, "Agent request failed"))
       );
     }
   }

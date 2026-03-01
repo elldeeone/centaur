@@ -1,7 +1,6 @@
-/** Proxy /api/threads/stream-ui?key=... → FastAPI /api/threads/stream-ui?key=... as SSE */
+/** Proxy /api/threads/stream-ui?key=... -> FastAPI /api/threads/stream-ui?key=... as SSE */
 
-const API_URL = process.env.AI_V2_API_URL || "http://api:8000";
-const API_KEY = process.env.AI_V2_API_KEY || "";
+import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -20,29 +19,33 @@ export async function GET(request: Request) {
     upstreamParams.set("live_only", liveOnly);
   }
 
-  const upstream = await fetch(
-    `${API_URL}/api/threads/stream-ui?${upstreamParams.toString()}`,
-    {
-      headers: { Authorization: `Bearer ${API_KEY}` },
-      cache: "no-store",
-      signal: request.signal,
-    },
-  );
+  try {
+    const upstream = await resilientFetch(
+      `${API_URL}/api/threads/stream-ui?${upstreamParams.toString()}`,
+      { stream: true, signal: request.signal },
+    );
 
-  if (!upstream.ok || !upstream.body) {
+    if (!upstream.ok || !upstream.body) {
+      return Response.json(
+        { error: `Stream not available: ${key}` },
+        { status: upstream.status },
+      );
+    }
+
+    return new Response(upstream.body, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+        "x-vercel-ai-ui-message-stream": "v1",
+      },
+    });
+  } catch (err) {
+    const status = err instanceof ApiError ? (err.status ?? 502) : 502;
     return Response.json(
-      { error: `Stream not available: ${key}` },
-      { status: upstream.status },
+      { error: err instanceof Error ? err.message : "API unreachable" },
+      { status },
     );
   }
-
-  return new Response(upstream.body, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-      "x-vercel-ai-ui-message-stream": "v1",
-    },
-  });
 }

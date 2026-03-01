@@ -122,10 +122,21 @@ def reap_stale_running_sessions(
     stale_after_s: int = 600,
     now_ts: float | None = None,
 ) -> dict[str, Any]:
-    """Mark stale `running` sessions as idle when no turn is active."""
+    """Mark stale `running` sessions as idle and prune orphaned sessions.
+
+    Handles two cases:
+    1. Sessions stuck in `running` state with no active turn and no recent activity.
+    2. Sessions whose backing Docker container no longer exists.
+    """
     checked = 0
     reaped: list[str] = []
+    orphaned: list[str] = []
     current_ts = now_ts if now_ts is not None else time.time()
+
+    try:
+        client = _docker_client()
+    except Exception:
+        client = None
 
     for key, _ in session_items_snapshot():
         execute_lock = get_execute_lock(key)
@@ -133,11 +144,37 @@ def reap_stale_running_sessions(
             continue
         try:
             checked += 1
-            session_to_persist: dict[str, Any] | None = None
             with _sessions_lock:
                 session = _sessions.get(key)
                 if not session:
                     continue
+
+                harness = session.get("harness", "")
+
+                # Prune sessions whose container is gone (skip engineer — no container)
+                if client and harness != "engineer":
+                    container_id = session.get("container_id", "")
+                    if container_id:
+                        try:
+                            container = client.containers.get(container_id)
+                            if container.status not in ("running", "created"):
+                                session["state"] = "stopped"
+                                session["last_activity"] = current_ts
+                                session_copy = dict(session)
+                                _sessions.pop(key, None)
+                                _persist_session(session_copy, key)
+                                orphaned.append(key)
+                                continue
+                        except Exception:
+                            session["state"] = "stopped"
+                            session["last_activity"] = current_ts
+                            session_copy = dict(session)
+                            _sessions.pop(key, None)
+                            _persist_session(session_copy, key)
+                            orphaned.append(key)
+                            continue
+
+                # Reap stale running sessions
                 if session.get("state") != "running":
                     continue
                 if _session_has_active_turn(session):
@@ -151,20 +188,26 @@ def reap_stale_running_sessions(
                 session["state"] = "idle"
                 session["last_activity"] = current_ts
                 session_to_persist = dict(session)
-            if session_to_persist is not None:
-                _persist_session(session_to_persist, key)
-                reaped.append(key)
+            _persist_session(session_to_persist, key)
+            reaped.append(key)
         finally:
             execute_lock.release()
 
-    if reaped:
+    if reaped or orphaned:
         log.info(
             "stale_running_sessions_reaped",
-            count=len(reaped),
-            thread_keys=reaped,
+            reaped=len(reaped),
+            orphaned=len(orphaned),
+            reaped_keys=reaped,
+            orphaned_keys=orphaned,
             stale_after_s=stale_after_s,
         )
-    return {"checked": checked, "reaped": len(reaped), "thread_keys": reaped}
+    return {
+        "checked": checked,
+        "reaped": len(reaped),
+        "orphaned": len(orphaned),
+        "thread_keys": reaped + orphaned,
+    }
 
 
 def _normalize_thread_key(thread_key: str) -> str:

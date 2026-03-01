@@ -1,7 +1,6 @@
 /** Proxy POST /api/agent/execute -> FastAPI /agent/execute */
 
-const API_URL = process.env.AI_V2_API_URL || "http://api:8000";
-const API_KEY = process.env.AI_V2_API_KEY || "";
+import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -19,33 +18,36 @@ export async function POST(request: Request) {
     );
   }
 
-  const upstream = await fetch(`${API_URL}/agent/execute`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      slack_thread_key: slackThreadKey,
-      message,
-      ...(harness ? { harness } : {}),
-      source: "thread_ui",
-    }),
-    cache: "no-store",
-    signal: request.signal,
-  });
-
-  const text = await upstream.text();
-  if (!upstream.ok) {
-    return Response.json(
-      { error: `Execute failed: ${upstream.status}`, detail: text.slice(0, 500) },
-      { status: upstream.status, headers: { "Cache-Control": "no-store" } },
-    );
-  }
-
   try {
-    return Response.json(JSON.parse(text), { headers: { "Cache-Control": "no-store" } });
-  } catch {
-    return Response.json({ status: "ok" }, { headers: { "Cache-Control": "no-store" } });
+    const upstream = await resilientFetch(`${API_URL}/agent/execute`, {
+      method: "POST",
+      body: JSON.stringify({
+        slack_thread_key: slackThreadKey,
+        message,
+        ...(harness ? { harness } : {}),
+        source: "thread_ui",
+      }),
+      signal: request.signal,
+    });
+
+    const text = await upstream.text();
+    if (!upstream.ok) {
+      return Response.json(
+        { error: `Execute failed: ${upstream.status}`, detail: text.slice(0, 500) },
+        { status: upstream.status, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
+    try {
+      return Response.json(JSON.parse(text), { headers: { "Cache-Control": "no-store" } });
+    } catch {
+      return Response.json({ status: "ok" }, { headers: { "Cache-Control": "no-store" } });
+    }
+  } catch (err) {
+    const status = err instanceof ApiError ? (err.status ?? 502) : 502;
+    return Response.json(
+      { error: err instanceof Error ? err.message : "API unreachable" },
+      { status, headers: { "Cache-Control": "no-store" } },
+    );
   }
 }

@@ -1,7 +1,6 @@
-/** Proxy /api/threads/detail?key=... → FastAPI /api/threads/detail?key=... */
+/** Proxy /api/threads/detail?key=... -> FastAPI /api/threads/detail?key=... */
 
-const API_URL = process.env.AI_V2_API_URL || "http://api:8000";
-const API_KEY = process.env.AI_V2_API_KEY || "";
+import { apiGet, ApiError } from "@/lib/api-client";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -12,20 +11,24 @@ export async function GET(request: Request) {
   if (!key) {
     return Response.json({ error: "Missing thread key" }, { status: 400 });
   }
-  const res = await fetch(
-    `${API_URL}/api/threads/detail?key=${encodeURIComponent(key)}`,
-    {
-      headers: { Authorization: `Bearer ${API_KEY}` },
-      cache: "no-store",
-      signal: request.signal,
+
+  try {
+    const res = await apiGet("/api/threads/detail", { key }, { signal: request.signal });
+
+    if (!res.ok) {
+      return Response.json(
+        { error: `Thread not found: ${key}` },
+        { status: res.status, headers: { "Cache-Control": "no-store" } }
+      );
     }
-  );
-  if (!res.ok) {
+
+    const data = await res.json();
+    return Response.json(data, { headers: { "Cache-Control": "no-store" } });
+  } catch (err) {
+    const status = err instanceof ApiError ? (err.status ?? 502) : 502;
     return Response.json(
-      { error: `Thread not found: ${key}` },
-      { status: res.status, headers: { "Cache-Control": "no-store" } }
+      { error: err instanceof Error ? err.message : "API unreachable" },
+      { status, headers: { "Cache-Control": "no-store" } },
     );
   }
-  const data = await res.json();
-  return Response.json(data, { headers: { "Cache-Control": "no-store" } });
 }
