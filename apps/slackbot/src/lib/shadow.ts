@@ -197,13 +197,15 @@ async function runShadow(
     }
   }
 
-  // Post the result as a thread reply in #ai-v2
-  await postSlackMessage({
-    channel: AI_V2_CHANNEL,
-    thread_ts: shadowTs,
-    text: truncateSlackText(result),
-    unfurl_links: false,
-  });
+  // Post the result as a thread reply in #ai-v2 (skip if agent already posted via slack-upload)
+  if (result.trim()) {
+    await postSlackMessage({
+      channel: AI_V2_CHANNEL,
+      thread_ts: shadowTs,
+      text: truncateSlackText(result),
+      unfurl_links: false,
+    });
+  }
 
   console.log(
     JSON.stringify({

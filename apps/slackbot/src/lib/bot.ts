@@ -389,7 +389,9 @@ function createBot() {
         const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
         finalMessage = `[🔗 Thread Viewer](${viewerUrl})\n\n` + finalMessage;
       }
-      await thread.post(toSlackMessage(finalMessage));
+      if (finalMessage.trim()) {
+        await thread.post(toSlackMessage(finalMessage));
+      }
     } catch (error) {
       await thread.post(
         toSlackMessage(formatErrorForSlack(error, "Agent request failed"))

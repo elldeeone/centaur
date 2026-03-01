@@ -169,7 +169,7 @@ export async function execute(
   if (typeof result.error === "string" && result.error.trim()) {
     throw new ApiError(result.error, 200, false);
   }
-  return (result.result as string) || "No response from agent.";
+  return (result.result as string) || "";
 }
 
 export async function interrupt(
