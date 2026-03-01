@@ -13,6 +13,7 @@ jobs:
     runs-on: self-hosted
     env:
       DEPLOY_DIR: /home/ubuntu/github/paradigmxyz/ai_v2
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
     defaults:
       run:
         working-directory: /home/ubuntu/github/paradigmxyz/ai_v2
