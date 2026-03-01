@@ -406,10 +406,6 @@ function shortTargetFromCall(call: ToolCall): string | null {
     return target ? truncatePreview(target, 24) : null;
   }
 
-  if (normalized === "run_validation") {
-    return "validation";
-  }
-
   return null;
 }
 
@@ -455,12 +451,9 @@ export function summarizeGroup(category: string, calls: ToolCall[]): string {
 }
 
 export function describeToolCallMetaChips(
-  name: string,
+  _name: string,
   input: Record<string, unknown>,
 ): ToolCallMetaChip[] {
-  // normalize now for consistency in future tool-specific branching
-  normalizeToolName(name);
-
   const chips: ToolCallMetaChip[] = [];
   const path =
     firstNonEmpty(input, ["path", "file_path", "filepath", "filePath", "target_directory"]) ||

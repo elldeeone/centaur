@@ -257,9 +257,13 @@ export function stepsFromUiMessages(messages: UIMessage[]): Step[] {
   for (const step of steps) {
     if (step.type === "result" && deduped.length > 0) {
       const previous = deduped[deduped.length - 1];
-      if (previous.type === "result" && previous.text === step.text) {
+      const isStreamingReplay =
+        previous.type === "result" &&
+        previous.text === step.text &&
+        (Boolean(previous.streaming) || Boolean(step.streaming));
+      if (isStreamingReplay) {
         // Preserve completion when replayed duplicate arrives after a streaming fragment.
-        if (previous.streaming && !step.streaming) {
+        if (previous.type === "result" && previous.streaming && !step.streaming) {
           previous.streaming = false;
         }
         continue;
