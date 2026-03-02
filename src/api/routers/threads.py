@@ -626,10 +626,9 @@ def _extract_usage_from_payload(usage_payload: dict[str, Any]) -> dict[str, int]
         + _coerce_non_negative_int(usage_payload.get("cache_read_input_tokens"))
         + _coerce_non_negative_int(usage_payload.get("cache_creation_input_tokens"))
     )
-    output_tokens = (
-        _coerce_non_negative_int(usage_payload.get("output_tokens"))
-        + _coerce_non_negative_int(usage_payload.get("completion_tokens"))
-    )
+    output_tokens = _coerce_non_negative_int(
+        usage_payload.get("output_tokens")
+    ) + _coerce_non_negative_int(usage_payload.get("completion_tokens"))
     if input_tokens == 0 and output_tokens == 0:
         total = _coerce_non_negative_int(usage_payload.get("total_tokens"))
         if total > 0:
@@ -793,14 +792,10 @@ def _ui_stream_chunks_for_event(
         input_tokens_raw = event.get("input_tokens")
         output_tokens_raw = event.get("output_tokens")
         input_tokens = (
-            _coerce_non_negative_int(input_tokens_raw)
-            if input_tokens_raw is not None
-            else None
+            _coerce_non_negative_int(input_tokens_raw) if input_tokens_raw is not None else None
         )
         output_tokens = (
-            _coerce_non_negative_int(output_tokens_raw)
-            if output_tokens_raw is not None
-            else None
+            _coerce_non_negative_int(output_tokens_raw) if output_tokens_raw is not None else None
         )
         total_tokens_raw = event.get("total_tokens")
         if total_tokens_raw is not None:
@@ -954,6 +949,7 @@ async def stream_thread_ui(
         usage_model: str | None = None
         initialized_live_cursor = False
         turns_with_stream_chunks: set[int] = set()
+        turns_with_text_chunks: set[int] = set()
         emitted_turn_user_messages: set[str] = set()
         pending_tool_ids: dict[tuple[int, str], list[str]] = {}
         tool_call_counters: dict[tuple[int, str], int] = {}
@@ -1066,6 +1062,9 @@ async def stream_thread_ui(
                         )
                         if not chunks:
                             continue
+                        event_type = event.get("type")
+                        if event_type == "result" and turn_id in turns_with_text_chunks:
+                            continue
                         filtered_chunks: list[dict[str, Any]] = []
                         for chunk in chunks:
                             chunk_type = str(chunk.get("type") or "")
@@ -1098,6 +1097,7 @@ async def stream_thread_ui(
                                 tool_name = str(chunk.get("toolName") or "tool")
                                 yield f"data: {json.dumps({'type': 'data-agent-status', 'data': {'text': f'Running {tool_name}...'}, 'transient': True})}\n\n"
                             elif chunk_type in {"text-start", "text-delta"}:
+                                turns_with_text_chunks.add(turn_id)
                                 yield f"data: {json.dumps({'type': 'data-agent-status', 'data': {'text': 'Writing response...'}, 'transient': True})}\n\n"
                         yield f"data: {json.dumps({'type': 'finish-step'})}\n\n"
                 last_event_indices[turn_id] = len(events)
@@ -1106,6 +1106,7 @@ async def stream_thread_ui(
                     turn.get("result")
                     and not turn_had_chunks
                     and turn_id not in turns_with_stream_chunks
+                    and turn_id not in turns_with_text_chunks
                 ):
                     result_id = f"turn-{turn_id}-turn-result"
                     if last_event_indices.get(-turn_id) != 1:
