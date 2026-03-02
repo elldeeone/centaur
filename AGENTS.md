@@ -141,6 +141,12 @@ All deploys happen automatically via GitHub Actions on merge to `main`. **Never 
 
 **NEVER manually restart or redeploy the `secrets` container.** It requires `OP_SERVICE_ACCOUNT_TOKEN` which is only injected by CI (GitHub Actions secret). Manual `docker compose up -d secrets` will start it without the token, breaking all secret resolution across the stack. Always let CI handle secrets container deploys.
 
+## Shell Command Rules
+
+- **No `sleep` in commands.** Never `sleep N && cmd` or `sleep` between steps. If you need to wait for something, poll it directly (e.g. retry a health check in a loop).
+- **No piping output through `head`, `tail`, `| python3`, `| jq`, etc.** unless the user explicitly asks. Run commands directly and let output stream naturally. If output is too long, re-run with a targeted filter.
+- **No chaining unrelated commands** with `&&`. Make separate tool calls instead.
+
 ## Debugging (SSH only for logs)
 
 SSH is only for reading logs and inspecting state — never for deploying:
