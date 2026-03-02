@@ -55,21 +55,17 @@ jobs:
       - name: Run runtime smoke checks
         run: |
           PYTHONPATH=src uv run python - <<'PY'
-          from api.routers.threads import _extract_usage_from_event
+          from api.harness_events import normalize_harness_event
 
-          usage, authoritative = _extract_usage_from_event(
-              {"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 10}}}
+          normalized = normalize_harness_event(
+              "amp",
+              {"type": "subagent", "status": "progress", "phase": "research", "total_branches": 4},
           )
-          assert usage == {"input_tokens": 100, "output_tokens": 10}
-          assert authoritative is False
+          assert isinstance(normalized, dict)
+          assert normalized.get("type") == "subagent"
+          assert normalized.get("status") == "progress"
 
-          usage, authoritative = _extract_usage_from_event(
-              {"type": "subagent", "status": "progress", "input_tokens": 999, "output_tokens": 111}
-          )
-          assert usage == {"input_tokens": 0, "output_tokens": 0}
-          assert authoritative is False
-
-          print("runtime smoke checks passed")
+          print("harness normalization smoke passed")
           PY
 
   slackbot-contract:
