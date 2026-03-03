@@ -130,10 +130,14 @@ async def sql_query(query: str) -> str:
 
     pool = _get_pool()
     async with pool.acquire() as conn:
+        tr = conn.transaction(readonly=True)
+        await tr.start()
         try:
             rows = await conn.fetch(query)
         except Exception as e:
             return json.dumps({"error": str(e)})
+        finally:
+            await tr.rollback()
     return _serialize(rows)
 
 

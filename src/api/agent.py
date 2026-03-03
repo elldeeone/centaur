@@ -927,6 +927,9 @@ def _create_container(
         working_dir=workdir,
         volumes=volumes,
         labels=labels,
+        security_opt=["no-new-privileges:true"],
+        cap_drop=["ALL"],
+        cap_add=["NET_RAW"],
         **({"name": name} if name else {}),
     )
     docker_run_s = round(time.monotonic() - t0, 3)

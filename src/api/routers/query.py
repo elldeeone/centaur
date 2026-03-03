@@ -237,9 +237,9 @@ async def timeline(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[dict]:
     """Unified activity timeline from raw_records."""
-    conditions = [f"fetched_at >= NOW() - INTERVAL '{days} days'"]
-    args: list = []
-    idx = 1
+    conditions = ["fetched_at >= NOW() - make_interval(days => $1)"]
+    args: list = [days]
+    idx = 2
 
     if source:
         conditions.append(f"source = ${idx}")

@@ -6,10 +6,8 @@ MCP_URL="${AI_V2_API_URL:-http://localhost:8000}/mcp/"
 MCP_KEY="${AI_V2_API_KEY:-}"
 
 # ── Trust firewall proxy CA (if proxy mode is active) ────────────────────────
-if [ -f /firewall-certs/ca-cert.pem ]; then
-    sudo cp /firewall-certs/ca-cert.pem /usr/local/share/ca-certificates/firewall-ca.crt
-    sudo update-ca-certificates --fresh > /dev/null 2>&1
-fi
+# CA cert is installed at build time or by the root wrapper; env vars point
+# tools at the cert file directly (NODE_EXTRA_CA_CERTS, REQUESTS_CA_BUNDLE, etc.).
 
 # ── Write harness configs (no MCP — adds ~10s startup overhead) ───────────────
 cat > "$HOME_DIR/.config/amp/settings.json" <<EOF

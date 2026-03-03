@@ -39,6 +39,14 @@ KEYS_REFRESH_INTERVAL = int(os.environ.get("KEYS_REFRESH_INTERVAL", "60"))
 BLOCKED_HOSTS: frozenset[str] = frozenset(
     {
         "secrets",
+        "postgres",
+        "redis",
+        "grafana",
+        "prometheus",
+        "loki",
+        "promtail",
+        "auth",
+        "etl",
         "169.254.169.254",
     }
 )

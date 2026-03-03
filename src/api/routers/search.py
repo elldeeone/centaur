@@ -129,10 +129,14 @@ async def sql_query(
         raise HTTPException(status_code=400, detail="Only read-only queries are allowed")
 
     async with pool.acquire() as conn:
+        tr = conn.transaction(readonly=True)
+        await tr.start()
         try:
             rows = await conn.fetch(body.query)
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            await tr.rollback()
 
     results = [dict(r) for r in rows]
     if "text/plain" in request.headers.get("accept", ""):
