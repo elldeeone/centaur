@@ -104,6 +104,165 @@ class ParadigmDBClient:
         db = get_db()
         return db.get_transactions(limit=limit)
 
+    def db_organizations(self, search: str | None = None, limit: int = 100) -> list[dict]:
+        """Get organizations, optionally filtered by name.
+
+        Args:
+            search: Filter by name (case-insensitive substring match)
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_organizations(search=search, limit=limit)
+
+    def db_organization(self, org_id: str) -> dict | None:
+        """Get a single organization by id.
+
+        Args:
+            org_id: The organization ID
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_organization(org_id)
+
+    def db_people(self, search: str | None = None, limit: int = 100) -> list[dict]:
+        """Get people, optionally filtered by name.
+
+        Args:
+            search: Filter by name (case-insensitive substring match)
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_people(search=search, limit=limit)
+
+    def db_person(self, person_id: str) -> dict | None:
+        """Get a single person by id.
+
+        Args:
+            person_id: The person ID
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_person(person_id)
+
+    def db_positions(self, fund: str | None = None, limit: int = 100) -> list[dict]:
+        """Get latest portfolio positions (asset performance snapshots) with market values.
+
+        Args:
+            fund: Filter by fund name (case-insensitive substring match)
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_positions(fund=fund, limit=limit)
+
+    def db_events(self, search: str | None = None, limit: int = 100) -> list[dict]:
+        """Get hosted events, optionally filtered by name.
+
+        Args:
+            search: Filter by name (case-insensitive substring match)
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_events(search=search, limit=limit)
+
+    def db_funding_rounds(self, search: str | None = None, limit: int = 100) -> list[dict]:
+        """Get equity financing rounds, optionally filtered by name.
+
+        Args:
+            search: Filter by name (case-insensitive substring match)
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_funding_rounds(search=search, limit=limit)
+
+    def db_equity_financing(self, limit: int = 100) -> list[dict]:
+        """Get equity financing events.
+
+        Args:
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_equity_financing(limit=limit)
+
+    def db_valuations(self, limit: int = 100) -> list[dict]:
+        """Get organization valuations.
+
+        Args:
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_valuations(limit=limit)
+
+    def db_corrections(self, limit: int = 100) -> list[dict]:
+        """Get asset performance corrections.
+
+        Args:
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_corrections(limit=limit)
+
+    def db_cash_balances(self, limit: int = 100) -> list[dict]:
+        """Get JPM bank cash balances.
+
+        Args:
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_cash_balances(limit=limit)
+
+    def db_jpm_transactions(self, limit: int = 100) -> list[dict]:
+        """Get JPM transactions.
+
+        Args:
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_jpm_transactions(limit=limit)
+
+    def db_anchorage_balances(self, limit: int = 100) -> list[dict]:
+        """Get Anchorage wallet balances.
+
+        Args:
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_anchorage_balances(limit=limit)
+
+    def db_coinbase_balances(self, limit: int = 100) -> list[dict]:
+        """Get Coinbase wallet balances.
+
+        Args:
+            limit: Max results
+        """
+        self._ensure_tunnel()
+        from .database import get_db
+        db = get_db()
+        return db.get_coinbase_balances(limit=limit)
+
     def bq_query(self, query: str, limit: int = 100) -> list[dict]:
         """Execute a BigQuery SQL query against custody-dashboard views.
 

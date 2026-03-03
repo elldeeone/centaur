@@ -376,6 +376,155 @@ class Database:
             (limit,),
         )
 
+    # --- Organizations ---
+
+    def get_organizations(self, search: str | None = None, limit: int = 100) -> list[dict]:
+        """Get organizations, optionally filtered by name."""
+        if search:
+            return self.query(
+                'SELECT * FROM "Organization" WHERE name ILIKE %s '
+                "ORDER BY name LIMIT %s",
+                (f"%{search}%", limit),
+            )
+        return self.query(
+            'SELECT * FROM "Organization" ORDER BY name LIMIT %s',
+            (limit,),
+        )
+
+    def get_organization(self, org_id: str) -> dict | None:
+        """Get a single organization by id."""
+        return self.query_one(
+            'SELECT * FROM "Organization" WHERE id = %s',
+            (org_id,),
+        )
+
+    # --- People ---
+
+    def get_people(self, search: str | None = None, limit: int = 100) -> list[dict]:
+        """Get people, optionally filtered by name."""
+        if search:
+            return self.query(
+                'SELECT * FROM "Person" WHERE "fullName" ILIKE %s '
+                'ORDER BY "lastName" LIMIT %s',
+                (f"%{search}%", limit),
+            )
+        return self.query(
+            'SELECT * FROM "Person" ORDER BY "lastName" LIMIT %s',
+            (limit,),
+        )
+
+    def get_person(self, person_id: str) -> dict | None:
+        """Get a single person by id."""
+        return self.query_one(
+            'SELECT * FROM "Person" WHERE id = %s',
+            (person_id,),
+        )
+
+    # --- Portfolio Positions / Snapshots ---
+
+    def get_positions(self, fund: str | None = None, limit: int = 100) -> list[dict]:
+        """Get latest asset performance snapshots (positions with market values)."""
+        if fund:
+            return self.query(
+                'SELECT s.* FROM "XAssetPerformanceSnapshot" s '
+                'INNER JOIN "Fund" f ON s."fundId" = f.id '
+                'WHERE f.name ILIKE %s '
+                'ORDER BY s."eodDate" DESC, s."marketValue" DESC LIMIT %s',
+                (f"%{fund}%", limit),
+            )
+        return self.query(
+            'SELECT * FROM "XAssetPerformanceSnapshot" '
+            'ORDER BY "eodDate" DESC, "marketValue" DESC LIMIT %s',
+            (limit,),
+        )
+
+    # --- Events ---
+
+    def get_events(self, search: str | None = None, limit: int = 100) -> list[dict]:
+        """Get hosted events, optionally filtered by name."""
+        if search:
+            return self.query(
+                'SELECT * FROM "HostedEvent" WHERE name ILIKE %s '
+                "ORDER BY timestamp DESC LIMIT %s",
+                (f"%{search}%", limit),
+            )
+        return self.query(
+            'SELECT * FROM "HostedEvent" ORDER BY timestamp DESC LIMIT %s',
+            (limit,),
+        )
+
+    # --- Funding Rounds ---
+
+    def get_funding_rounds(self, search: str | None = None, limit: int = 100) -> list[dict]:
+        """Get equity financing rounds, optionally filtered by name."""
+        if search:
+            return self.query(
+                'SELECT * FROM "EquityFinancingRound" WHERE name ILIKE %s '
+                "ORDER BY date DESC LIMIT %s",
+                (f"%{search}%", limit),
+            )
+        return self.query(
+            'SELECT * FROM "EquityFinancingRound" ORDER BY date DESC LIMIT %s',
+            (limit,),
+        )
+
+    # --- Equity Financing ---
+
+    def get_equity_financing(self, limit: int = 100) -> list[dict]:
+        """Get equity financing events."""
+        return self.query(
+            'SELECT * FROM "EquityFinancingEvent" ORDER BY "closingDate" DESC LIMIT %s',
+            (limit,),
+        )
+
+    # --- Valuations ---
+
+    def get_valuations(self, limit: int = 100) -> list[dict]:
+        """Get organization valuations."""
+        return self.query(
+            'SELECT * FROM "OrganizationValuation" ORDER BY timestamp DESC LIMIT %s',
+            (limit,),
+        )
+
+    # --- Corrections ---
+
+    def get_corrections(self, limit: int = 100) -> list[dict]:
+        """Get asset performance corrections."""
+        return self.query(
+            'SELECT * FROM "AssetPerformanceCorrection" ORDER BY "effectiveAt" DESC LIMIT %s',
+            (limit,),
+        )
+
+    # --- Cash / Banking ---
+
+    def get_cash_balances(self, limit: int = 100) -> list[dict]:
+        """Get JPM bank cash balances."""
+        return self.query(
+            'SELECT * FROM "JpmBankCashBalance" ORDER BY "asOfDate" DESC LIMIT %s',
+            (limit,),
+        )
+
+    def get_jpm_transactions(self, limit: int = 100) -> list[dict]:
+        """Get JPM transactions."""
+        return self.query(
+            'SELECT * FROM "JPMTransaction" ORDER BY "settleDate" DESC LIMIT %s',
+            (limit,),
+        )
+
+    def get_anchorage_balances(self, limit: int = 100) -> list[dict]:
+        """Get Anchorage wallet balances."""
+        return self.query(
+            'SELECT * FROM "AnchorageWalletBalance" ORDER BY "updated_at" DESC LIMIT %s',
+            (limit,),
+        )
+
+    def get_coinbase_balances(self, limit: int = 100) -> list[dict]:
+        """Get Coinbase wallet balances."""
+        return self.query(
+            'SELECT * FROM "CoinbaseWalletBalance" ORDER BY "updated_at" DESC LIMIT %s',
+            (limit,),
+        )
+
     def __enter__(self):
         """Context manager entry."""
         self.connect()
