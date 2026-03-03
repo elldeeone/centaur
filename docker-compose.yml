@@ -80,6 +80,7 @@ services:
       FIREWALL_CERTS_VOLUME: firewall-certs
       # paradigmdb: connect to Shift Postgres via host-side SSH tunnel on :54321
       RESHIFT_DB_DSN: ${RESHIFT_DB_DSN:-}
+      GOOGLE_APPLICATION_CREDENTIALS: /gcloud/adc.json
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -90,6 +91,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./tools:/app/tools
       - firewall-certs:/firewall-certs:ro
+      - ${HOME}/.config/gcloud/application_default_credentials.json:/gcloud/adc.json:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health/ready"]
       interval: 10s
