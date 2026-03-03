@@ -26,7 +26,7 @@ class SigmaClient:
 
     def _get_credentials(self) -> tuple[str, str]:
         """Get client credentials from environment."""
-        client_id = self._client_id or os.getenv("SIGMA_CLIENT_ID")
+        client_id = self._client_id or secret("SIGMA_CLIENT_ID", "")
         client_secret = self._client_secret or secret("SIGMA_CLIENT_SECRET", "")
         if not client_id or not client_secret:
             raise RuntimeError(

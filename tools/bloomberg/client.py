@@ -3,7 +3,6 @@
 import hashlib
 import hmac
 import json
-import os
 import time
 import uuid
 from base64 import urlsafe_b64encode
@@ -72,7 +71,7 @@ class BloombergClient:
         if self._client_id and self._client_secret:
             return self._client_id, self._client_secret
 
-        client_id = os.getenv("BLOOMBERG_CLIENT_ID")
+        client_id = secret("BLOOMBERG_CLIENT_ID", "")
         client_secret = secret("BLOOMBERG_CLIENT_SECRET", "")
         if client_id and client_secret:
             return client_id, client_secret

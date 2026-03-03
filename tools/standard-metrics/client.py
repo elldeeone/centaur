@@ -1,7 +1,6 @@
 """Standard Metrics API client with OAuth2 client credentials authentication."""
 
 import base64
-import os
 import time
 from typing import Any
 
@@ -28,7 +27,7 @@ class StandardMetricsClient:
 
     def _get_credentials(self) -> tuple[str, str]:
         """Get client credentials from environment."""
-        client_id = self._client_id or os.getenv("STANDARD_METRICS_CLIENT_ID")
+        client_id = self._client_id or secret("STANDARD_METRICS_CLIENT_ID", "")
         client_secret = self._client_secret or secret("STANDARD_METRICS_CLIENT_SECRET", "")
         if not client_id or not client_secret:
             raise RuntimeError(

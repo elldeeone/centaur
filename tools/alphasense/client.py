@@ -40,7 +40,7 @@ class AlphaSenseClient:
     def _get_credentials(self) -> tuple[str, str, str, str, str]:
         """Get credentials from instance or env vars."""
         api_key = self._api_key or secret("ALPHASENSE_API_KEY", "")
-        client_id = self._client_id or os.getenv("ALPHASENSE_CLIENT_ID")
+        client_id = self._client_id or secret("ALPHASENSE_CLIENT_ID", "")
         client_secret = self._client_secret or secret("ALPHASENSE_CLIENT_SECRET", "")
         username = self._username or os.getenv("ALPHASENSE_USERNAME")
         password = self._password or secret("ALPHASENSE_PASSWORD", "")

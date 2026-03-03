@@ -28,7 +28,7 @@ class DocuSignClient:
     ):
         self.integration_key = integration_key or secret("DOCUSIGN_INTEGRATION_KEY", "")
         self.user_id = user_id or os.environ.get("DOCUSIGN_USER_ID")
-        self.account_id = account_id or os.environ.get("DOCUSIGN_ACCOUNT_ID")
+        self.account_id = account_id or secret("DOCUSIGN_ACCOUNT_ID", "")
 
         private_key_path = private_key_path or os.environ.get("DOCUSIGN_PRIVATE_KEY_PATH")
         self.private_key = private_key or secret("DOCUSIGN_PRIVATE_KEY", "")

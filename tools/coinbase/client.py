@@ -24,7 +24,7 @@ class CoinbasePrimeClient:
         self._api_key = api_key or secret("COINBASE_API_KEY", "")
         self._api_secret = api_secret or secret("COINBASE_API_SECRET", "")
         self._passphrase = passphrase or secret("COINBASE_API_PASSPHRASE", "")
-        self._portfolio_id = portfolio_id or os.getenv("COINBASE_PORTFOLIO_ID") or ""
+        self._portfolio_id = portfolio_id or secret("COINBASE_PORTFOLIO_ID", "") or ""
 
         if not self._api_key or not self._api_secret or not self._passphrase:
             raise RuntimeError(
