@@ -130,7 +130,12 @@ const ThreadCard = memo(function ThreadCard({
   const href = `/${encodeURIComponent(thread.slack_thread_key)}`;
   const rawTask =
     thread.last_user_message || thread.first_message || thread.last_result || "";
-  const taskPreview = rawTask.replace(/^\[[\w]+\]\s*/, "").replace(/\s+/g, " ").slice(0, 120);
+  const taskPreview = rawTask
+    .replace(/^\[[\w]+\]\s*/, "")
+    .replace(/<([^|>]+)\|([^>]+)>/g, "$2")
+    .replace(/<([^>]+)>/g, "$1")
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
   const activeState = isRunningState(thread.state);
   const activePhase = parseActivePhase(thread);
   const phaseIndex = activePhase
@@ -223,7 +228,7 @@ function ThreadCardActions({ threadKey }: { threadKey: string }) {
   }
 
   return (
-    <div className="absolute right-1.5 top-1.5 hidden group-hover/card:flex items-center gap-0.5">
+    <div className="absolute right-1.5 top-1.5 hidden group-hover/card:flex items-center gap-0.5 z-10">
       <button
         type="button"
         onClick={copyLink}
@@ -504,7 +509,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
 
   if (collapsed) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-end p-2">
+      <div className="flex h-full w-full flex-col items-center justify-start pt-3 p-2">
         {canToggle ? (
           <button
             ref={toggleRef}

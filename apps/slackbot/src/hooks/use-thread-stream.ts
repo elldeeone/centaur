@@ -260,10 +260,21 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
   // Steps from live SSE stream (only populated when connected)
   const liveStreamSteps = useMemo(() => stepsFromUiMessages(chat.messages), [chat.messages]);
 
-  // Merge: if SSE is streaming live data, use those; otherwise use historical
+  // Merge: if SSE is streaming live data, use those; otherwise use historical.
+  // When a user submits a message, useChat instantly pushes it to chat.messages
+  // so liveStreamSteps includes the optimistic user message even before SSE data
+  // arrives. We append those optimistic steps to historical steps during the gap.
   const steps: Step[] = useMemo(() => {
     if (liveStreamSteps.length > 0) {
-      // SSE stream has data — it replays history + live, so use it as primary
+      // Check if live steps contain only user-message steps (optimistic, no SSE data yet).
+      // In that case, append them to historical steps for a seamless transition.
+      const hasAssistantContent = liveStreamSteps.some(
+        (s) => s.type !== "user-message",
+      );
+      if (!hasAssistantContent && historicalSteps.length > 0) {
+        return [...historicalSteps, ...liveStreamSteps];
+      }
+      // SSE stream has assistant data — it replays history + live, so use it as primary
       return liveStreamSteps;
     }
     // No SSE data — render from Postgres turns

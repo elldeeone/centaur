@@ -29,7 +29,12 @@ function ToolCallItem({ call, isMobile, threadStopped }: { call: ToolCall; isMob
   const previewOutput = showMobileToggle ? outputLines.slice(0, 6).join("\n") : output;
 
   return (
-    <Collapsible className="group/call">
+    <Collapsible className={cn(
+      "group/call",
+      call.state === "error" ? "border-l-2 border-l-destructive/50 pl-1" :
+      call.state === "done" || call.output ? "" :
+      "border-l-2 border-l-primary/30 pl-1",
+    )}>
       <CollapsibleTrigger className="w-full flex items-center gap-2 py-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer">
         <ChevronRight className="size-3 transition-transform group-data-[state=open]/call:rotate-90" />
         <ToolStateIcon state={call.state} hasOutput={!!call.output || threadStopped} />
@@ -53,7 +58,10 @@ function ToolCallItem({ call, isMobile, threadStopped }: { call: ToolCall; isMob
             {isMobile ? (
               <div className="rounded-sm bg-background p-2">
                 <div className="relative">
-                  <div className="whitespace-pre-wrap text-[11px] text-muted-foreground">
+                  <div className={cn(
+                    "whitespace-pre-wrap text-[11px]",
+                    call.state === "error" ? "text-destructive/80" : "text-muted-foreground",
+                  )}>
                     {expandedOutput ? output : previewOutput}
                   </div>
                   {showMobileToggle && !expandedOutput ? (
@@ -71,7 +79,12 @@ function ToolCallItem({ call, isMobile, threadStopped }: { call: ToolCall; isMob
                 ) : null}
               </div>
             ) : (
-              <pre className="rounded-sm bg-background p-2 text-[11px] text-muted-foreground overflow-auto overscroll-contain max-h-[260px] whitespace-pre-wrap">
+              <pre className={cn(
+                "rounded-sm p-2 text-[11px] overflow-auto overscroll-contain max-h-[260px] whitespace-pre-wrap",
+                call.state === "error"
+                  ? "bg-destructive/5 text-destructive/80 border border-destructive/10"
+                  : "bg-background text-muted-foreground",
+              )}>
                 {output}
               </pre>
             )}

@@ -19,6 +19,7 @@ import {
 import {
   Message,
   MessageContent,
+  MessageResponse,
 } from "@/components/ai-elements/message";
 import {
   Reasoning,
@@ -37,9 +38,6 @@ import type { Step } from "@/lib/describe";
 import type { Participant } from "@/lib/types";
 import { StepGroup } from "@/components/thread/step-group";
 
-const MarkdownView = lazy(() =>
-  import("@/components/thread/markdown-view").then((m) => ({ default: m.MarkdownView })),
-);
 const DiffCard = lazy(() =>
   import("@/components/thread/diff-card").then((m) => ({ default: m.DiffCard })),
 );
@@ -232,10 +230,8 @@ function renderStep(
             Result
             <CopyResultButton text={step.text} />
           </div>
-          <div className="relative">
-            <Suspense fallback={<div className="h-8 animate-pulse rounded bg-muted" />}>
-              <MarkdownView text={step.text} isStreaming={step.streaming} />
-            </Suspense>
+          <div className="relative prose-console">
+            <MessageResponse>{step.text}</MessageResponse>
           </div>
         </MessageContent>
       </Message>
@@ -250,28 +246,39 @@ export function ActivityFeed({
   state,
   isStreaming,
   participants,
+  chatStatus,
 }: {
   steps: Step[];
   state?: string;
   isStreaming?: boolean;
   participants?: Participant[];
+  chatStatus?: string;
 }) {
   const activeCount = steps.length;
   const participantsById = new Map((participants || []).map((participant) => [participant.id, participant]));
 
   const ariaLive = isStreaming ? "off" : "polite";
+  const showThinking = chatStatus === "submitted";
 
   return (
     <div className="relative flex-1 min-h-0 flex flex-col">
       <Conversation aria-live={ariaLive}>
         <ConversationContent className="gap-1.5 md:gap-4 px-4 md:pl-14 md:pr-5 pt-3 md:pt-4 pb-16 md:pb-20">
-          {activeCount === 0 ? (
+          {activeCount === 0 && !showThinking ? (
             <div className="h-full flex items-center justify-center text-sm text-muted-foreground gap-2">
               <TerminalSquare aria-hidden="true" className="size-4 text-primary" />
               {state === "idle" ? "No events yet. This thread is idle." : "Waiting for events…"}
             </div>
           ) : (
-            steps.map((step, index) => renderStep(step, `live-${index}`, participantsById, !isStreaming && state !== "running" && state !== "working"))
+            <>
+              {steps.map((step, index) => renderStep(step, `live-${index}`, participantsById, !isStreaming && state !== "running" && state !== "working"))}
+              {showThinking && (
+                <div className="step-item flex items-center gap-2 text-sm text-muted-foreground animate-pulse">
+                  <TerminalSquare aria-hidden="true" className="size-4 text-primary" />
+                  Thinking…
+                </div>
+              )}
+            </>
           )}
         </ConversationContent>
         <ConversationScrollButton />

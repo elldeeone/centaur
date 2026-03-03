@@ -66,6 +66,23 @@ export function stepsFromUiMessages(messages: UIMessage[]): Step[] {
   };
 
   for (const [messageIndex, message] of messages.entries()) {
+    if (message.role === "user") {
+      const text = (message.parts ?? [])
+        .filter((p) => (p as Record<string, unknown>).type === "text")
+        .map((p) => asString((p as Record<string, unknown>).text))
+        .join("\n")
+        .trim();
+      if (text) {
+        flushGroup();
+        steps.push({
+          id: `user:chat-${String(message.id ?? messageIndex)}`,
+          type: "user-message",
+          text,
+          source: "thread_ui",
+        });
+      }
+      continue;
+    }
     if (message.role !== "assistant") continue;
     const messageId = `${String(message.id ?? "message")}-${messageIndex}`;
     for (const [partIndex, rawPart] of (message.parts ?? []).entries()) {

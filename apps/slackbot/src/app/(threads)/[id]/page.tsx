@@ -66,7 +66,7 @@ export default function ThreadDetailPage() {
     ? `${tokenUsage.total_tokens.toLocaleString()} tok / ${
         tokenUsage.cost_usd === null ? "--" : `$${tokenUsage.cost_usd.toFixed(4)}`
       }${tokenUsage.estimated ? "~" : ""}`
-    : "-- tok / --";
+    : null;
   const phases = liveSteps.flatMap((step) => (step.type === "phase" ? [step.phase] : []));
   const latestUserMessage = thread?.turns[thread.turns.length - 1]?.user_message?.trim() ?? "";
   const retryMessage = latestUserMessage || "Please retry the previous request.";
@@ -265,6 +265,7 @@ export default function ThreadDetailPage() {
           state={thread.state}
           isStreaming={isStreaming}
           participants={thread.participants}
+          chatStatus={chatStatus}
         />
       </div>
 

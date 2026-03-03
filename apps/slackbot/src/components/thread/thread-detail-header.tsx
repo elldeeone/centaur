@@ -38,7 +38,7 @@ type ThreadDetailHeaderProps = {
   thread: ThreadDetail;
   humanName: string;
   tokenUsage: TokenUsage | null;
-  tokenTicker: string;
+  tokenTicker: string | null;
   liveElapsed: string;
   stableStatus: string | null;
   isRunning: boolean;
@@ -150,18 +150,20 @@ export function ThreadDetailHeader({
         <span className="text-[11px] text-muted-foreground hidden md:inline">
           {thread.turns.length} turn{thread.turns.length === 1 ? "" : "s"}
         </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-[11px] text-muted-foreground font-mono hidden md:inline">{tokenTicker}</span>
-          </TooltipTrigger>
-          <TooltipContent>
-            <div className="space-y-0.5 text-xs">
-              <div>Input: {tokenUsage?.input_tokens?.toLocaleString() ?? "--"}</div>
-              <div>Output: {tokenUsage?.output_tokens?.toLocaleString() ?? "--"}</div>
-              <div>Model: {tokenUsage?.model ?? "--"}</div>
-            </div>
-          </TooltipContent>
-        </Tooltip>
+        {tokenTicker && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-[11px] text-muted-foreground font-mono hidden md:inline">{tokenTicker}</span>
+            </TooltipTrigger>
+            <TooltipContent>
+              <div className="space-y-0.5 text-xs">
+                <div>Input: {tokenUsage?.input_tokens?.toLocaleString() ?? "--"}</div>
+                <div>Output: {tokenUsage?.output_tokens?.toLocaleString() ?? "--"}</div>
+                <div>Model: {tokenUsage?.model ?? "--"}</div>
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        )}
         <span className="text-[11px] text-muted-foreground items-center gap-1 hidden md:inline-flex">
           <Timer className="size-3.5" />
           {liveElapsed}

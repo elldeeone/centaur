@@ -144,7 +144,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
             <button
               type="button"
               onClick={() => void handleStop()}
-              className="size-8 flex-shrink-0 rounded-full flex items-center justify-center bg-destructive/80 text-destructive-foreground transition-all duration-150"
+              className="size-8 flex-shrink-0 rounded-full flex items-center justify-center bg-destructive/80 text-destructive-foreground transition-all duration-150 ring-2 ring-destructive/30 ring-offset-1 ring-offset-background"
               aria-label="Stop agent"
             >
               <Square className="size-3.5" />
@@ -166,6 +166,33 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
           )}
         </div>
       </form>
+
+      {/* Keyboard hints - desktop only */}
+      {hasHover && (
+        <div className="max-w-[720px] mx-auto flex items-center gap-3 px-1 pt-1 text-[10px] text-muted-foreground/60">
+          {mode === "running" && !hasText ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-primary animate-pulse" />
+              Working…
+              {onStop && <span className="ml-1 text-muted-foreground/40">Press <kbd className="px-1 py-0.5 rounded border border-border/50 text-[9px] font-mono">S</kbd> to stop</span>}
+            </span>
+          ) : mode === "waiting" ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-amber-400" />
+              Awaiting reply
+            </span>
+          ) : mode === "error" ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-destructive" />
+              Error — retry with new instructions
+            </span>
+          ) : hasText ? (
+            <span>
+              <kbd className="px-1 py-0.5 rounded border border-border/50 text-[9px] font-mono">↵</kbd> send · <kbd className="px-1 py-0.5 rounded border border-border/50 text-[9px] font-mono">⇧↵</kbd> new line
+            </span>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

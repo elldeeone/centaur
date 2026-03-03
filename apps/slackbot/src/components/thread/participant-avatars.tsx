@@ -37,9 +37,10 @@ export function ParticipantAvatars({
   max?: number;
   size?: number;
 }) {
-  if (!participants || participants.length === 0) return null;
-  const visible = participants.slice(0, max);
-  const overflow = participants.length - visible.length;
+  const resolved = (participants ?? []).filter((p) => p.name && !/^U[A-Z0-9]+$/.test(p.name));
+  if (resolved.length === 0) return null;
+  const visible = resolved.slice(0, max);
+  const overflow = resolved.length - visible.length;
 
   return (
     <div className="inline-flex items-center -space-x-1.5">
