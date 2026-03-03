@@ -17,8 +17,12 @@ def _b64url_encode(data: bytes) -> str:
 
 
 def _hex_to_bytes(hex_string: str) -> bytes:
-    """Convert hex string to bytes."""
-    return bytes.fromhex(hex_string)
+    """Convert hex string to bytes. Supports both hex-encoded and raw strings."""
+    cleaned = hex_string.strip()
+    try:
+        return bytes.fromhex(cleaned)
+    except ValueError:
+        return cleaned.encode("utf-8")
 
 
 class BloombergClient:

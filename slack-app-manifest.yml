@@ -28,6 +28,7 @@ oauth_config:
       - search:read.files
       - search:read.public
       - search:read.users
+      - usergroups:read
       - users:read
       - users:read.email
       - assistant:write

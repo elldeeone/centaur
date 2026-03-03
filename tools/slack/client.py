@@ -901,12 +901,13 @@ class SlackClient:
         query: str,
         max_results: int = 20,
     ) -> list[dict]:
-        """Search files across the workspace using Slack's search.files API.
+        """Search files across the workspace using files.list with metadata filter.
 
-        Requires the search:read.files bot scope.
+        Note: search.files requires a user token. This uses files.list as a
+        bot-token-compatible alternative that filters by filename/type.
 
         Args:
-            query: Search query string
+            query: Search query string (matches against filenames)
             max_results: Maximum results to return
 
         Returns:
@@ -914,28 +915,31 @@ class SlackClient:
         """
         try:
             response = self._retry_on_ratelimit(
-                self._client.api_call,
-                "search.files",
-                params={"query": query, "count": max_results},
+                self._client.files_list,
+                count=max_results,
             )
         except SlackApiError as e:
             raise RuntimeError(f"Slack API error: {e.response['error']}")
 
-        files_data = response.get("files", {})
-        matches = files_data.get("matches", [])
+        files = response.get("files", [])
+        query_lower = query.lower()
         user_cache = self._get_user_cache()
 
         results = []
-        for f in matches:
+        for f in files:
+            name = f.get("name", "")
+            title = f.get("title", "")
+            if query_lower and query_lower not in name.lower() and query_lower not in title.lower():
+                continue
             user_id = f.get("user", "")
             results.append({
                 "id": f.get("id", ""),
-                "name": f.get("name", ""),
-                "title": f.get("title", ""),
+                "name": name,
+                "title": title,
                 "filetype": f.get("filetype", ""),
                 "size": f.get("size", 0),
                 "user": user_cache.get(user_id, user_id),
-                "channels": [ch.get("name", ch.get("id", "")) for ch in f.get("channels", [])],
+                "channels": f.get("channels", []),
                 "permalink": f.get("permalink", ""),
                 "url_private": f.get("url_private", ""),
                 "created": f.get("created", 0),
