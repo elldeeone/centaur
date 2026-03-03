@@ -40,7 +40,7 @@ function parseColumns(raw: string): ColumnDef[] {
     const [key, fmt] = trimmed.split(":");
     const format = fmt ? parseCellFormat(fmt) : "text";
     const label = key.charAt(0).toUpperCase() + key.slice(1);
-    return { key, label, format };
+    return { key, label, format, sortable: true };
   });
 }
 
@@ -49,6 +49,7 @@ function parseBool(raw: string): boolean {
 }
 
 function decodeToonData(raw: string): Record<string, unknown>[] | null {
+  // Try wrapping as a nested TOON value first
   try {
     const wrapped = `_:\n${raw
       .split("\n")
@@ -59,12 +60,27 @@ function decodeToonData(raw: string): Record<string, unknown>[] | null {
       const val = (result as Record<string, unknown>)["_"];
       if (Array.isArray(val)) return val as Record<string, unknown>[];
     }
+  } catch {
+    // Wrapped decode failed — fall through to direct decode
+  }
+
+  // Try direct decode (handles TOON tabular format like [N]{keys}: ...)
+  try {
     const direct = decode(raw, { strict: false });
     if (Array.isArray(direct)) return direct as Record<string, unknown>[];
-    return null;
   } catch {
-    return null;
+    // Direct decode also failed
   }
+
+  // Try JSON fallback
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
+  } catch {
+    // Not valid JSON either
+  }
+
+  return null;
 }
 
 function parseComponentSection(section: string): DashboardComponent | null {
