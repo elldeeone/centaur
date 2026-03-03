@@ -18,7 +18,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response
 
 from api.agent import (
     clear_shutdown_signal,
@@ -246,7 +246,7 @@ def _get_slack_signing_secret() -> str:
     return _sm_read("SLACK_SIGNING_SECRET") or ""
 
 
-def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:
+def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> tuple[bool, str]:
     """Verify a Slack request signature (v0 scheme).
 
     See https://api.slack.com/authentication/verifying-requests-from-slack
@@ -254,18 +254,53 @@ def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool
     signing_secret = _get_slack_signing_secret()
     if not signing_secret:
         log.warning("slack_signing_secret_not_set")
-        return False
+        return False, "signing_secret_missing"
+    if not timestamp:
+        return False, "timestamp_missing"
+    if not signature:
+        return False, "signature_missing"
     try:
-        if abs(time.time() - int(timestamp)) > _SLACK_TIMESTAMP_MAX_AGE:
-            return False
+        timestamp_int = int(timestamp)
     except (ValueError, TypeError):
-        return False
-    sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
+        return False, "timestamp_invalid"
+    if abs(time.time() - timestamp_int) > _SLACK_TIMESTAMP_MAX_AGE:
+        return False, "timestamp_stale"
+    try:
+        body_text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return False, "body_decode_failed"
+    sig_basestring = f"v0:{timestamp}:{body_text}"
     expected = (
         "v0="
         + hmac.new(signing_secret.encode(), sig_basestring.encode(), hashlib.sha256).hexdigest()
     )
-    return hmac.compare_digest(expected, signature)
+    if not hmac.compare_digest(expected, signature):
+        return False, "signature_mismatch"
+    return True, "ok"
+
+
+_HOP_BY_HOP_RESPONSE_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+
+
+def _filter_proxy_response_headers(headers: httpx.Headers) -> dict[str, str]:
+    filtered: dict[str, str] = {}
+    for key, value in headers.multi_items():
+        lower = key.lower()
+        if lower in _HOP_BY_HOP_RESPONSE_HEADERS or lower == "content-length":
+            continue
+        if lower in filtered:
+            continue
+        filtered[lower] = value
+    return filtered
 
 
 @app.api_route("/api/webhooks/{path:path}", methods=["GET", "POST"])
@@ -275,7 +310,19 @@ async def proxy_webhooks(request: Request, path: str):
 
     slack_signature = request.headers.get("x-slack-signature", "")
     slack_timestamp = request.headers.get("x-slack-request-timestamp", "")
-    if not _verify_slack_signature(body, slack_timestamp, slack_signature):
+    slack_request_id = request.headers.get("x-slack-request-id", "")
+    slack_retry_num = request.headers.get("x-slack-retry-num", "")
+    is_valid, reject_reason = _verify_slack_signature(body, slack_timestamp, slack_signature)
+    if not is_valid:
+        log.warning(
+            "slack_webhook_rejected",
+            path=path,
+            reason=reject_reason,
+            request_id=slack_request_id,
+            retry_num=slack_retry_num,
+            has_signature=bool(slack_signature),
+            has_timestamp=bool(slack_timestamp),
+        )
         return JSONResponse({"detail": "Invalid Slack signature"}, status_code=401)
 
     # Handle Slack URL verification challenge directly
@@ -287,15 +334,23 @@ async def proxy_webhooks(request: Request, path: str):
         pass
 
     target = f"{_SLACKBOT_URL}/api/webhooks/{path}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.request(
-            method=request.method,
-            url=target,
-            headers={k: v for k, v in request.headers.items() if k.lower() != "host"},
-            content=body,
-        )
-    return StreamingResponse(
-        content=iter([resp.content]),
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
+            resp = await client.request(
+                method=request.method,
+                url=target,
+                headers={k: v for k, v in request.headers.items() if k.lower() != "host"},
+                content=body,
+            )
+    except httpx.TimeoutException:
+        log.warning("slack_webhook_upstream_timeout", path=path, target=target)
+        return JSONResponse({"detail": "Webhook upstream timeout"}, status_code=504)
+    except httpx.RequestError as exc:
+        log.warning("slack_webhook_upstream_unreachable", path=path, target=target, error=str(exc))
+        return JSONResponse({"detail": "Webhook upstream unavailable"}, status_code=502)
+    return Response(
+        content=resp.content,
         status_code=resp.status_code,
-        headers=dict(resp.headers),
+        headers=_filter_proxy_response_headers(resp.headers),
+        media_type=resp.headers.get("content-type"),
     )

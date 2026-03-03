@@ -41,6 +41,12 @@ const RETRY_DEFAULTS_MAX = 4;
 const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.paradigm.xyz";
 const MAX_TRACKED_THREAD_MODES = 500;
 const SLACK_BOT_USERNAME = process.env.SLACK_BOT_USERNAME || "paradigm-ai";
+const REQUIRED_SLACK_ENV_KEYS = ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"] as const;
+type SlackEnvKey = (typeof REQUIRED_SLACK_ENV_KEYS)[number];
+type SlackBootstrapState = {
+  enabled: boolean;
+  missingEnvKeys: SlackEnvKey[];
+};
 
 type MarkdownNode = Root | Root["children"][number];
 type ThreadConfig = {
@@ -51,6 +57,20 @@ type ThreadConfig = {
 };
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
+let slackBootstrapState: SlackBootstrapState = {
+  enabled: false,
+  missingEnvKeys: [...REQUIRED_SLACK_ENV_KEYS],
+};
+
+function computeSlackBootstrapState(): SlackBootstrapState {
+  const missingEnvKeys = REQUIRED_SLACK_ENV_KEYS.filter((key) => !process.env[key]);
+  const state: SlackBootstrapState = {
+    enabled: missingEnvKeys.length === 0,
+    missingEnvKeys,
+  };
+  slackBootstrapState = state;
+  return state;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -227,12 +247,18 @@ function toSlackMessage(markdown: string) {
 }
 
 function createBot() {
-  const hasSlackCreds =
-    process.env.SLACK_BOT_TOKEN && process.env.SLACK_SIGNING_SECRET;
+  const bootstrapState = computeSlackBootstrapState();
+  console.info(
+    "slack_adapter_bootstrap",
+    JSON.stringify({
+      enabled: bootstrapState.enabled,
+      missing_env_keys: bootstrapState.missingEnvKeys,
+    })
+  );
 
   const bot = new Chat({
     userName: SLACK_BOT_USERNAME,
-    adapters: hasSlackCreds ? { slack: createSlackAdapter() } : {},
+    adapters: bootstrapState.enabled ? { slack: createSlackAdapter() } : {},
     state: process.env.REDIS_URL ? createRedisState() : createMemoryState(),
   });
   const threadConfigs = new Map<string, ThreadConfig>();
@@ -465,4 +491,14 @@ let _bot: ReturnType<typeof createBot> | null = null;
 export function getBot() {
   if (!_bot) _bot = createBot();
   return _bot;
+}
+
+export function getSlackBootstrapState(): SlackBootstrapState {
+  if (!_bot) {
+    computeSlackBootstrapState();
+  }
+  return {
+    enabled: slackBootstrapState.enabled,
+    missingEnvKeys: [...slackBootstrapState.missingEnvKeys],
+  };
 }

@@ -31,6 +31,18 @@ if [ -n "$SECRET_MANAGER_URL" ]; then
   if [ -n "$API_SECRET_KEY" ] && [ -z "$AI_V2_API_KEY" ]; then
     export AI_V2_API_KEY="$API_SECRET_KEY"
   fi
+
+  MISSING_KEYS=""
+  for required in SLACK_BOT_TOKEN SLACK_SIGNING_SECRET API_SECRET_KEY; do
+    eval current=\$$required
+    if [ -z "$current" ]; then
+      MISSING_KEYS="${MISSING_KEYS} ${required}"
+    fi
+  done
+  if [ -n "$MISSING_KEYS" ]; then
+    echo "Missing required secrets after bootstrap retries:${MISSING_KEYS}" >&2
+    exit 1
+  fi
 fi
 
 exec node server.js
