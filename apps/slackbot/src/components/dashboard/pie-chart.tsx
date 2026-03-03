@@ -23,11 +23,12 @@ export function DashboardPieChart({
   labelKey,
   valueKey,
   data,
+  height,
 }: Omit<PieChartProps, "type">) {
   return (
     <div className="rounded-md border border-border bg-card p-4">
       <h3 className="mb-3 text-sm font-medium tracking-tight text-foreground">{title}</h3>
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width="100%" height={height ?? 300}>
         <RechartsPieChart>
           <Pie
             data={data}

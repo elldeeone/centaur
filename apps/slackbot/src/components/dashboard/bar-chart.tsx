@@ -15,18 +15,21 @@ export function DashboardBarChart({
   categoryKey,
   valueKey,
   data,
+  height,
+  horizontal,
 }: Omit<BarChartProps, "type">) {
   return (
     <div className="rounded-md border border-border bg-card p-4">
       <h3 className="mb-3 text-sm font-medium tracking-tight text-foreground">{title}</h3>
-      <ResponsiveContainer width="100%" height={300}>
-        <RechartsBarChart data={data}>
+      <ResponsiveContainer width="100%" height={height ?? 300}>
+        <RechartsBarChart data={data as Record<string, unknown>[]} layout={horizontal ? "vertical" : "horizontal"}>
           <XAxis
-            dataKey={categoryKey}
+            {...(horizontal ? { type: "number" } : { dataKey: categoryKey })}
             tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
             stroke="var(--color-border)"
           />
           <YAxis
+            {...(horizontal ? { type: "category", dataKey: categoryKey } : {})}
             tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
             stroke="var(--color-border)"
           />

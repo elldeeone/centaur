@@ -7,6 +7,14 @@ const currencyFmt = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+const compactCurrencyFmt = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "compact",
+  compactDisplay: "short",
+  maximumFractionDigits: 1,
+});
+
 const numberFmt = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
@@ -18,6 +26,10 @@ export function formatValue(value: unknown, format: CellFormat): string {
     case "currency": {
       const n = Number(value);
       return isNaN(n) ? String(value) : currencyFmt.format(n);
+    }
+    case "compact-currency": {
+      const n = Number(value);
+      return isNaN(n) ? String(value) : compactCurrencyFmt.format(n);
     }
     case "percent": {
       let n = Number(value);
