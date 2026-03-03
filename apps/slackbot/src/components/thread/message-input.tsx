@@ -101,7 +101,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
         className={cn(
           "relative max-w-[720px] mx-auto",
           "rounded-2xl border border-border/60 bg-secondary/40",
-          "focus-within:border-ring focus-within:ring-1 focus-within:ring-ring",
+          "focus-within:border-border",
           "transition-colors",
         )}
         aria-label="Message composer"
@@ -136,7 +136,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
             <button
               type="button"
               disabled
-              className="size-8 flex-shrink-0 rounded-lg flex items-center justify-center bg-primary/60 text-primary-foreground"
+              className="size-8 flex-shrink-0 rounded-full flex items-center justify-center bg-primary/60 text-primary-foreground"
             >
               <Loader2 className="size-4 animate-spin" />
             </button>
@@ -144,7 +144,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
             <button
               type="button"
               onClick={() => void handleStop()}
-              className="size-8 flex-shrink-0 rounded-lg flex items-center justify-center bg-destructive/80 text-destructive-foreground transition-all duration-150"
+              className="size-8 flex-shrink-0 rounded-full flex items-center justify-center bg-destructive/80 text-destructive-foreground transition-all duration-150"
               aria-label="Stop agent"
             >
               <Square className="size-3.5" />
@@ -154,9 +154,9 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
               type="submit"
               disabled={!hasText}
               className={cn(
-                "size-8 flex-shrink-0 rounded-lg flex items-center justify-center transition-all duration-150",
+                "size-8 flex-shrink-0 rounded-full flex items-center justify-center transition-all duration-150 outline-none",
                 hasText
-                  ? "bg-foreground text-background"
+                  ? "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground/60 pointer-events-none",
               )}
               aria-label="Send message"

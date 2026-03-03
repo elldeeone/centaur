@@ -309,7 +309,10 @@ async def list_threads(
     )
     pg_keys: set[str] = set()
     threads = []
-    participants_cache: dict[str, list[dict[str, Any]]] = {}
+    participants_by_key: dict[str, list[dict[str, Any]]] = {}
+    all_participant_ids: set[str] = set()
+
+    # First pass: build thread list and collect all participant IDs
     for r in rows:
         key = r["slack_thread_key"]
         pg_keys.add(key)
@@ -324,14 +327,15 @@ async def list_threads(
             live_last_user_message = _user_message_preview(
                 str(live_turns[-1].get("user_message") or "")
             )
-        if key not in participants_cache:
-            if live:
-                participants_cache[key] = live.get(
-                    "participants"
-                ) or _build_participants_from_turns(live_turns)
-            else:
-                participants_cache[key] = await _fetch_pg_participants(pool, key)
-            participants_cache[key] = await _enrich_participants(pool, participants_cache[key])
+        if live:
+            parts = live.get("participants") or _build_participants_from_turns(live_turns)
+        else:
+            parts = await _fetch_pg_participants(pool, key)
+        participants_by_key[key] = parts
+        for p in parts:
+            pid = str(p.get("id") or "").strip()
+            if pid:
+                all_participant_ids.add(pid)
         threads.append(
             {
                 "slack_thread_key": key,
@@ -356,7 +360,7 @@ async def list_threads(
                     else _user_message_preview(str(r["last_user_message"] or ""))
                 ),
                 "thread_name": live.get("thread_name") if live else r.get("thread_name"),
-                "participants": participants_cache[key],
+                "participants": [],  # filled in after batch enrichment
             }
         )
     for key, live in session_items_snapshot():
@@ -370,6 +374,14 @@ async def list_threads(
                 last_user_message = _user_message_preview(
                     str(live["turns"][-1].get("user_message") or "")
                 )
+            parts = live.get("participants") or _build_participants_from_turns(
+                live.get("turns", [])
+            )
+            participants_by_key[key] = parts
+            for p in parts:
+                pid = str(p.get("id") or "").strip()
+                if pid:
+                    all_participant_ids.add(pid)
             threads.append(
                 {
                     "slack_thread_key": key,
@@ -384,13 +396,56 @@ async def list_threads(
                     "first_message": first_msg,
                     "last_user_message": last_user_message,
                     "thread_name": live.get("thread_name"),
-                    "participants": await _enrich_participants(
-                        pool,
-                        live.get("participants")
-                        or _build_participants_from_turns(live.get("turns", [])),
-                    ),
+                    "participants": [],  # filled in after batch enrichment
                 }
             )
+
+    # Batch enrichment: single query for all participant IDs
+    enrichment_map: dict[str, dict[str, Any]] = {}
+    if all_participant_ids:
+        user_rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (external_id)
+                external_id, data
+            FROM raw_records
+            WHERE source = 'slack' AND kind = 'user'
+              AND external_id = ANY($1::text[])
+            ORDER BY external_id, fetched_at DESC
+            """,
+            list(all_participant_ids),
+        )
+        for row in user_rows:
+            data = row["data"] if isinstance(row["data"], dict) else {}
+            profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+            display_name = (
+                profile.get("display_name")
+                or profile.get("real_name")
+                or data.get("real_name")
+                or data.get("name")
+                or row["external_id"]
+            )
+            avatar_url = (
+                profile.get("image_48") or profile.get("image_72") or profile.get("image_24")
+            )
+            enrichment_map[str(row["external_id"])] = {
+                "name": str(display_name),
+                "avatar_url": str(avatar_url) if avatar_url else None,
+            }
+
+    # Apply enrichment to all threads
+    for thread in threads:
+        key = thread["slack_thread_key"]
+        raw_parts = participants_by_key.get(key, [])
+        enriched: list[dict[str, Any]] = []
+        for p in raw_parts:
+            pid = str(p.get("id") or "").strip()
+            details = enrichment_map.get(pid)
+            if details:
+                enriched.append({**p, "name": details["name"], "avatar_url": details["avatar_url"]})
+            else:
+                enriched.append(p)
+        thread["participants"] = enriched
+
     threads.sort(key=lambda t: t.get("last_activity") or 0, reverse=True)
     return {"threads": threads, "count": len(threads)}
 
