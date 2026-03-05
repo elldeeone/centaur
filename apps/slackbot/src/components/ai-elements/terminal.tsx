@@ -56,7 +56,7 @@ export const Terminal = ({
     <TerminalContext.Provider value={contextValue}>
       <div
         className={cn(
-          "flex flex-col overflow-hidden rounded-md border border-border bg-card text-foreground",
+          "flex flex-col overflow-hidden rounded-md border border-border/60 bg-card/40 text-foreground",
           className
         )}
         {...props}
@@ -90,7 +90,7 @@ export const TerminalHeader = ({
 }: TerminalHeaderProps) => (
   <div
     className={cn(
-      "flex items-center justify-between border-b border-border bg-background/70 px-3 py-2",
+      "flex items-center justify-between border-b border-border/50 bg-background/50 px-2.5 py-1.5",
       className
     )}
     {...props}
@@ -110,7 +110,7 @@ export const TerminalTitle = ({
     className={cn("flex items-center gap-2 text-xs font-medium text-muted-foreground", className)}
     {...props}
   >
-    <TerminalIcon className="size-4" />
+    <TerminalIcon className="size-3.5" />
     {children ?? "Terminal"}
   </div>
 );
@@ -195,6 +195,7 @@ export const TerminalCopyButton = ({
 
   return (
     <Button
+      aria-label="Copy terminal output"
       className={cn(
         "size-7 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground",
         className
@@ -224,6 +225,7 @@ export const TerminalClearButton = ({
 
   return (
     <Button
+      aria-label="Clear terminal"
       className={cn(
         "size-7 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground",
         className
@@ -258,7 +260,7 @@ export const TerminalContent = ({
   return (
     <div
       className={cn(
-        "max-h-96 overflow-auto bg-background/40 p-3.5 font-mono text-[12px] leading-relaxed tabular-nums",
+        "max-h-64 overflow-auto bg-background/30 p-2.5 font-mono text-[12px] leading-relaxed tabular-nums",
         className
       )}
       ref={containerRef}

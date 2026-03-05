@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
+import { HapticsProvider } from "@/components/haptics-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
@@ -30,30 +31,32 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`dark ${GeistSans.variable} ${GeistMono.variable}`}>
       <body suppressHydrationWarning className="m-0 bg-background text-foreground antialiased font-sans fixed inset-0 overflow-hidden">
         <TooltipProvider delayDuration={300} skipDelayDuration={100}>
-          <a
-            href="#main-content"
-            className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-card focus:text-foreground focus:px-3 focus:py-2 focus:rounded-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            Skip to main content
-          </a>
-          <nav aria-label="Main" className="z-50 hidden h-11 shrink-0 items-center gap-6 border-b border-border/90 bg-background/95 px-6 font-sans backdrop-blur-sm md:flex">
-            <Link
-              href="/"
-              className="rounded-md px-1.5 py-1 text-[13px] font-semibold tracking-tight text-foreground no-underline transition-colors duration-150 hover:bg-accent/55"
+          <HapticsProvider>
+            <a
+              href="#main-content"
+              className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-card focus:text-foreground focus:px-3 focus:py-2 focus:rounded-sm focus:outline-none focus:ring-2 focus:ring-ring"
             >
-              AI2
-            </Link>
-            <Link
-              href="/"
-              className="rounded-md px-1.5 py-1 text-[13px] font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-accent/55 hover:text-foreground"
-            >
-              Threads
-            </Link>
-          </nav>
-          <main id="main-content" className="h-full overflow-hidden md:h-[calc(100%-44px)]">
-            {children}
-          </main>
-          <Toaster position="top-right" richColors closeButton />
+              Skip to main content
+            </a>
+            <nav aria-label="Main" className="z-50 hidden h-11 shrink-0 items-center gap-6 border-b border-border/90 bg-background/95 px-6 font-sans backdrop-blur-sm md:flex">
+              <Link
+                href="/"
+                className="rounded-md px-1.5 py-1 text-[13px] font-semibold tracking-tight text-foreground no-underline transition-colors duration-[var(--dur-fast)] hover:bg-accent/55"
+              >
+                AI2
+              </Link>
+              <Link
+                href="/"
+                className="rounded-md px-1.5 py-1 text-[13px] font-medium text-muted-foreground no-underline transition-colors duration-[var(--dur-fast)] hover:bg-accent/55 hover:text-foreground"
+              >
+                Threads
+              </Link>
+            </nav>
+            <main id="main-content" className="h-full overflow-hidden md:h-[calc(100%-44px)]">
+              {children}
+            </main>
+            <Toaster position="top-right" richColors closeButton />
+          </HapticsProvider>
         </TooltipProvider>
       </body>
     </html>

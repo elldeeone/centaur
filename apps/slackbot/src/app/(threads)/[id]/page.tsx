@@ -24,6 +24,7 @@ import { isActiveState, isRunningState } from "@/lib/thread-ordering";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useThreadList } from "@/hooks/use-thread-list";
+import { Shimmer } from "@/components/ai-elements/shimmer";
 import {
   entrySourceLabel,
   listQueryFromSearchParams,
@@ -185,7 +186,8 @@ export default function ThreadDetailPage() {
             </Button>
             <Link
               href={backHref}
-              className="rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
+              className="inline-flex min-h-[44px] items-center rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-[var(--dur-fast)] hover:bg-accent hover:text-foreground"
+              data-touch-target
             >
               Back to threads
             </Link>
@@ -201,7 +203,9 @@ export default function ThreadDetailPage() {
         <div className="text-center">
           <p className="text-muted-foreground text-sm inline-flex items-center gap-2">
             <LoaderCircle className="size-4 animate-spin text-primary" />
-            Connecting…
+            <Shimmer className="text-sm text-muted-foreground" duration={1.6}>
+              Connecting...
+            </Shimmer>
           </p>
           <p className="text-muted-foreground text-xs font-mono mt-2">{threadName(threadKey)}</p>
         </div>
@@ -210,7 +214,7 @@ export default function ThreadDetailPage() {
   }
 
   return (
-    <div className="h-dvh md:h-full flex flex-col bg-background overflow-hidden">
+    <div className="app-shell h-dvh md:h-full flex flex-col bg-background overflow-hidden">
       <ThreadDetailHeader
         thread={thread}
         humanName={humanName}
@@ -238,7 +242,7 @@ export default function ThreadDetailPage() {
       <ConnectivityBanner isReconnecting={isReconnecting} threadState={thread.state} />
 
       {/* Activity feed - the only scrollable area */}
-      <div className="mx-auto flex min-h-0 w-full max-w-[1120px] flex-1 flex-col px-2 py-2 md:px-4 md:py-3">
+      <div className="mx-auto flex min-h-0 w-full max-w-[960px] flex-1 flex-col px-1 py-1 md:px-3 md:py-2.5">
         <ThreadDetailTelemetry
           state={thread.state}
           turnCount={thread.turns.length}

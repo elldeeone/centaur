@@ -298,7 +298,7 @@ export function MessagePartRenderer({
     const displayName = participantDisplayName(participant, step.userId, "User");
     const turnDuration = step.turnId ? turnDurationsById[step.turnId] : undefined;
     return (
-      <div className="rounded-xl border border-primary/20 bg-[linear-gradient(160deg,color-mix(in_oklab,var(--primary)_9%,transparent),color-mix(in_oklab,var(--card)_84%,transparent))] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+      <div className="rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2">
         <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
           {participant?.avatar_url ? (
             <img src={participant.avatar_url} alt={displayName} className="size-[18px] rounded-full" />
@@ -355,7 +355,7 @@ export function MessagePartRenderer({
 
   if (step.type === "result") {
     return (
-      <div className="rounded-xl border border-border/70 bg-[linear-gradient(160deg,color-mix(in_oklab,var(--card)_92%,transparent),color-mix(in_oklab,var(--background)_90%,transparent))] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+      <div className="rounded-lg border border-border/50 bg-card/30 px-2.5 py-2">
         <MessageActions className="mb-1">
           <MessageAction
             tooltip="Copy result"

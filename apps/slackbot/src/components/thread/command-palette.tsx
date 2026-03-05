@@ -3,6 +3,7 @@
 import type { ComponentType } from "react";
 import { Command } from "cmdk";
 import { ExternalLink, Keyboard, Link2, RefreshCw, Search, Square } from "lucide-react";
+import { useHaptics } from "@/components/haptics-provider";
 import {
   CommandSurfaceIcon,
   CompactDensityIcon,
@@ -45,7 +46,12 @@ function harnessAbbrev(harness: ThreadSummary["harness"]): string {
   return harness.toUpperCase();
 }
 
-function runAndClose(run: () => void, onOpenChange: (nextOpen: boolean) => void): void {
+function runAndClose(
+  run: () => void,
+  onOpenChange: (nextOpen: boolean) => void,
+  hapticTrigger: () => void,
+): void {
+  hapticTrigger();
   onOpenChange(false);
   run();
 }
@@ -66,6 +72,7 @@ export function CommandPalette({
   onOpenSlack,
   onOpenShortcuts,
 }: CommandPaletteProps) {
+  const { trigger } = useHaptics();
   const navigationItems = threads
     .filter((thread) => thread.slack_thread_key !== currentThreadKey)
     .slice(0, 8);
@@ -154,7 +161,7 @@ export function CommandPalette({
                 key={thread.slack_thread_key}
                 value={`thread ${name} ${thread.slack_thread_key}`}
                 keywords={[thread.harness, thread.state, String(thread.turn_count)]}
-                onSelect={() => runAndClose(() => onNavigate(thread.slack_thread_key), onOpenChange)}
+                onSelect={() => runAndClose(() => onNavigate(thread.slack_thread_key), onOpenChange, () => trigger("medium"))}
                 className="group flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm text-foreground data-[selected=true]:bg-accent/80"
               >
                 <ThreadContextIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -177,7 +184,7 @@ export function CommandPalette({
               value={action.label}
               keywords={action.keywords?.split(/\s+/)}
               disabled={action.disabled}
-              onSelect={() => runAndClose(action.run, onOpenChange)}
+              onSelect={() => runAndClose(action.run, onOpenChange, () => trigger("medium"))}
               className={cn(
                 "flex items-center gap-2 rounded-md px-2 py-2 text-sm text-foreground data-[selected=true]:bg-accent/80",
                 action.disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",

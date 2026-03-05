@@ -115,7 +115,7 @@ export function DiffCard({
           type="button"
           onClick={() => setExpanded((value) => !value)}
           aria-expanded={expanded}
-          className="w-full cursor-pointer border-t border-border/80 px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent/50 hover:text-foreground"
+          className="w-full cursor-pointer border-t border-border/80 px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors duration-[var(--dur-fast)] hover:bg-accent/50 hover:text-foreground"
         >
           {expanded ? "Show less context" : `Show ${hiddenCount} more lines`}
         </button>

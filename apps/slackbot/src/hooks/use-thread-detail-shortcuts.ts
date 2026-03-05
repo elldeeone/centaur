@@ -19,11 +19,11 @@ type UseThreadDetailShortcutsParams = {
 const INPUT_SELECTOR = "input, textarea, select, [contenteditable='true']";
 const INTERACTIVE_SELECTOR = "a,button,[role='button'],[tabindex]:not([tabindex='-1'])";
 
-export function isShortcutInputTarget(target: HTMLElement | null): boolean {
+function isShortcutInputTarget(target: HTMLElement | null): boolean {
   return !!target?.closest(INPUT_SELECTOR);
 }
 
-export function isShortcutInteractiveTarget(target: HTMLElement | null): boolean {
+function isShortcutInteractiveTarget(target: HTMLElement | null): boolean {
   return !!target?.closest(INTERACTIVE_SELECTOR);
 }
 

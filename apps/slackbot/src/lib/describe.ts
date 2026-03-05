@@ -392,13 +392,6 @@ function fallbackCategorySummary(category: string, count: number): string {
   return count > 1 ? "Used tools" : "Used tool";
 }
 
-export function singleCallOutputBadge(calls: ToolCall[]): string | null {
-  if (calls.length !== 1) return null;
-  const output = calls[0]?.output;
-  if (!output) return null;
-  return `${output.length.toLocaleString()} chars`;
-}
-
 export function summarizeGroup(category: string, calls: ToolCall[]): string {
   const count = calls.length;
   if (count === 0) return "Used tool";

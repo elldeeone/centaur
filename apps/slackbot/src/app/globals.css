@@ -35,9 +35,17 @@
   --chart-5: oklch(0.7 0.19 285);
   --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-snappy: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-micro: 120ms;
   --dur-fast: 140ms;
   --dur-base: 180ms;
   --dur-slow: 260ms;
+  --space-1: 0.25rem;
+  --space-1_5: 0.375rem;
+  --space-2: 0.5rem;
+  --space-2_5: 0.625rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
 }
 
 @theme inline {
@@ -61,8 +69,11 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-status-warning: var(--status-warning);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --animate-collapsible-down: collapsible-down var(--dur-base) ease-out;
+  --animate-collapsible-up: collapsible-up var(--dur-fast) ease-out;
 }
 
 [data-slot="badge"] {
@@ -73,7 +84,7 @@
 
 input,
 textarea {
-  caret-color: oklch(0.866 0.295 142);
+  caret-color: var(--primary);
 }
 
 @layer base {
@@ -114,6 +125,7 @@ html {
   color-scheme: dark;
   scroll-behavior: smooth;
   touch-action: manipulation;
+  scrollbar-gutter: stable both-edges;
 }
 
 a,
@@ -134,6 +146,12 @@ select {
   padding-right: env(safe-area-inset-right);
 }
 
+.app-shell {
+  min-height: 100vh;
+  min-height: 100svh;
+  min-height: 100dvh;
+}
+
 .thread-shell::before {
   content: "";
   pointer-events: none;
@@ -152,29 +170,30 @@ select {
 }
 
 .thread-surface {
-  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  background:
-    linear-gradient(
-      165deg,
-      color-mix(in oklab, var(--card) 88%, transparent),
-      color-mix(in oklab, var(--background) 90%, transparent)
-    );
-  box-shadow:
-    0 14px 36px rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  border: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+  background: color-mix(in oklab, var(--card) 38%, transparent);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
 }
 
 .thread-surface-soft {
-  border: 1px solid color-mix(in oklab, var(--border) 74%, transparent);
-  background:
-    linear-gradient(
-      160deg,
-      color-mix(in oklab, var(--card) 88%, transparent),
-      color-mix(in oklab, var(--background) 92%, transparent)
-    );
-  box-shadow:
-    0 10px 30px rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  border: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  background: color-mix(in oklab, var(--card) 30%, transparent);
+}
+
+.ui-control-icon {
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--card) 52%, transparent);
+  color: var(--muted-foreground);
+  border-radius: 0.5rem;
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+
+.ui-control-icon:hover {
+  background: color-mix(in oklab, var(--accent) 72%, transparent);
+  color: var(--foreground);
 }
 
 .thread-action-transition {
@@ -204,6 +223,11 @@ select {
 .thread-shell [data-thread-feed-scroll="true"] {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.thread-shell [data-thread-feed-scroll="true"] {
+  scroll-behavior: auto;
 }
 
 .streaming-cursor::after {
@@ -215,36 +239,6 @@ select {
 @keyframes cursor-blink {
   50% {
     opacity: 0;
-  }
-}
-
-.reconnect-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  overflow: hidden;
-}
-
-.reconnect-bar::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  width: 40%;
-  height: 100%;
-  background: var(--primary);
-  transform: translate3d(-100%, 0, 0);
-  will-change: transform;
-  animation: reconnect-indeterminate 1.5s ease-in-out infinite;
-}
-
-@keyframes reconnect-indeterminate {
-  0% {
-    transform: translate3d(-120%, 0, 0);
-  }
-  100% {
-    transform: translate3d(260%, 0, 0);
   }
 }
 
@@ -276,7 +270,6 @@ select {
   }
 
   .streaming-cursor::after,
-  .reconnect-bar::after,
   .ai-shimmer {
     animation: none;
   }
@@ -316,12 +309,47 @@ select {
   background-clip: content-box;
 }
 
+@keyframes collapsible-down {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
 @media (pointer: coarse) {
-  button,
-  [role="button"],
-  summary,
-  [tabindex="0"] {
+  [data-slot="collapsible-trigger"],
+  nav button,
+  nav [role="button"],
+  nav a,
+  [data-touch-target] {
     min-height: 44px;
     min-width: 44px;
+  }
+}
+
+@supports (text-wrap: balance) {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@supports (text-wrap: pretty) {
+  .text-pretty {
+    text-wrap: pretty;
   }
 }

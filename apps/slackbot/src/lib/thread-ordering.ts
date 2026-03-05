@@ -13,8 +13,8 @@ export function isRunningState(state: ThreadState): boolean {
   return state === "running" || state === "working";
 }
 
-export function isActiveState(state: ThreadState): boolean {
-  return isRunningState(state) || state === "stopping";
+export function isActiveState(state: ThreadState | string | undefined): boolean {
+  return state === "running" || state === "working" || state === "stopping";
 }
 
 function compareThreadSummary(a: ThreadSummary, b: ThreadSummary): number {

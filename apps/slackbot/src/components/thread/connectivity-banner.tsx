@@ -1,7 +1,8 @@
 "use client";
 
 import { RefreshCw, WifiOff } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useHaptics } from "@/components/haptics-provider";
 import { cn } from "@/lib/utils";
 
 type ConnectivityState = "connected" | "reconnecting" | "offline";
@@ -16,6 +17,8 @@ export function ConnectivityBanner({
   const [isOnline, setIsOnline] = useState(true);
   const [renderedState, setRenderedState] = useState<ConnectivityState | null>(null);
   const [visibility, setVisibility] = useState<"open" | "closed">("closed");
+  const { trigger } = useHaptics();
+  const prevStateRef = useRef<ConnectivityState>("connected");
 
   useEffect(() => {
     const goOnline = () => setIsOnline(true);
@@ -36,8 +39,14 @@ export function ConnectivityBanner({
       : "connected";
 
   useEffect(() => {
+    if (state !== prevStateRef.current) {
+      prevStateRef.current = state;
+    }
     if (state === "connected") {
       if (!renderedState) return;
+      if (renderedState === "offline") {
+        window.requestAnimationFrame(() => trigger("success"));
+      }
       setVisibility("closed");
       const timer = window.setTimeout(() => setRenderedState(null), 220);
       return () => window.clearTimeout(timer);
@@ -50,9 +59,12 @@ export function ConnectivityBanner({
     const timer = window.setTimeout(() => {
       setRenderedState(state);
       setVisibility("open");
+      if (state === "offline") {
+        window.requestAnimationFrame(() => trigger("warning"));
+      }
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [renderedState, state]);
+  }, [renderedState, state, trigger]);
 
   if (!renderedState) return null;
 
@@ -62,9 +74,9 @@ export function ConnectivityBanner({
       aria-live="polite"
       data-state={visibility}
       className={cn(
-        "mx-3 my-1 flex items-center justify-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium",
-        "data-[state=open]:animate-in data-[state=open]:slide-in-from-top-1 data-[state=open]:fade-in data-[state=open]:duration-200",
-        "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-top-1 data-[state=closed]:fade-out data-[state=closed]:duration-150",
+        "mx-auto my-1 flex w-full max-w-[960px] items-center justify-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium md:px-3",
+        "data-[state=open]:animate-in data-[state=open]:slide-in-from-top-1 data-[state=open]:fade-in data-[state=open]:duration-[var(--dur-base)]",
+        "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-top-1 data-[state=closed]:fade-out data-[state=closed]:duration-[var(--dur-fast)]",
         renderedState === "offline" && "border-destructive/30 bg-destructive/10 text-destructive",
         renderedState === "reconnecting" && "border-primary/30 bg-primary/10 text-primary",
       )}

@@ -56,8 +56,8 @@ export function ThreadSummaryCard({
       prefetch={false}
       ref={linkRef}
       className={cn(
-        "thread-surface thread-action-transition group block rounded-xl no-underline text-inherit hover:border-border hover:bg-accent/35 hover:shadow-[0_18px_40px_rgba(0,0,0,0.24)] active:scale-[0.997] focus-visible:ring-1 focus-visible:ring-ring",
-        compact ? "px-3 py-2.5" : "p-4",
+        "thread-surface-soft thread-action-transition group block rounded-xl no-underline text-inherit hover:border-border/70 hover:bg-accent/35 hover:shadow-sm active:scale-[0.998] focus-visible:ring-1 focus-visible:ring-ring",
+        compact ? "px-3.5 py-3" : "p-4",
         activeState && "border-primary/40",
         thread.state === "error" && "border-destructive/45",
         isSelected && "border-primary/50 bg-accent/50",
@@ -69,7 +69,7 @@ export function ThreadSummaryCard({
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5">
             <HarnessBadge harness={thread.harness} className={compact ? "h-5 px-1.5 text-xs" : undefined} />
-            <span className={cn("truncate font-medium text-foreground", compact ? "text-xs" : "text-sm")}>
+            <span className="truncate font-medium text-sm text-foreground text-balance">
               {name}
             </span>
             {!compact && thread.participants && thread.participants.length > 0 ? (
@@ -78,25 +78,17 @@ export function ThreadSummaryCard({
               </span>
             ) : null}
           </div>
-          <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+          <div className="mt-1.5 flex items-center gap-1.5 text-[13px] text-muted-foreground">
             <span>
               {thread.turn_count} turn{thread.turn_count === 1 ? "" : "s"}
             </span>
             <span>·</span>
             <ThreadAge thread={thread} />
-            {compact && thread.participants && thread.participants.length > 0 ? (
-              <>
-                <span>·</span>
-                <span className="hidden lg:inline-flex" aria-hidden="true">
-                  <ParticipantAvatars participants={thread.participants} size={16} decorative />
-                </span>
-              </>
-            ) : null}
           </div>
         </div>
         <div
           className={cn(
-            "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] uppercase tracking-wide",
             thread.state === "error"
               ? "border-destructive/45 bg-destructive/10 text-destructive"
               : activeState
@@ -110,7 +102,7 @@ export function ThreadSummaryCard({
       </div>
 
       {resolvedStatusSubtitle ? (
-        <div className={cn("line-clamp-1 text-xs text-muted-foreground", compact ? "mt-1" : "mt-1.5")}>
+        <div className="mt-1.5 line-clamp-1 text-xs text-muted-foreground text-pretty">
           {resolvedStatusSubtitle}
         </div>
       ) : null}

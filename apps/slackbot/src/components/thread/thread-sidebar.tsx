@@ -242,7 +242,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
 
   if (collapsed) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-end p-2.5">
+      <div className="flex h-full w-full flex-col items-center justify-start px-2 pt-3 pb-2">
         {canToggle ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -253,7 +253,8 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
                 aria-label="Expand sidebar"
                 variant="outline"
                 size="icon"
-                className="size-9 border-border text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
+                className="size-11 md:size-9 ui-control-icon"
+                data-touch-target
               >
                 <ChevronRight className="size-4" />
               </Button>
@@ -267,23 +268,24 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" onKeyDown={handleListKeyDown}>
-      <div className="border-b border-border/70 bg-background/70 px-3 py-3 backdrop-blur-md">
-        <div className="thread-surface-soft rounded-xl p-2.5">
+      <div className="border-b border-border/60 bg-background/60 px-4 py-3 backdrop-blur-md">
+        <div className="thread-surface-soft rounded-xl p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Threads</h2>
+            <h2 className="truncate text-sm font-semibold tracking-tight text-foreground text-balance">Threads</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {activeCount} live agent{activeCount === 1 ? "" : "s"}
             </p>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   asChild
                   variant="outline"
                   size="icon-sm"
-                  className="border-border/80 bg-card/60 text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
+                  className="ui-control-icon"
+                  data-touch-target
                 >
                   <Link href="/" onClick={() => onNavigate?.()}>
                     <Plus className="size-4" />
@@ -298,8 +300,9 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
               disabled={isRefreshing || !active}
               variant="outline"
               size="xs"
-              className="gap-1 border-border/80 bg-card/60 px-2 text-xs text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
+              className="gap-1.5 min-h-11 md:min-h-8 border-border/80 bg-card/60 px-3 text-sm md:text-xs text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
               aria-busy={isRefreshing}
+              data-touch-target
             >
               <RefreshCw className={cn("size-3", isRefreshing ? "animate-spin" : "")} />
               {isRefreshing ? "Refreshing…" : "Refresh"}
@@ -312,18 +315,19 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
                 aria-label="Collapse sidebar"
                 variant="outline"
                 size="icon-sm"
-                className="border-border/80 bg-card/60 text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
+                className="ui-control-icon"
+                data-touch-target
               >
                 <ChevronLeft className="size-4" />
               </Button>
             ) : null}
           </div>
         </div>
-        <div className="mt-2.5 relative">
+        <div className="mt-3 relative">
           <label htmlFor={filterId} className="sr-only">
             Filter threads
           </label>
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={searchRef}
             id={filterId}
@@ -332,14 +336,14 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Filter threads… (/)"
             autoComplete="off"
-            className="h-9 border-input/80 bg-background/80 pl-8 pr-7 text-sm shadow-none focus-visible:ring-1"
+            className="h-10 md:h-9 border-input/80 bg-background/80 pl-9 pr-8 text-sm shadow-none focus-visible:ring-1"
           />
-          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border/80 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
+          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border/80 px-2 py-0.5 text-xs font-mono text-muted-foreground">
             /
           </span>
         </div>
         <ThreadStatusTabs
-          className="mt-2.5"
+          className="mt-3"
           density="compact"
           value={visibleStatusFilter}
           counts={{ all: counts.all, active: counts.active, error: counts.error }}
@@ -348,11 +352,15 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
         </div>
       </div>
 
-      <nav className="thread-sidebar-list thin-scrollbar flex-1 min-h-0 overflow-y-auto px-2.5 py-2.5" aria-label="Thread list">
+      <nav
+        className="thread-sidebar-list thin-scrollbar flex-1 min-h-0 overflow-y-auto px-3 py-3"
+        aria-label="Thread list"
+        data-thread-list-scroll="true"
+      >
         {loading ? (
-          <div className="space-y-2 py-1">
+          <div className="space-y-3 py-1">
             {[0, 1, 2].map((index) => (
-              <div key={index} className="rounded-md border border-border bg-card px-2.5 py-2.5">
+              <div key={index} className="rounded-lg border border-border/60 bg-card/35 p-3">
                 <div className="h-3.5 w-5/6 rounded bg-secondary animate-pulse" />
                 <div className="mt-1.5 h-3 w-2/3 rounded bg-secondary animate-pulse" />
                 <div className="mt-1.5 h-3 w-4/5 rounded bg-secondary animate-pulse" />
@@ -377,7 +385,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             No threads match your filter.
           </div>
         ) : (
-          <ul className="space-y-2" role="list">
+          <ul className="space-y-3" role="list">
             {sortedThreads.map((thread) => {
               const href = detailHrefWithEntrySource(thread.slack_thread_key, {
                 source: "threads",

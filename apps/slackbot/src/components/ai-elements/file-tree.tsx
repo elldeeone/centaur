@@ -141,7 +141,7 @@ export const FileTreeFolder = ({
     <FileTreeFolderContext.Provider value={folderContextValue}>
       <Collapsible onOpenChange={handleOpenChange} open={isExpanded}>
         <div
-          className={cn("", className)}
+          className={className}
           role="treeitem"
           tabIndex={0}
           {...props}
@@ -275,24 +275,3 @@ export const FileTreeName = ({
   </span>
 );
 
-export type FileTreeActionsProps = HTMLAttributes<HTMLDivElement>;
-
-const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation();
-
-export const FileTreeActions = ({
-  className,
-  children,
-  ...props
-}: FileTreeActionsProps) => (
-  // biome-ignore lint/a11y/noNoninteractiveElementInteractions: stopPropagation required for nested interactions
-  // biome-ignore lint/a11y/useSemanticElements: fieldset doesn't fit this UI pattern
-  <div
-    className={cn("ml-auto flex items-center gap-1", className)}
-    onClick={stopPropagation}
-    onKeyDown={stopPropagation}
-    role="group"
-    {...props}
-  >
-    {children}
-  </div>
-);

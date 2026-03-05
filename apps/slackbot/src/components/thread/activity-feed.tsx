@@ -55,8 +55,8 @@ export function ActivityFeed({
       <ConversationContent
         className={
           compactMode
-            ? "gap-2.5 px-3 py-3 md:gap-3 md:px-4 md:py-3.5"
-            : "gap-3.5 px-4 py-4 md:gap-4 md:px-5 md:py-5"
+            ? "gap-1 px-1.5 py-1.5 md:gap-2 md:px-3 md:py-2.5"
+            : "gap-1.5 px-2 py-2 md:gap-2.5 md:px-3 md:py-3"
         }
       >
         {isEmpty ? (
@@ -80,20 +80,20 @@ export function ActivityFeed({
             <Message
               key={group.groupKey}
               from="assistant"
-              className="group max-w-full rounded-xl border border-border/75 bg-[linear-gradient(160deg,color-mix(in_oklab,var(--card)_90%,transparent),color-mix(in_oklab,var(--background)_86%,transparent))] shadow-[0_14px_36px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.04)] [content-visibility:auto] [contain-intrinsic-size:220px]"
+              className="group max-w-full rounded-md border border-border/40 bg-card/20 [content-visibility:auto] [contain-intrinsic-size:140px]"
               data-turn={group.turnId === null ? "context" : String(group.turnId)}
             >
               <MessageContent
                 className={
                   compactMode
-                    ? "space-y-1.5 px-2.5 py-2.5"
-                    : "space-y-2.5 px-3.5 py-3"
+                    ? "space-y-1 px-1.5 py-1 md:px-2 md:py-1.5"
+                    : "space-y-1.5 px-2 py-1.5 md:space-y-2 md:px-2.5 md:py-2"
                 }
               >
-                <div className="inline-flex items-center rounded-md border border-border/70 bg-background/55 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <div className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
                   {group.label}
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {group.steps.map((step) => (
                     <MessagePartRenderer
                       key={step.id}

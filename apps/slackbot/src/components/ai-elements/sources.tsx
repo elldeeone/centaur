@@ -14,7 +14,7 @@ export type SourcesProps = ComponentProps<"div">;
 
 export const Sources = ({ className, ...props }: SourcesProps) => (
   <Collapsible
-    className={cn("not-prose mb-4 text-primary text-xs", className)}
+    className={cn("text-primary text-xs", className)}
     {...props}
   />
 );
@@ -30,7 +30,7 @@ export const SourcesTrigger = ({
   ...props
 }: SourcesTriggerProps) => (
   <CollapsibleTrigger
-    className={cn("flex items-center gap-2", className)}
+    className={cn("flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors", className)}
     {...props}
   >
     {children ?? (
@@ -50,7 +50,7 @@ export const SourcesContent = ({
 }: SourcesContentProps) => (
   <CollapsibleContent
     className={cn(
-      "mt-3 flex w-fit flex-col gap-2",
+      "mt-2 flex w-full flex-col gap-1.5",
       "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
       className
     )}
@@ -60,9 +60,12 @@ export const SourcesContent = ({
 
 export type SourceProps = ComponentProps<"a">;
 
-export const Source = ({ href, title, children, ...props }: SourceProps) => (
+export const Source = ({ href, title, children, className, ...props }: SourceProps) => (
   <a
-    className="flex items-center gap-2"
+    className={cn(
+      "group flex min-h-[36px] items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/45",
+      className,
+    )}
     href={href}
     rel="noreferrer"
     target="_blank"
@@ -70,8 +73,8 @@ export const Source = ({ href, title, children, ...props }: SourceProps) => (
   >
     {children ?? (
       <>
-        <BookIcon className="h-4 w-4" />
-        <span className="block font-medium">{title}</span>
+        <BookIcon className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
+        <span className="block font-medium text-foreground">{title}</span>
       </>
     )}
   </a>

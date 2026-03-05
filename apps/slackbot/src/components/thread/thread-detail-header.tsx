@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { useMemo, type ComponentType } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -19,6 +19,7 @@ import {
   Timer,
 } from "lucide-react";
 import type { ThreadDetail } from "@/lib/types";
+import { useHaptics } from "@/components/haptics-provider";
 import { HarnessBadge } from "@/components/ui/harness-badge";
 import { StateDot } from "@/components/ui/state-dot";
 import { ParticipantAvatars } from "@/components/thread/participant-avatars";
@@ -103,7 +104,7 @@ export function ThreadDetailHeader({
   onBack,
   upHref,
 }: ThreadDetailHeaderProps) {
-  const [showReconnectBar, setShowReconnectBar] = useState(false);
+  const { trigger } = useHaptics();
   const usageConfidenceLabel = tokenUsage
     ? (tokenUsage.authoritative ?? !tokenUsage.estimated)
       ? "authoritative"
@@ -117,33 +118,25 @@ export function ThreadDetailHeader({
     return { icon: Bot, text: "Idle" };
   }, [error, isRunning, stableStatus, thread.state]);
 
-  useEffect(() => {
-    if (!isReconnecting || thread.state === "error") {
-      setShowReconnectBar(false);
-      return;
-    }
-    const timeout = window.setTimeout(() => setShowReconnectBar(true), 2000);
-    return () => window.clearTimeout(timeout);
-  }, [isReconnecting, thread.state]);
-
   return (
     <div className="relative shrink-0 border-b border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_88%,transparent),color-mix(in_oklab,var(--card)_80%,transparent))] backdrop-blur-xl">
-      {showReconnectBar ? <div className="reconnect-bar" aria-hidden="true" /> : null}
-      <div className="flex min-h-12 items-center gap-2.5 px-3 py-2">
+      <div className="flex min-h-10 items-center gap-2 px-2.5 py-1.5">
         <button
           type="button"
-          onClick={onOpenDrawer}
-          className="flex size-9 items-center justify-center rounded-lg border border-border/70 bg-card/45 text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground md:hidden"
+          onClick={() => { trigger("light"); onOpenDrawer(); }}
+          className="flex size-9 items-center justify-center rounded-lg ui-control-icon md:hidden"
           aria-label="Open thread list"
+          data-touch-target
         >
           <Menu className="size-5" />
         </button>
 
         <button
           type="button"
-          onClick={onBack}
+          onClick={() => { trigger("light"); onBack(); }}
           aria-label="Back to source"
-          className="mr-1 inline-flex size-8 items-center justify-center rounded-lg border border-border/70 bg-card/45 text-xs text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
+          className="mr-0.5 inline-flex size-8 items-center justify-center rounded-lg ui-control-icon text-xs"
+          data-touch-target
         >
           <ArrowLeft className="size-4" />
         </button>
@@ -152,16 +145,17 @@ export function ThreadDetailHeader({
           href={upHref}
           scroll={false}
           aria-label="Up to threads"
-          className="hidden size-8 rounded-lg border border-border/70 bg-card/45 p-1 md:inline-flex items-center justify-center text-xs text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
+          className="hidden size-9 rounded-lg ui-control-icon p-1 md:inline-flex items-center justify-center text-xs"
+          data-touch-target
         >
           <ArrowUp className="size-3.5" />
         </Link>
 
         <HarnessBadge harness={thread.harness} className="flex-shrink-0" />
 
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight">{humanName}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight text-balance">{humanName}</span>
 
-        <span className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-background/65 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background/65 px-2 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
           <StateDot state={thread.state} className="flex-shrink-0" />
           <span className="hidden min-[380px]:inline">{thread.state}</span>
         </span>
@@ -174,7 +168,7 @@ export function ThreadDetailHeader({
         </span>
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="hidden rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-xs font-mono tabular-nums text-muted-foreground xl:inline">
+            <span className="hidden rounded-md border border-border/60 bg-background/60 px-1.5 py-0.5 text-xs font-mono tabular-nums text-muted-foreground xl:inline">
               {tokenTicker}
             </span>
           </TooltipTrigger>
@@ -187,7 +181,7 @@ export function ThreadDetailHeader({
             </div>
           </TooltipContent>
         </Tooltip>
-        <span className="hidden items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-xs font-mono tabular-nums text-muted-foreground lg:inline-flex">
+        <span className="hidden items-center gap-1 rounded-md border border-border/60 bg-background/60 px-1.5 py-0.5 text-xs font-mono tabular-nums text-muted-foreground lg:inline-flex">
           <Timer className="size-3.5" />
           {liveElapsed}
         </span>
@@ -197,9 +191,10 @@ export function ThreadDetailHeader({
 
         <button
           type="button"
-          onClick={onOpenInfo}
-          className="flex size-9 items-center justify-center rounded-lg border border-border/70 bg-card/45 text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground md:hidden"
+          onClick={() => { trigger("light"); onOpenInfo(); }}
+          className="flex size-9 items-center justify-center rounded-lg ui-control-icon md:hidden"
           aria-label="Thread info"
+          data-touch-target
         >
           <Info className="size-4" />
         </button>
@@ -208,7 +203,7 @@ export function ThreadDetailHeader({
           <PopoverTrigger asChild>
             <button
               type="button"
-              className="hidden rounded-lg border border-border/70 bg-card/45 p-1.5 text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground md:block"
+              className="hidden rounded-lg ui-control-icon p-1.5 md:block"
               aria-label="Show thread metadata"
             >
               <Info className="size-3.5" />
@@ -230,7 +225,7 @@ export function ThreadDetailHeader({
             <TooltipTrigger asChild>
               <button
                 type="button"
-                onClick={onInterrupt}
+                onClick={() => { trigger("warning"); onInterrupt(); }}
                 disabled={isInterrupting}
                 className="hidden rounded-md border border-destructive/35 bg-destructive/8 px-1.5 py-1 md:inline-flex items-center gap-1 text-xs text-destructive transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-destructive/14 disabled:opacity-60"
               >
@@ -245,7 +240,7 @@ export function ThreadDetailHeader({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onRefresh}
+              onClick={() => { trigger("light"); onRefresh(); }}
               className="hidden rounded-md border border-border/70 bg-card/45 px-1.5 py-1 md:inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
             >
               <RefreshCw className="size-3.5" />
@@ -256,21 +251,16 @@ export function ThreadDetailHeader({
         </Tooltip>
       </div>
 
-      <div className="flex min-h-8 items-center gap-2 border-t border-border/50 bg-background/45 px-3 py-1.5 text-xs">
-        <span className="rounded-md border border-border/70 bg-secondary/65 px-1.5 py-0.5 text-xs text-muted-foreground">
+      <div className="flex min-h-7 items-center gap-2 border-t border-border/50 bg-background/45 px-2.5 py-1 text-xs">
+        <span className="rounded-md border border-border/60 bg-secondary/65 px-1.5 py-0.5 text-xs text-muted-foreground">
           {sourceLabel}
         </span>
         <statusSummary.icon className="size-3.5 text-muted-foreground" />
         <span className={thread.state === "error" ? "text-destructive truncate" : "text-muted-foreground truncate"}>
           {statusSummary.text}
         </span>
-        {isReconnecting ? (
-          <span className="ml-auto rounded-md border border-primary/35 bg-primary/12 px-1.5 py-0.5 text-xs text-primary">
-            Reconnecting…
-          </span>
-        ) : null}
         {isRunning && tokenUsage?.model ? (
-          <span className="hidden rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 font-mono text-xs text-muted-foreground md:inline">
+          <span className="ml-auto hidden rounded-md border border-border/60 bg-background/60 px-1.5 py-0.5 font-mono text-xs text-muted-foreground md:inline">
             {tokenUsage.model}
           </span>
         ) : null}

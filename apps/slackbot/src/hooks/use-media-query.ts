@@ -24,7 +24,3 @@ export function useMediaQuery(query: string): boolean {
     () => SERVER_SNAPSHOT,
   );
 }
-
-export function useIsMobile(): boolean {
-  return !useMediaQuery("(min-width: 768px)");
-}

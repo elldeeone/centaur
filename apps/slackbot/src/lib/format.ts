@@ -6,14 +6,3 @@ export function timeAgo(ts: number): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
 }
-
-export function absoluteTime(ts: number): string {
-  if (!Number.isFinite(ts) || ts <= 0) return "";
-  return new Date(ts * 1000).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}

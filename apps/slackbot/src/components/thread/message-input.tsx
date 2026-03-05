@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, Loader2, Square } from "lucide-react";
 import { toast } from "sonner";
+import { useHaptics } from "@/components/haptics-provider";
 import { useKeyboardHeight } from "@/hooks/use-visual-viewport";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +35,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
   const composingRef = useRef(false);
   const keyboardHeight = useKeyboardHeight();
   const effectiveKeyboardHeight = isFocused ? keyboardHeight : 0;
+  const { trigger } = useHaptics();
 
   const resize = useCallback(() => {
     const el = textareaRef.current;
@@ -54,7 +56,9 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
     try {
       await onSend(text);
       setValue("");
+      window.requestAnimationFrame(() => trigger("success"));
     } catch {
+      window.requestAnimationFrame(() => trigger("error"));
       toast("Unable to send message. Please try again.");
     } finally {
       setSubmitting(false);
@@ -64,6 +68,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
 
   async function handleStop() {
     if (!onStop) return;
+    trigger("warning");
     setSubmitting(true);
     try {
       await onStop();
@@ -103,7 +108,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
   return (
     <div
       className={cn(
-        "flex-shrink-0 border-t border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_90%,transparent),color-mix(in_oklab,var(--card)_84%,transparent))] px-3 py-2.5 backdrop-blur-md",
+        "flex-shrink-0 border-t border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_90%,transparent),color-mix(in_oklab,var(--card)_84%,transparent))] px-2.5 py-2 backdrop-blur-md",
         className,
       )}
       style={{
@@ -115,7 +120,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
     >
       <form
         onSubmit={(e) => { e.preventDefault(); void handleSend(); }}
-        className="thread-surface mx-auto flex max-w-[1120px] items-end gap-2.5 rounded-xl p-2"
+        className="thread-surface mx-auto flex max-w-[960px] items-end gap-1 rounded-lg p-1 md:gap-1.5 md:p-1.5"
         aria-label="Message composer"
       >
         <label htmlFor="chat-input" className="sr-only">Message</label>
@@ -136,7 +141,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
           className={cn(
             "flex-1 min-w-0 min-h-[44px] resize-none",
             "text-[16px] md:text-sm leading-[22px]",
-            "rounded-lg border border-input/80 bg-background/85 px-3.5 py-2.5",
+            "rounded-lg border border-input/80 bg-background/85 px-3 py-2",
             "shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] focus:border-ring focus:ring-1 focus:ring-ring",
             "placeholder:text-muted-foreground text-foreground",
             "outline-none transition-colors",

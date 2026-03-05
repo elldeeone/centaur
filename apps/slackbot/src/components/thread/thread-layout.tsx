@@ -13,6 +13,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { X } from "lucide-react";
+import { useHaptics } from "@/components/haptics-provider";
 import { ThreadSidebar, type ThreadSidebarHandle } from "@/components/thread/thread-sidebar";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { isTextInputTarget } from "@/lib/thread-utils";
@@ -104,33 +105,36 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useSidebarCollapsedState();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const isDesktop = useMediaQuery("(min-width: 768px)");
+  const { trigger } = useHaptics();
   const desktopSidebarRef = useRef<ThreadSidebarHandle>(null);
   const mobileSidebarRef = useRef<ThreadSidebarHandle>(null);
   const mobileSidebarReturnFocusRef = useRef<HTMLElement | null>(null);
   const panelRef = useRef<HTMLElement>(null);
   const mobileDialogRef = useRef<HTMLElement>(null);
 
-  const closeMobileSidebar = useCallback(() => {
+  const closeMobileSidebar = useCallback((withFeedback = true) => {
+    if (withFeedback) trigger("light");
     setMobileSidebarOpen(false);
     const returnTarget = mobileSidebarReturnFocusRef.current;
     if (returnTarget) {
       window.requestAnimationFrame(() => returnTarget.focus());
       mobileSidebarReturnFocusRef.current = null;
     }
-  }, []);
+  }, [trigger]);
 
   const openMobileSidebar = useCallback(() => {
     if (isDesktop) return;
+    trigger("medium");
     mobileSidebarReturnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setMobileSidebarOpen(true);
-  }, [isDesktop]);
+  }, [isDesktop, trigger]);
 
   useEffect(() => {
     if (isDesktop && mobileSidebarOpen) {
-      setMobileSidebarOpen(false);
+      closeMobileSidebar(false);
     }
-  }, [isDesktop, mobileSidebarOpen]);
+  }, [closeMobileSidebar, isDesktop, mobileSidebarOpen]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -260,7 +264,7 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
   return (
     <ThreadLayoutContext.Provider value={contextValue}>
       <div className="thread-shell relative flex h-full overflow-hidden md:h-[calc(100dvh-44px)]">
-        <aside className="thread-shell-sidebar relative hidden shrink-0 border-r border-border/80 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--card)_88%,transparent),color-mix(in_oklab,var(--background)_94%,transparent))] shadow-[inset_-1px_0_0_rgba(255,255,255,0.05),0_0_0_1px_rgba(255,255,255,0.03)] md:flex">
+        <aside className="thread-shell-sidebar relative hidden shrink-0 border-r border-border/60 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--card)_82%,transparent),color-mix(in_oklab,var(--background)_94%,transparent))] md:flex">
           <Suspense fallback={<div className="h-full w-full bg-card/35" />}>
             <ThreadSidebar
               ref={desktopSidebarRef}
@@ -274,7 +278,7 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
         <section
           ref={panelRef}
           tabIndex={-1}
-          className="thread-shell-panel min-h-0 min-w-0 flex-1 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_92%,transparent),var(--background))] outline-none"
+          className="thread-shell-panel min-h-0 min-w-0 flex-1 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_94%,transparent),var(--background))] outline-none"
         >
           {children}
         </section>
@@ -284,23 +288,24 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
         <div className="fixed inset-0 z-50 md:hidden">
           <button
             type="button"
-            className="absolute inset-0 border-0 bg-black/70 p-0 backdrop-blur-[2px] transition-opacity duration-200 ease-out motion-reduce:transition-none opacity-100"
+            className="absolute inset-0 border-0 bg-black/60 p-0 backdrop-blur-[2px] transition-opacity duration-[var(--dur-base)] ease-out motion-reduce:transition-none opacity-100"
             aria-label="Close thread sidebar"
-            onClick={closeMobileSidebar}
+            onClick={() => closeMobileSidebar()}
           />
           <aside
             ref={mobileDialogRef}
             role="dialog"
             aria-modal="true"
             aria-label="Threads"
-            className="absolute inset-y-0 left-0 flex w-[320px] max-w-[88vw] flex-col overflow-y-auto overscroll-contain border-r border-border/80 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--card)_92%,transparent),color-mix(in_oklab,var(--background)_96%,transparent))] shadow-[0_24px_80px_rgba(0,0,0,0.6),inset_-1px_0_0_rgba(255,255,255,0.04)] transition-transform duration-[var(--dur-slow)] ease-[var(--ease-snappy)] motion-reduce:transition-none motion-reduce:transform-none translate-x-0"
+            className="absolute inset-y-0 left-0 flex w-[360px] max-w-[92vw] flex-col overflow-y-auto overscroll-contain border-r border-border/80 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--card)_92%,transparent),color-mix(in_oklab,var(--background)_96%,transparent))] shadow-[0_24px_80px_rgba(0,0,0,0.6),inset_-1px_0_0_rgba(255,255,255,0.04)] transition-transform duration-[var(--dur-slow)] ease-[var(--ease-snappy)] motion-reduce:transition-none motion-reduce:transform-none translate-x-0"
           >
-            <div className="flex items-center justify-end border-b border-border px-2 py-2">
+            <div className="flex items-center justify-end border-b border-border px-3 py-3">
               <button
                 type="button"
-                onClick={closeMobileSidebar}
+                onClick={() => closeMobileSidebar()}
                 aria-label="Close thread sidebar"
-                className="inline-flex size-9 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="inline-flex size-11 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                data-touch-target
               >
                 <X className="size-4" />
               </button>

@@ -1,8 +1,9 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, CircleCheck, CircleX, LoaderCircle, X as XIcon, Check } from "lucide-react";
+import { memo, useMemo, useState } from "react";
+import { CheckCircle, ChevronRight, CircleX, LoaderCircle } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useHaptics } from "@/components/haptics-provider";
 import { describeToolCall, type ToolCall } from "@/lib/describe";
 import {
   Tool,
@@ -30,8 +31,6 @@ import {
   StackTraceFrames,
   StackTraceHeader,
 } from "@/components/ai-elements/stack-trace";
-import { useIsMobile } from "@/hooks/use-media-query";
-import { cn } from "@/lib/utils";
 import type { StepSource } from "@/lib/source-utils";
 
 function mapToolState(call: ToolCall): NonNullable<ToolCall["uiState"]> {
@@ -45,17 +44,6 @@ function looksLikeStackTrace(text: string): boolean {
   return /Traceback \(most recent call last\):/m.test(text) || (/^\s*at\s+/m.test(text) && /Error[:]/i.test(text));
 }
 
-function PillStatusIcon({ loading, error }: { loading: number; error: number }) {
-  if (error > 0) return <XIcon className="size-4 text-destructive flex-shrink-0" />;
-  if (loading > 0) return <LoaderCircle className="size-4 text-muted-foreground animate-spin flex-shrink-0" />;
-  return <Check className="size-4 text-primary flex-shrink-0" />;
-}
-
-function shouldAutoExpandTool(call: ToolCall): boolean {
-  const state = mapToolState(call);
-  return state === "approval-requested" || state === "input-available" || state === "input-streaming" || state === "output-error" || state === "output-denied";
-}
-
 const ToolCallItem = memo(function ToolCallItem({ call }: { call: ToolCall }) {
   const output = call.output ?? "";
   const errorText = call.errorText ?? "";
@@ -63,16 +51,16 @@ const ToolCallItem = memo(function ToolCallItem({ call }: { call: ToolCall }) {
   const hasInput = Object.keys(call.input || {}).length > 0;
   const isJson = output.trimStart().startsWith("{") || output.trimStart().startsWith("[");
   const hasErrorStack = Boolean(errorText) && looksLikeStackTrace(errorText);
-  const [isOpen, setIsOpen] = useState(() => shouldAutoExpandTool(call));
+  const [isOpen, setIsOpen] = useState(false);
+  const { trigger } = useHaptics();
 
-  useEffect(() => {
-    if (shouldAutoExpandTool(call)) {
-      setIsOpen(true);
-    }
-  }, [call]);
+  function handleToolToggle(next: boolean) {
+    trigger("light");
+    setIsOpen(next);
+  }
 
   return (
-    <Tool open={isOpen} onOpenChange={setIsOpen}>
+    <Tool open={isOpen} onOpenChange={handleToolToggle}>
       <ToolHeader
         title={describeToolCall(call.name, call.input)}
         type={`tool-${call.name}` as `tool-${string}`}
@@ -127,7 +115,7 @@ const ToolCallItem = memo(function ToolCallItem({ call }: { call: ToolCall }) {
         ) : null}
 
         {!output && !errorText ? (
-          <div className="text-xs text-muted-foreground">Awaiting tool output…</div>
+          <div className="text-xs text-muted-foreground italic">Awaiting output…</div>
         ) : null}
       </ToolContent>
     </Tool>
@@ -159,6 +147,12 @@ function isToolError(call: ToolCall): boolean {
   return call.state === "error";
 }
 
+function GroupStatusIcon({ loading, error }: { loading: number; error: number }) {
+  if (error > 0) return <CircleX className="size-3.5 text-destructive shrink-0" />;
+  if (loading > 0) return <LoaderCircle className="size-3.5 text-muted-foreground animate-spin shrink-0" />;
+  return <CheckCircle className="size-3.5 text-primary shrink-0" />;
+}
+
 export function StepGroup({
   icon: Icon,
   summary,
@@ -168,7 +162,7 @@ export function StepGroup({
   summary: string;
   calls: ToolCall[];
 }) {
-  const isMobile = useIsMobile();
+  const { trigger } = useHaptics();
   const { loadingCount, errorCount, doneCount } = useMemo(() => {
     let loading = 0;
     let error = 0;
@@ -180,95 +174,44 @@ export function StepGroup({
     }
     return { loadingCount: loading, errorCount: error, doneCount: done };
   }, [calls]);
-  const manuallyToggled = useRef(false);
-  const previousLoadingCount = useRef(loadingCount);
-  const hasBeenActive = useRef(false);
-  const [forceOpen, setForceOpen] = useState(!isMobile);
-
-  useEffect(() => {
-    if (loadingCount > 0) {
-      hasBeenActive.current = true;
-    }
-  }, [loadingCount]);
-
-  useEffect(() => {
-    const wasLoading = previousLoadingCount.current > 0;
-    previousLoadingCount.current = loadingCount;
-    if (isMobile || manuallyToggled.current) return;
-    if (loadingCount > 0 || errorCount > 0) {
-      setForceOpen(true);
-      return;
-    }
-    if (!wasLoading || !hasBeenActive.current) return;
-    const timeout = window.setTimeout(() => setForceOpen(false), 2000);
-    return () => window.clearTimeout(timeout);
-  }, [errorCount, isMobile, loadingCount]);
-
-  useEffect(() => {
-    if (!isMobile && loadingCount > 0) {
-      manuallyToggled.current = false;
-    }
-  }, [isMobile, loadingCount]);
-
-  const isOpen = forceOpen;
+  const [isOpen, setIsOpen] = useState(false);
 
   function handleToggle(nextOpen: boolean) {
-    manuallyToggled.current = true;
-    setForceOpen(nextOpen);
+    trigger("light");
+    setIsOpen(nextOpen);
   }
+
+  const statusLabel = loadingCount > 0
+    ? `${doneCount} of ${calls.length}`
+    : errorCount > 0
+      ? `${doneCount}/${calls.length}`
+      : calls.length === 1
+        ? ""
+        : `${calls.length}`;
 
   return (
     <Collapsible
       open={isOpen}
       onOpenChange={handleToggle}
-      className={cn(
-        "group rounded-md border border-border/70 bg-card/45 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]",
-      )}
+      className="group rounded-md border border-border/50 bg-card/30"
     >
       <CollapsibleTrigger
-        className={cn(
-          "flex w-full cursor-pointer items-center gap-2 px-3 py-2 transition-colors",
-          isMobile ? "min-h-[44px] active:bg-accent/60" : "hover:bg-accent/50",
-        )}
+        className="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-1.5 transition-colors hover:bg-accent/40 active:bg-accent/60 min-h-[36px] md:min-h-0"
+        data-touch-target
       >
-        {isMobile ? (
-          <PillStatusIcon loading={loadingCount} error={errorCount} />
-        ) : (
-          <>
-            <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
-            <Icon className="size-3.5 text-primary" />
-          </>
-        )}
-        <span
-          className={cn(
-            "truncate flex-1 min-w-0 text-left",
-            isMobile ? "text-sm text-muted-foreground" : "text-sm text-foreground",
-          )}
-        >
+        <ChevronRight className="size-3 text-muted-foreground/60 shrink-0 transition-transform duration-[var(--dur-fast)] group-data-[state=open]:rotate-90" />
+        <Icon className="size-3.5 text-muted-foreground shrink-0" />
+        <span className="truncate flex-1 min-w-0 text-left text-[13px] text-foreground/80">
           {summary}
         </span>
-        {!isMobile && (
-          errorCount > 0 ? (
-            <CircleX className="ml-auto size-3.5 text-destructive" />
-          ) : loadingCount > 0 ? (
-            <LoaderCircle className="ml-auto size-3.5 text-muted-foreground animate-spin" />
-          ) : (
-            <CircleCheck className="ml-auto size-3.5 text-primary" />
-          )
+        {statusLabel && (
+          <span className="text-[11px] font-mono text-muted-foreground tabular-nums shrink-0">
+            {statusLabel}
+          </span>
         )}
-        <span className="text-xs font-mono text-muted-foreground tabular-nums flex-shrink-0">
-          {doneCount}/{calls.length}
-        </span>
-        {isMobile && (
-          <ChevronRight
-            className={cn(
-              "size-4 text-muted-foreground/50 transition-transform flex-shrink-0",
-              isOpen && "rotate-90",
-            )}
-          />
-        )}
+        <GroupStatusIcon loading={loadingCount} error={errorCount} />
       </CollapsibleTrigger>
-      <CollapsibleContent className="space-y-2 px-3 pb-2.5 pl-4 md:pl-5">
+      <CollapsibleContent className="space-y-0.5 pb-1.5 pl-2 md:pl-3">
         {calls.map((call) => (
           <ToolCallItem key={call.id} call={call} />
         ))}

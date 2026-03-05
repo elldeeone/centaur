@@ -55,7 +55,7 @@ function ContextBar({ percent }: { percent: number }) {
   const color = percent > 80 ? "bg-destructive" : percent > 50 ? "bg-primary/70" : "bg-primary";
   return (
     <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-secondary">
-      <div className={cn("h-full rounded-full transition-[width] duration-200 ease-out", color)} style={{ width: `${percent}%` }} />
+      <div className={cn("h-full rounded-full transition-[width] duration-[var(--dur-base)] ease-out", color)} style={{ width: `${percent}%` }} />
     </div>
   );
 }
@@ -202,13 +202,13 @@ export function ThreadInfoSheet({
 
   return (
     <div className="fixed inset-0 z-50 md:hidden" aria-modal="true" role="dialog" aria-label="Thread details">
-      <div className="absolute inset-0 bg-black/55 backdrop-blur-[1px] animate-in fade-in duration-200 motion-reduce:animate-none" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] animate-in fade-in duration-[var(--dur-base)] motion-reduce:animate-none" onClick={onClose} />
       <div
         ref={sheetRef}
         tabIndex={-1}
         className={cn(
-          "absolute inset-x-0 bottom-0 max-h-[70dvh] overflow-y-auto overscroll-contain rounded-t-2xl border-t border-border/90 bg-card shadow-[0_-24px_80px_rgba(0,0,0,0.5)] will-change-transform animate-in slide-in-from-bottom duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none",
-          dragY > 0 ? "transition-none" : "transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          "absolute inset-x-0 bottom-0 max-h-[82dvh] overflow-y-auto overscroll-contain rounded-t-2xl border-t border-border/80 bg-card shadow-[0_-12px_36px_rgba(0,0,0,0.38)] will-change-transform animate-in slide-in-from-bottom duration-[var(--dur-slow)] ease-[var(--ease-emphasized)] motion-reduce:animate-none",
+          dragY > 0 ? "transition-none" : "transition-transform duration-[var(--dur-slow)] ease-[var(--ease-emphasized)]",
         )}
         style={{ transform: dragY > 0 ? `translateY(${dragY}px)` : undefined }}
         onTouchStart={handleTouchStart}
@@ -219,7 +219,7 @@ export function ThreadInfoSheet({
           <div className="w-8 h-1 bg-border rounded-full" />
         </div>
 
-        <div className="px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+        <div className="px-4 sm:px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
           <div className="flex items-center justify-between mt-2">
             <h2 className="text-lg font-semibold text-foreground">
               {thread.thread_name || thread.slack_thread_key}
@@ -227,8 +227,9 @@ export function ThreadInfoSheet({
             <button
               type="button"
               onClick={onClose}
-              className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
+              className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors duration-[var(--dur-fast)] hover:bg-accent hover:text-foreground"
               aria-label="Close"
+              data-touch-target
             >
               <X className="size-4" />
             </button>
@@ -243,7 +244,7 @@ export function ThreadInfoSheet({
             <span>{elapsed}</span>
           </div>
 
-          <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3">
+          <dl className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-x-4 sm:gap-y-4">
             <Stat label="Tokens in">{tokenUsage?.input_tokens.toLocaleString() ?? "--"}</Stat>
             <Stat label="Tokens out">{tokenUsage?.output_tokens.toLocaleString() ?? "--"}</Stat>
             <Stat label="Cost">
@@ -267,13 +268,14 @@ export function ThreadInfoSheet({
             </div>
           )}
 
-          <div className="mt-5 space-y-1 border-t border-border pt-4">
+          <div className="mt-5 space-y-2 border-t border-border pt-4">
             <h3 className="mb-2 text-xs font-medium text-muted-foreground">Actions</h3>
 
             <button
               type="button"
               onClick={() => { onRefresh(); onClose(); }}
-              className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-foreground transition-colors duration-150 hover:bg-accent/70 active:bg-accent"
+              className="flex min-h-11 w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-foreground transition-colors duration-[var(--dur-fast)] hover:bg-accent/70 active:bg-accent"
+              data-touch-target
             >
               <RefreshCw className="size-5 text-muted-foreground" />
               Refresh thread
@@ -283,7 +285,8 @@ export function ThreadInfoSheet({
               <button
                 type="button"
                 onClick={() => { onStop(); onClose(); }}
-                className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-destructive transition-colors duration-150 hover:bg-destructive/10 active:bg-accent"
+                className="flex min-h-11 w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-destructive transition-colors duration-[var(--dur-fast)] hover:bg-destructive/10 active:bg-accent"
+                data-touch-target
               >
                 <CircleStop className="size-5" />
                 Stop agent
@@ -293,7 +296,8 @@ export function ThreadInfoSheet({
             <button
               type="button"
               onClick={copyLink}
-              className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-foreground transition-colors duration-150 hover:bg-accent/70 active:bg-accent"
+              className="flex min-h-11 w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-foreground transition-colors duration-[var(--dur-fast)] hover:bg-accent/70 active:bg-accent"
+              data-touch-target
             >
               <Copy className="size-5 text-muted-foreground" />
               Copy link
@@ -302,7 +306,8 @@ export function ThreadInfoSheet({
             {slackUrl ? (
               <a
                 href={slackUrl}
-                className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-sm text-foreground no-underline transition-colors duration-150 hover:bg-accent/70 active:bg-accent"
+                className="flex min-h-11 w-full items-center gap-3 rounded-md px-2 py-3 text-sm text-foreground no-underline transition-colors duration-[var(--dur-fast)] hover:bg-accent/70 active:bg-accent"
+                data-touch-target
               >
                 <ExternalLink className="size-5 text-muted-foreground" />
                 Open in Slack

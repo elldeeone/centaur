@@ -2,6 +2,7 @@
 
 import React from "react";
 import { Button } from "@/components/ui/button";
+import { useHaptics } from "@/components/haptics-provider";
 import { cn } from "@/lib/utils";
 import { THREAD_STATUS_FILTER_OPTIONS, type VisibleThreadStatusFilter } from "@/components/thread/thread-ui-constants";
 
@@ -21,12 +22,15 @@ export function ThreadStatusTabs({
   className,
 }: ThreadStatusTabsProps) {
   const compact = density === "compact";
+  const { trigger } = useHaptics();
 
   return (
     <div
+      role="tablist"
+      aria-label="Thread filters"
       className={cn(
         compact
-          ? "grid w-full grid-cols-3 gap-1.5 text-xs"
+          ? "grid w-full grid-cols-3 gap-2 text-sm"
           : "inline-flex min-w-max items-center gap-1.5 rounded-xl border border-border/70 bg-card/45 p-1",
         className,
       )}
@@ -37,13 +41,18 @@ export function ThreadStatusTabs({
           <Button
             key={option.id}
             type="button"
-            onClick={() => onChange(option.id)}
+            onClick={() => {
+              if (!active) trigger("selection");
+              onChange(option.id);
+            }}
+            role="tab"
+            aria-selected={active}
             aria-pressed={active}
             variant="ghost"
             size="xs"
             className={cn(
               compact
-                ? "h-auto rounded-md border border-border/70 bg-card/55 px-1.5 py-1 text-center text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent/60 hover:text-foreground"
+                ? "min-h-10 md:min-h-8 rounded-md border border-border/70 bg-card/55 px-2.5 py-2 md:px-2 md:py-1.5 text-center text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent/60 hover:text-foreground"
                 : "min-h-[36px] rounded-md border border-transparent px-3 text-xs font-medium text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent/60 hover:text-foreground",
               active &&
                 (compact
@@ -54,7 +63,7 @@ export function ThreadStatusTabs({
             {compact ? (
               <span className="inline-flex items-center gap-1.5">
                 <span>{option.shortLabel}</span>
-                <span className="rounded bg-background/80 px-1 py-0.5 text-[10px] leading-none text-muted-foreground">
+                <span className="rounded bg-background/80 px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground">
                   {counts[option.id]}
                 </span>
               </span>

@@ -6,6 +6,7 @@ import { BASE } from "@/lib/constants";
 import { AgentThreadTransport } from "@/lib/agent-transport";
 import { stepsFromUiMessages } from "@/lib/chat-steps";
 import { stepsFromTurns } from "@/lib/turn-steps";
+import { isActiveState } from "@/lib/thread-ordering";
 import type { Step } from "@/lib/describe";
 
 export type TokenUsage = {
@@ -19,10 +20,6 @@ export type TokenUsage = {
 };
 
 type SendRoute = "execute";
-
-function isActiveState(state: string | undefined): boolean {
-  return state === "running" || state === "working" || state === "stopping";
-}
 
 function coerceNonNegativeInt(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
