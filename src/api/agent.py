@@ -2744,6 +2744,16 @@ class AgentClient:
             _emit({"type": "final", **result})
             return result
         finally:
+            # If an exception escaped before the normal state-reset logic,
+            # the in-memory session is still "working" and will permanently
+            # block the thread.  Reset it so the next request can proceed.
+            if session is not None:
+                with _sessions_lock:
+                    if session.get("state") == "working":
+                        session["state"] = "error"
+                        session["last_activity"] = time.time()
+                with contextlib.suppress(Exception):
+                    _persist_session(session, resolved_thread_key)
             if slot_acquired:
                 _release_execution_slot(actor_key)
             execute_lock.release()
