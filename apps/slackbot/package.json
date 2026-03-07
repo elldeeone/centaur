@@ -69,5 +69,12 @@
     "@types/react-grid-layout": "^2.1.0",
     "babel-plugin-react-compiler": "^1.0.0",
     "typescript": "5.9.3"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "chat@4.14.0": "patches/chat@4.14.0.patch",
+      "@chat-adapter/state-redis@4.14.0": "patches/@chat-adapter__state-redis@4.14.0.patch",
+      "@chat-adapter/state-memory@4.14.0": "patches/@chat-adapter__state-memory@4.14.0.patch"
+    }
   }
 }
