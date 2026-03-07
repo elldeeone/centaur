@@ -528,9 +528,14 @@ function createBot() {
           await dbClient.query("BEGIN");
           await dbClient.query(
             `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
-             VALUES ($1, $2, 'user', $3::jsonb, '{}'::jsonb)
+             VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb)
              ON CONFLICT (id) DO NOTHING`,
-            [userMsgId, threadKey, JSON.stringify([{ type: "text", text: instruction }])],
+            [
+              userMsgId,
+              threadKey,
+              JSON.stringify([{ type: "text", text: instruction }]),
+              JSON.stringify({ harness, ...(engine ? { engine } : {}) }),
+            ],
           );
           if (finalMessage) {
             await dbClient.query(

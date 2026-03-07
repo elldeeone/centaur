@@ -327,8 +327,8 @@ export async function fetchThreadRuntimeConfig(
   const { rows } = await pool.query(
     `SELECT metadata->>'harness' as harness, metadata->>'engine' as engine
      FROM chat_messages
-     WHERE thread_key = $1 AND role = 'assistant' AND metadata->>'harness' IS NOT NULL
-     ORDER BY created_at DESC LIMIT 1`,
+     WHERE thread_key = $1 AND metadata->>'harness' IS NOT NULL
+     ORDER BY role = 'assistant' DESC, created_at DESC LIMIT 1`,
     [normalizedThreadKey],
   );
   if (rows.length === 0) return { harness: null, engine: null };
