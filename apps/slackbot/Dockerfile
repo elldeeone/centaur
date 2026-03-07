@@ -6,6 +6,7 @@ WORKDIR /app
 
 # Install dependencies (cached independently of source changes)
 COPY package.json pnpm-lock.yaml* ./
+COPY patches/ patches/
 RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
 
 # Copy source and build
