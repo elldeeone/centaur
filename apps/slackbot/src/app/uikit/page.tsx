@@ -100,7 +100,8 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
-import { BookOpen, Code, Layers, Search, FileCode, Wrench, Cpu, Globe, TerminalIcon, MessageSquare, MessageSquarePlus, Plus, X, BarChart3, Table, PieChart, LineChart, LayoutGrid, Type, Users, Clock, Lock, Unlock, SendHorizonal } from "lucide-react";
+import { BookOpen, Code, Layers, Search, FileCode, Wrench, Cpu, Globe, TerminalIcon, MessageSquare, MessageSquarePlus, Plus, X, BarChart3, Table, PieChart, LineChart, LayoutGrid, Type, Users, Clock, Lock, Unlock } from "lucide-react";
+import { MessageInput } from "@/components/thread/message-input";
 
 // ── Mock Data ──────────────────────────────────────────────────────────────
 
@@ -624,27 +625,10 @@ function FullLayoutTab() {
                     </p>
                   </div>
                 </div>
-                <div className="shrink-0 border-t border-border/40 px-3 py-2.5">
-                  <div className="relative">
-                    <Input
-                      placeholder="Send a message…"
-                      className="h-10 bg-card/40 pr-10 text-sm"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          const val = (e.target as HTMLInputElement).value.trim();
-                          if (val) { (e.target as HTMLInputElement).value = ""; toast("Message sent (demo)"); setSelectedKey("demo:running-1"); }
-                        }
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-muted-foreground/50"
-                    >
-                      <SendHorizonal className="size-4" />
-                    </button>
-                  </div>
-                </div>
+                <MessageInput
+                  mode="idle"
+                  onSend={async (msg) => { toast("Message sent (demo): " + msg); setSelectedKey("demo:running-1"); }}
+                />
               </div>
             )}
           </section>
