@@ -29,7 +29,7 @@ export function matchesThreadQuery(thread: ThreadSummary, query: string): boolea
   const normalized = query.trim().toLowerCase();
   if (!normalized) return true;
   const haystack =
-    `${thread.thread_name ?? ""} ${thread.first_message ?? ""} ${thread.last_result ?? ""} ${thread.slack_thread_key}`.toLowerCase();
+    `${thread.thread_name ?? ""} ${thread.first_message ?? ""} ${thread.last_user_message ?? ""} ${thread.slack_thread_key}`.toLowerCase();
   return haystack.includes(normalized);
 }
 

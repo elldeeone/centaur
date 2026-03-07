@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
+import { createCodePlugin } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
@@ -83,6 +83,7 @@ export const Reasoning = memo(
 
     const hasEverStreamedRef = useRef(isStreaming);
     const [hasAutoClosed, setHasAutoClosed] = useState(false);
+    const userClosedRef = useRef(false);
     const startTimeRef = useRef<number | null>(null);
 
     // Track when streaming starts and compute duration
@@ -98,9 +99,9 @@ export const Reasoning = memo(
       }
     }, [isStreaming, setDuration]);
 
-    // Auto-open when streaming starts (unless explicitly closed)
+    // Auto-open when streaming starts (unless explicitly closed by user)
     useEffect(() => {
-      if (isStreaming && !isOpen && !isExplicitlyClosed) {
+      if (isStreaming && !isOpen && !isExplicitlyClosed && !userClosedRef.current) {
         setIsOpen(true);
       }
     }, [isStreaming, isOpen, setIsOpen, isExplicitlyClosed]);
@@ -124,9 +125,12 @@ export const Reasoning = memo(
 
     const handleOpenChange = useCallback(
       (newOpen: boolean) => {
+        if (!newOpen && isStreaming) {
+          userClosedRef.current = true;
+        }
         setIsOpen(newOpen);
       },
-      [setIsOpen]
+      [isStreaming, setIsOpen]
     );
 
     const contextValue = useMemo(
@@ -205,6 +209,7 @@ export type ReasoningContentProps = ComponentProps<
   children: string;
 };
 
+const code = createCodePlugin({ themes: ["github-light", "github-dark-default"] });
 const streamdownPlugins = { cjk, code, math, mermaid };
 
 export const ReasoningContent = memo(

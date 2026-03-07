@@ -91,7 +91,7 @@ async def _find_vault_id(client: Client, name: str) -> str:
             name,
             getattr(only, "title", getattr(only, "id", "<unknown>")),
         )
-        return getattr(only, "id")
+        return only.id
 
     available = ", ".join(str(getattr(v, "title", getattr(v, "id", "<unknown>"))) for v in vaults)
     raise RuntimeError(f"Vault '{name}' not found (available: {available})")

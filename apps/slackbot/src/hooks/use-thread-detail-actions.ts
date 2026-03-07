@@ -63,6 +63,7 @@ export function useThreadDetailActions({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slack_thread_key: threadKey }),
+        signal: AbortSignal.timeout(30_000),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.error) {

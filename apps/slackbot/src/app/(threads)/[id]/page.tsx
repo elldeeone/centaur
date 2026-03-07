@@ -1,14 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import type { UIMessage } from "ai";
 import { LoaderCircle } from "lucide-react";
-import { ActivityFeed } from "@/components/thread/activity-feed";
+import { ActivityFeedV2 } from "@/components/thread/activity-feed-v2";
 import { SubagentDetailPanel } from "@/components/thread/subagent-detail-panel";
 import type { SubagentStep } from "@/lib/describe";
 import { ThreadDetailTelemetry } from "@/components/thread/thread-detail-telemetry";
+
 import { MessageInput } from "@/components/thread/message-input";
 import { QuickActionChips } from "@/components/thread/quick-action-chips";
 import { ConnectivityBanner } from "@/components/thread/connectivity-banner";
@@ -23,6 +25,7 @@ import { useThreadDetailShortcuts } from "@/hooks/use-thread-detail-shortcuts";
 import { useElapsed } from "@/hooks/use-elapsed";
 import { useStableStatus } from "@/hooks/use-stable-status";
 import { isActiveState, isRunningState } from "@/lib/thread-ordering";
+import { asRecord, asString } from "@/lib/parse-utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useThreadList } from "@/hooks/use-thread-list";
@@ -36,6 +39,7 @@ import {
   parseEntrySource,
   detailHrefWithEntrySource,
 } from "@/lib/thread-navigation";
+import { BASE } from "@/lib/constants";
 
 const ThreadInfoSheet = dynamic(
   () => import("@/components/thread/thread-info-sheet").then((module) => module.ThreadInfoSheet),
@@ -59,6 +63,20 @@ export default function ThreadDetailPage() {
       return rawThreadKey;
     }
   }, [rawThreadKey]);
+
+  const [initialMessages, setInitialMessages] = useState<UIMessage[] | undefined>(undefined);
+  const initialMessagesFetchedRef = useRef(false);
+  useEffect(() => {
+    if (!threadKey || initialMessagesFetchedRef.current) return;
+    initialMessagesFetchedRef.current = true;
+    void fetch(`${BASE}/api/messages?key=${encodeURIComponent(threadKey)}`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((msgs: UIMessage[]) => {
+        if (msgs.length > 0) setInitialMessages(msgs);
+      })
+      .catch(() => {});
+  }, [threadKey]);
+
   const {
     thread,
     error,
@@ -69,8 +87,9 @@ export default function ThreadDetailPage() {
     isFetchingThread,
     chatStatus,
     sendThreadMessage,
-    liveSteps,
-  } = useThreadStream(threadKey);
+    chatMessages,
+    handoffTarget,
+  } = useThreadStream(threadKey, undefined, initialMessages);
   const humanName = thread?.thread_name || threadName(threadKey);
   const [infoOpen, setInfoOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -94,20 +113,7 @@ export default function ThreadDetailPage() {
     setSelectedSubagentKey(null);
     setSelectedSubagentSnapshot(null);
   }, [threadKey]);
-  const liveSelectedSubagent = useMemo(() => {
-    if (!selectedSubagentKey) return null;
-    const match = liveSteps.find(
-      (step): step is SubagentStep =>
-        step.type === "subagent" && subagentSelectionKey(step) === selectedSubagentKey,
-    );
-    return match ?? null;
-  }, [liveSteps, selectedSubagentKey]);
-  useEffect(() => {
-    if (liveSelectedSubagent) {
-      setSelectedSubagentSnapshot(liveSelectedSubagent);
-    }
-  }, [liveSelectedSubagent]);
-  const resolvedSelectedSubagent = liveSelectedSubagent ?? selectedSubagentSnapshot;
+  const resolvedSelectedSubagent = selectedSubagentSnapshot;
   const entrySource = parseEntrySource(searchParams.get("entry_source"));
   const entryAnchor = parseEntryAnchor(searchParams.get("entry_anchor"));
   const sourceLabel = entrySourceLabel(entrySource);
@@ -118,18 +124,24 @@ export default function ThreadDetailPage() {
   const isRunning = thread ? isActiveState(thread.state) : false;
   const isStreaming = chatStatus === "submitted" || chatStatus === "streaming";
   const canInterrupt = !!thread && !isEngineer && isRunningState(thread.state);
-  const activeTurnStartedAt =
-    thread && thread.turns.length > 0 ? thread.turns[thread.turns.length - 1]?.started_at : null;
-  const elapsedAnchor = isRunning ? activeTurnStartedAt : thread?.last_activity;
+  const elapsedAnchor = thread?.last_activity ?? null;
   const liveElapsed = useElapsed(elapsedAnchor, Boolean(isRunning));
   const stableStatus = useStableStatus(agentStatus);
-  const phases = liveSteps.flatMap((step) => (step.type === "phase" ? [step.phase] : []));
+  const phases = useMemo(() => {
+    const result: string[] = [];
+    for (const msg of chatMessages) {
+      for (const part of msg.parts ?? []) {
+        const p = part as Record<string, unknown>;
+        if (asString(p.type) === "data-phase-progress") {
+          const phase = asString(asRecord(p.data).phase);
+          if (phase) result.push(phase);
+        }
+      }
+    }
+    return result;
+  }, [chatMessages]);
   const activePhase = phases.length > 0 ? phases[phases.length - 1] : null;
-  const turnDurationsById = useMemo(() => {
-    if (!thread) return {};
-    return Object.fromEntries(thread.turns.map((turn) => [turn.turn_id, turn.duration_s]));
-  }, [thread?.turns]);
-  const latestUserMessage = thread?.turns[thread.turns.length - 1]?.user_message?.trim() ?? "";
+  const latestUserMessage = thread?.last_user_message?.trim() ?? "";
   const retryMessage = latestUserMessage || "Please retry the previous request.";
   const slackDeepLink = useMemo(() => {
     if (!thread?.slack_thread_key?.startsWith("slack:")) return null;
@@ -195,6 +207,13 @@ export default function ThreadDetailPage() {
       document.title = previousTitle;
     };
   }, [humanName, thread]);
+
+  useEffect(() => {
+    if (handoffTarget) {
+      toast("Agent handed off to new thread");
+      router.push(`/${encodeURIComponent(handoffTarget)}`);
+    }
+  }, [handoffTarget, router]);
 
   if (error && !thread) {
     return (
@@ -270,18 +289,11 @@ export default function ThreadDetailPage() {
 
       {/* Activity feed - the only scrollable area */}
       <div className="mx-auto flex min-h-0 w-full max-w-[960px] flex-1 flex-col px-1 py-1 md:px-3 md:py-2.5">
-        <ThreadDetailTelemetry
-          state={thread.state}
-          turnCount={thread.turns.length}
-          elapsed={liveElapsed}
-          activePhase={activePhase}
-        />
-        <ActivityFeed
-          steps={liveSteps}
+        <ActivityFeedV2
+          messages={chatMessages}
           state={thread.state}
           isStreaming={isStreaming}
           participants={thread.participants}
-          turnDurationsById={turnDurationsById}
           compactMode={compactMode}
           onSelectSubagent={handleSelectSubagent}
           selectedSubagentKey={selectedSubagentKey}

@@ -11,19 +11,6 @@ export type ThreadTokenUsage = {
   models: string[];
 };
 
-export type Turn = {
-  turn_id: number;
-  user_message: string;
-  events: Record<string, unknown>[];
-  result: string;
-  user_id?: string;
-  started_at: number | null;
-  finished_at: number | null;
-  exit_code: number | null;
-  timed_out: boolean;
-  duration_s: number;
-};
-
 export type Participant = {
   id: string;
   name: string;
@@ -33,15 +20,12 @@ export type Participant = {
 
 export type ThreadDetail = {
   slack_thread_key: string;
-  container_id: string;
   harness: Harness;
-  engine?: "amp" | "claude-code" | "codex" | "pi-mono";
-  persona?: string | null;
-  agent_thread_id: string | null;
   state: ThreadState;
   created_at: number;
   last_activity: number;
-  turns: Turn[];
+  message_count: number;
+  last_user_message: string | null;
   token_usage: ThreadTokenUsage | null;
   thread_name: string | null;
   participants?: Participant[];
@@ -49,16 +33,11 @@ export type ThreadDetail = {
 
 export type ThreadSummary = {
   slack_thread_key: string;
-  container_id: string;
   harness: Harness;
-  engine?: "amp" | "claude-code" | "codex" | "pi-mono";
-  persona?: string | null;
-  agent_thread_id: string | null;
   state: ThreadState;
   created_at: number;
   last_activity: number;
   turn_count: number;
-  last_result: string;
   first_message?: string;
   last_user_message?: string;
   thread_name: string | null;

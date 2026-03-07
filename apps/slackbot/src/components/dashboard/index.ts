@@ -43,4 +43,9 @@ export type {
   AvatarCellDef,
   StackedTextCellDef,
   LinkCellDef,
+  DataSource,
+  InlineDataSource,
+  SqlDataSource,
+  ApiDataSource,
+  DataSourceMixin,
 } from "./types";

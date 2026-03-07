@@ -12,8 +12,11 @@ import type {
   PieChartProps,
 } from "./dashboard-types";
 
+import type { DataSource } from "@/components/dashboard/types";
+
 const VALID_FORMATS: Set<string> = new Set([
   "currency",
+  "compact-currency",
   "percent",
   "number",
   "date",
@@ -46,6 +49,30 @@ function parseColumns(raw: string): ColumnDef[] {
 
 function parseBool(raw: string): boolean {
   return raw.toLowerCase() === "true";
+}
+
+function parseDataSource(kv: Record<string, string>): DataSource | undefined {
+  const dsType = kv["dataSource"];
+  if (!dsType) return undefined;
+
+  if (dsType === "sql" && kv["query"]) {
+    const ds: DataSource = { type: "sql", query: kv["query"] };
+    if (kv["refreshInterval"]) ds.refreshInterval = Number(kv["refreshInterval"]);
+    if (kv["target"]) (ds as { target: string }).target = kv["target"];
+    return ds;
+  }
+
+  if (dsType === "api" && kv["endpoint"]) {
+    const ds: DataSource = { type: "api", endpoint: kv["endpoint"] };
+    if (kv["refreshInterval"]) ds.refreshInterval = Number(kv["refreshInterval"]);
+    return ds;
+  }
+
+  if (dsType === "inline") {
+    return { type: "inline" };
+  }
+
+  return undefined;
 }
 
 function parsePipeTable(raw: string): Record<string, unknown>[] | null {
@@ -178,6 +205,8 @@ function parseComponentSection(section: string): DashboardComponent | null {
           result.defaultSort = { key, direction };
         }
       }
+      const dtDs = parseDataSource(kv);
+      if (dtDs) (result as Record<string, unknown>).dataSource = dtDs;
       return result;
     }
 
@@ -190,6 +219,8 @@ function parseComponentSection(section: string): DashboardComponent | null {
         format: parseCellFormat(kv["format"] ?? "number"),
       };
       if (kv["delta"] !== undefined) result.delta = Number(kv["delta"]);
+      const kpiDs = parseDataSource(kv);
+      if (kpiDs) (result as Record<string, unknown>).dataSource = kpiDs;
       return result;
     }
 
@@ -204,6 +235,8 @@ function parseComponentSection(section: string): DashboardComponent | null {
       };
       if (kv["xFormat"]) result.xFormat = parseCellFormat(kv["xFormat"]);
       if (kv["yFormat"]) result.yFormat = parseCellFormat(kv["yFormat"]);
+      const lcDs = parseDataSource(kv);
+      if (lcDs) (result as Record<string, unknown>).dataSource = lcDs;
       return result;
     }
 
@@ -216,6 +249,8 @@ function parseComponentSection(section: string): DashboardComponent | null {
         valueKey: kv["valueKey"],
         data: data ?? [],
       };
+      const bcDs = parseDataSource(kv);
+      if (bcDs) (result as Record<string, unknown>).dataSource = bcDs;
       return result;
     }
 
@@ -228,6 +263,8 @@ function parseComponentSection(section: string): DashboardComponent | null {
         valueKey: kv["valueKey"],
         data: data ?? [],
       };
+      const pcDs = parseDataSource(kv);
+      if (pcDs) (result as Record<string, unknown>).dataSource = pcDs;
       return result;
     }
 

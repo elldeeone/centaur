@@ -30,6 +30,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`dark ${GeistSans.variable} ${GeistMono.variable}`}>
       <body suppressHydrationWarning className="m-0 bg-background text-foreground antialiased font-sans fixed inset-0 overflow-hidden">
+        {/* Streamdown code-block token colors — Tailwind v4 scanner cannot extract
+            classes with nested var()/commas, so we apply the token colors via plain CSS. */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: [
+              '[data-streamdown="code-block-body"] span[style]{color:var(--sdm-c,inherit)}',
+              '.dark [data-streamdown="code-block-body"] span[style]{color:var(--shiki-dark,var(--sdm-c,inherit))}',
+            ].join("\n"),
+          }}
+        />
         <TooltipProvider delayDuration={300} skipDelayDuration={100}>
           <HapticsProvider>
             <a

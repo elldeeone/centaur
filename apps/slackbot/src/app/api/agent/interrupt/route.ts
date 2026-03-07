@@ -1,4 +1,4 @@
-/** Proxy POST /api/agent/interrupt -> FastAPI /agent/interrupt */
+/** Proxy POST /api/agent/interrupt -> FastAPI /pipe/stop */
 
 import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
 
@@ -11,31 +11,23 @@ export async function POST(request: Request) {
   if (!slackThreadKey) {
     return Response.json(
       { error: "Missing slack_thread_key" },
-      { status: 400, headers: { "Cache-Control": "no-store" } }
+      { status: 400, headers: { "Cache-Control": "no-store" } },
     );
   }
 
   try {
-    const upstream = await resilientFetch(`${API_URL}/agent/interrupt`, {
+    const upstream = await resilientFetch(`${API_URL}/pipe/stop`, {
       method: "POST",
-      body: JSON.stringify({ slack_thread_key: slackThreadKey }),
+      body: JSON.stringify({ thread_key: slackThreadKey }),
       timeoutMs: 30_000,
       signal: request.signal,
     });
 
-    const text = await upstream.text();
-    if (!upstream.ok) {
-      return Response.json(
-        { error: `Interrupt failed: ${upstream.status}`, detail: text.slice(0, 500) },
-        { status: upstream.status, headers: { "Cache-Control": "no-store" } }
-      );
-    }
-
-    try {
-      return Response.json(JSON.parse(text), { headers: { "Cache-Control": "no-store" } });
-    } catch {
-      return Response.json({ status: "ok" }, { headers: { "Cache-Control": "no-store" } });
-    }
+    const data = await upstream.json();
+    return Response.json(data, {
+      status: upstream.ok ? 200 : upstream.status,
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (err) {
     const status = err instanceof ApiError ? (err.status ?? 502) : 502;
     return Response.json(

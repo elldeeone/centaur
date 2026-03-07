@@ -158,7 +158,7 @@ export function ThreadDetailHeader({
           <ParticipantAvatars participants={thread.participants} size={20} />
         </span>
         <span className="hidden text-xs text-muted-foreground lg:inline">
-          {thread.turns.length} turn{thread.turns.length === 1 ? "" : "s"}
+          {thread.message_count} msg{thread.message_count === 1 ? "" : "s"}
         </span>
         {tokenTicker ? (
           <Tooltip>
@@ -211,9 +211,6 @@ export function ThreadDetailHeader({
             <div className="space-y-2 text-xs">
               <div className="font-semibold text-foreground">Debug IDs</div>
               <div className="font-mono text-muted-foreground break-all">{thread.slack_thread_key}</div>
-              {thread.agent_thread_id ? (
-                <div className="font-mono text-muted-foreground break-all">{thread.agent_thread_id}</div>
-              ) : null}
             </div>
           </PopoverContent>
         </Popover>

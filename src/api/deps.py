@@ -8,9 +8,7 @@ import threading
 import time
 from typing import Annotated
 
-import asyncpg
-from fastapi import Depends, Header, HTTPException, Request
-from openai import AsyncOpenAI
+from fastapi import Header, HTTPException, Request
 
 from shared.tool_sdk import _sm_read
 
@@ -32,7 +30,7 @@ _NGINX_RESOLVE_TTL_S = max(5, int(os.environ.get("NGINX_RESOLVE_TTL_S", "60")))
 _nginx_ips_cache_lock = threading.Lock()
 _nginx_ips_cache: tuple[str, ...] = tuple(sorted(_NGINX_TRUSTED_IPS))
 _nginx_ips_cache_expires_at = 0.0
-_SANDBOX_ALLOWED_PATH_PREFIXES = ("/agent", "/tools", "/api/search", "/api/query")
+_SANDBOX_ALLOWED_PATH_PREFIXES = ("/pipe", "/tools")
 _TRUSTED_SERVICE_HOSTS = tuple(
     host.strip() for host in os.environ.get("TRUSTED_SERVICE_HOSTS", "nginx,slackbot,auth").split(",") if host.strip()
 )
@@ -135,15 +133,6 @@ def _is_sandbox_allowed_path(path: str) -> bool:
     return path.startswith(_SANDBOX_ALLOWED_PATH_PREFIXES)
 
 
-async def get_pool(request: Request) -> asyncpg.Pool:
-    return request.app.state.pool
-
-
-async def get_embedding_service(
-    pool: Annotated[asyncpg.Pool, Depends(get_pool)],
-) -> EmbeddingService:
-    return EmbeddingService(pool=pool)
-
 
 async def verify_api_key(
     request: Request,
@@ -209,16 +198,3 @@ async def verify_ui_or_api_key(
         return "nginx"
 
     return await verify_api_key(request, x_api_key)
-
-
-class EmbeddingService:
-    def __init__(self, pool: asyncpg.Pool) -> None:
-        self.pool = pool
-        self.client = AsyncOpenAI(api_key=_sm_read("OPENAI_API_KEY") or "")
-
-    async def embed(self, text: str) -> list[float]:
-        resp = await self.client.embeddings.create(
-            input=text,
-            model="text-embedding-3-small",
-        )
-        return resp.data[0].embedding

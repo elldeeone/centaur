@@ -11,6 +11,7 @@ import { DetailKV } from "./detail-kv";
 import { Timeline } from "./timeline";
 import { PeopleList } from "./people-list";
 import { formatValue } from "./format-value";
+import { LiveDataWrapper } from "./live-data-wrapper";
 
 const AVATAR_COLORS = [
   "var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)",
@@ -157,65 +158,85 @@ export const RenderNode = memo(function RenderNode({ node }: { node: ComponentNo
     // ── Data ──
     case "data-table":
       return (
-        <DataTable
-          columns={node.columns}
-          data={node.data as Record<string, unknown>[]}
-          defaultSort={node.defaultSort}
-          searchable={node.searchable}
-          title={node.title}
-          pageSize={node.pageSize}
-          virtualizeThreshold={node.virtualizeThreshold}
-          compact={node.compact}
-          striped={node.striped}
-          stickyHeader={node.stickyHeader}
-        />
+        <LiveDataWrapper dataSource={node.dataSource} initialData={node.data}>
+          {(data) => (
+            <DataTable
+              columns={node.columns}
+              data={data}
+              defaultSort={node.defaultSort}
+              searchable={node.searchable}
+              title={node.title}
+              pageSize={node.pageSize}
+              virtualizeThreshold={node.virtualizeThreshold}
+              compact={node.compact}
+              striped={node.striped}
+              stickyHeader={node.stickyHeader}
+            />
+          )}
+        </LiveDataWrapper>
       );
 
     case "kpi-card":
       return (
-        <KPICard
-          label={node.label}
-          value={node.value}
-          format={node.format}
-          delta={node.delta}
-          sparkline={node.sparkline}
-        />
+        <LiveDataWrapper dataSource={node.dataSource} initialData={[]}>
+          {(data) => (
+            <KPICard
+              label={node.label}
+              value={data[0] ? Number(Object.values(data[0])[0]) : node.value}
+              format={node.format}
+              delta={node.delta}
+              sparkline={node.sparkline}
+            />
+          )}
+        </LiveDataWrapper>
       );
 
     case "line-chart":
       return (
-        <DashboardLineChart
-          title={node.title}
-          xKey={node.xKey}
-          yKeys={node.yKeys}
-          data={node.data as Record<string, unknown>[]}
-          xFormat={node.xFormat}
-          yFormat={node.yFormat}
-          height={node.height}
-        />
+        <LiveDataWrapper dataSource={node.dataSource} initialData={node.data}>
+          {(data) => (
+            <DashboardLineChart
+              title={node.title}
+              xKey={node.xKey}
+              yKeys={node.yKeys}
+              data={data}
+              xFormat={node.xFormat}
+              yFormat={node.yFormat}
+              height={node.height}
+            />
+          )}
+        </LiveDataWrapper>
       );
 
     case "bar-chart":
       return (
-        <DashboardBarChart
-          title={node.title}
-          categoryKey={node.categoryKey}
-          valueKey={node.valueKey}
-          data={node.data as Record<string, unknown>[]}
-          height={node.height}
-          horizontal={node.horizontal}
-        />
+        <LiveDataWrapper dataSource={node.dataSource} initialData={node.data}>
+          {(data) => (
+            <DashboardBarChart
+              title={node.title}
+              categoryKey={node.categoryKey}
+              valueKey={node.valueKey}
+              data={data}
+              height={node.height}
+              horizontal={node.horizontal}
+            />
+          )}
+        </LiveDataWrapper>
       );
 
     case "pie-chart":
       return (
-        <DashboardPieChart
-          title={node.title}
-          labelKey={node.labelKey}
-          valueKey={node.valueKey}
-          data={node.data as Record<string, unknown>[]}
-          height={node.height}
-        />
+        <LiveDataWrapper dataSource={node.dataSource} initialData={node.data}>
+          {(data) => (
+            <DashboardPieChart
+              title={node.title}
+              labelKey={node.labelKey}
+              valueKey={node.valueKey}
+              data={data}
+              height={node.height}
+            />
+          )}
+        </LiveDataWrapper>
       );
 
     // ── Domain ──

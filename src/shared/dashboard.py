@@ -5,7 +5,6 @@ from typing import Any
 
 from toon_format import encode as toon_encode
 
-
 _SCALAR_TYPES = (str, int, float, bool)
 
 _DATA_KEY = "data"

@@ -59,23 +59,20 @@ RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace 
     && git config --global push.autoSetupRemote true \
     && git config --global --add safe.directory '*'
 
-# ── Entrypoint + helpers (changes rarely) ───────────────────────────────────
-COPY --chmod=755 entrypoint.sh /entrypoint.sh
+# ── Stable helpers (change rarely → cached) ──────────────────────────────────
 COPY --chmod=755 call.sh /usr/local/bin/call
 COPY --chmod=755 slack-upload.sh /usr/local/bin/slack-upload
 COPY --chmod=755 md2docx.py /usr/local/bin/md2docx
 
-# ── Pi-mono extensions (TODO: wire up pi-plugins/ from repo root) ─────────
-# COPY --chown=agent:agent pi-plugins/system-prompt.ts /home/agent/.pi/agent/extensions/system-prompt.ts
-# COPY --chown=agent:agent pi-plugins/handoff.ts /home/agent/.pi/agent/extensions/handoff.ts
-# COPY --chown=agent:agent pi-plugins/tool-harness.ts /home/agent/.pi/agent/extensions/tool-harness.ts
-# COPY --chown=agent:agent pi-plugins/tools/ /home/agent/.pi/agent/extensions/tools/
+# ── Entrypoint + adapter (change sometimes) ─────────────────────────────────
+COPY --chmod=755 entrypoint.sh /entrypoint.sh
+COPY --chown=agent:agent harness_session.py /home/agent/harness_session.py
 
-# ── System prompts (changes most often — last for best caching) ─────────────
+# ── System prompts (change most often — last for best caching) ──────────────
 COPY --chown=agent:agent SYSTEM_PROMPT.md /home/agent/AGENTS.md
 COPY --chown=agent:agent SYSTEM_PROMPT_ENG.md /home/agent/AGENTS_ENG.md
 COPY --chown=agent:agent SYSTEM_PROMPT_LEGAL.md /home/agent/AGENTS_LEGAL.md
 
 WORKDIR /home/agent
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["bash"]
+CMD ["python3", "/home/agent/harness_session.py"]

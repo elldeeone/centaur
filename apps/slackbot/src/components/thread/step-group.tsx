@@ -72,7 +72,7 @@ const ToolCallItem = memo(function ToolCallItem({ call }: { call: ToolCall }) {
         state={mapToolState(call)}
       />
       <ToolContent>
-        {hasInput ? <ToolInput input={call.input} /> : null}
+        {hasInput ? <ToolInput input={call.input} toolName={call.name} /> : null}
         {sources.length > 0 ? (
           <Sources>
             <SourcesTrigger count={sources.length} />

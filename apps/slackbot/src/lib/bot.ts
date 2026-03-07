@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import { Chat, parseMarkdown, type Root } from "chat";
+import { generateId } from "ai";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createRedisState } from "@chat-adapter/state-redis";
 import { createMemoryState } from "@chat-adapter/state-memory";
@@ -342,7 +343,7 @@ function createBot() {
     attachments?: Array<{ url?: string; name?: string }>,
     userId?: string,
   ) {
-    const requestId = crypto.randomUUID().slice(0, 8);
+    const requestId = generateId();
     const rawThreadKey = thread.id;
     const threadKey = normalizeThreadKey(rawThreadKey);
     const previous = threadConfigs.get(threadKey);

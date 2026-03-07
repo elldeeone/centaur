@@ -4,14 +4,13 @@ RUN corepack enable pnpm
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies (cached independently of source changes)
 COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
 
-# Copy source
+# Copy source and build
+FROM base AS builder
 COPY . .
-
-# Build
 RUN pnpm build
 
 # Production
@@ -22,8 +21,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # Next.js standalone output includes everything needed
-COPY --from=base /app/.next/standalone ./
-COPY --from=base /app/.next/static ./.next/static
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 COPY entrypoint.sh ./entrypoint.sh
 
 EXPOSE 3001

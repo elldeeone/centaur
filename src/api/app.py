@@ -3,10 +3,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-import ipaddress
 import json
 import os
-import secrets as _secrets
 import sys
 import time
 from collections.abc import AsyncIterator
@@ -20,16 +18,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from api.agent import (
-    clear_shutdown_signal,
-    reap_stale_running_sessions,
-    session_items_snapshot,
-    signal_shutdown,
-)
-from api.deps import _TRUSTED_PREFIXES
-from api.mcp_server import mcp, set_pool, set_tool_manager
-from api.routers import admin, health, query, search, secrets, threads
-from api.routers import agent as agent_router_mod
+from api.pipe_agent import recover_sessions
+from api.routers import admin, health, threads
+from api.routers import pipe_agent as pipe_router_mod
 from shared.config import settings
 from shared.db import close_pool, create_pool
 from shared.tool_manager import ToolManager
@@ -64,7 +55,6 @@ def _warm_tool_caches() -> None:
             slack_tool = tool_manager.tools.get("slack")
             if not slack_tool or not slack_tool.methods:
                 return
-            # Get the client instance from any bound tool method
             client = slack_tool.methods[0].fn.__self__
             client._get_user_cache()
             client.list_bot_channels()
@@ -73,18 +63,6 @@ def _warm_tool_caches() -> None:
             log.warning("slack_cache_warm_failed", error=str(e))
 
     threading.Thread(target=_warm, daemon=True).start()
-
-
-def _recover_agent_sessions() -> None:
-    """Recover agent sessions from Postgres + Docker on startup."""
-    try:
-        from api.agent import get_agent
-
-        agent = get_agent()
-        result = agent.recover_sessions()
-        log.info("agent_sessions_recovered", **result)
-    except Exception as e:
-        log.warning("agent_session_recovery_failed", error=str(e))
 
 
 async def _watch_tools(pm: ToolManager) -> None:
@@ -103,53 +81,20 @@ async def _watch_tools(pm: ToolManager) -> None:
             log.error("tool_auto_reload_failed", error=str(e))
 
 
-async def _run_stale_session_reaper(
-    interval_s: float = 120.0,
-    stale_after_s: int = 600,
-) -> None:
-    while True:
-        await asyncio.sleep(interval_s)
-        try:
-            result = await asyncio.to_thread(reap_stale_running_sessions, stale_after_s)
-            if result.get("reaped"):
-                log.info("agent_session_reaper_reaped", **result)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            log.warning("agent_session_reaper_failed", error=str(e))
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    clear_shutdown_signal()
-    log.info("connecting to database", url=settings.database_url.split("@")[-1])
-    pool = await create_pool(settings.database_url)
-    app.state.pool = pool
-    set_pool(pool)
-    log.info("database pool created")
-    async with mcp.session_manager.run():
-        log.info("mcp session manager started")
-        _warm_tool_caches()
-        await asyncio.to_thread(_recover_agent_sessions)
-        watcher_task = asyncio.create_task(_watch_tools(tool_manager))
-        reaper_task = asyncio.create_task(_run_stale_session_reaper())
-        try:
-            yield
-        finally:
-            watcher_task.cancel()
-            reaper_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await watcher_task
-            with suppress(asyncio.CancelledError):
-                await reaper_task
-    signal_shutdown()
-    for _ in range(20):
-        active = [s for _, s in session_items_snapshot() if s.get("state") == "working"]
-        if not active:
-            break
-        await asyncio.sleep(0.5)
-    await close_pool(pool)
-    log.info("database pool closed")
+    app.state.db_pool = await create_pool(settings.database_url)
+    _warm_tool_caches()
+    result = await recover_sessions()
+    log.info("pipe_sessions_recovered", **result)
+    watcher_task = asyncio.create_task(_watch_tools(tool_manager))
+    try:
+        yield
+    finally:
+        watcher_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await watcher_task
+        await close_pool(app.state.db_pool)
 
 
 app = FastAPI(
@@ -167,67 +112,22 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
-app.include_router(search.router)
-app.include_router(query.router)
-app.include_router(secrets.router)
-app.include_router(threads.router)
-app.include_router(agent_router_mod.router)
+app.include_router(pipe_router_mod.router)
 app.include_router(admin.router)
+app.include_router(threads.router)
 
-# Load tools before creating MCP starlette app
+# Load tools
 _app_root = Path(__file__).resolve().parent.parent.parent
 _tools_dir = Path(os.environ.get("PLUGINS_DIR", _app_root / "tools"))
 
 tool_manager = ToolManager(_tools_dir)
 tool_manager.discover()
-set_tool_manager(tool_manager)
 app.state.tool_manager = tool_manager
 app.include_router(tool_manager.create_rest_router())
-
-_mcp_starlette = mcp.streamable_http_app()
 
 
 def get_tool_manager() -> ToolManager:
     return tool_manager
-
-
-def _is_localhost_ip(client_ip: str) -> bool:
-    if not client_ip:
-        return False
-    try:
-        return ipaddress.ip_address(client_ip).is_loopback
-    except ValueError:
-        return client_ip.startswith(_TRUSTED_PREFIXES)
-
-
-class _MCPAuthMiddleware:
-    """ASGI middleware that validates Bearer token before forwarding to MCP.
-
-    Only localhost is trusted without a token.
-    """
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            request = Request(scope, receive)
-            client_ip = request.client.host if request.client else ""
-            if not _is_localhost_ip(client_ip):
-                token: str | None = None
-                auth = request.headers.get("authorization", "")
-                if auth.lower().startswith("bearer "):
-                    token = auth[7:]
-
-                api_key = _get_api_secret_key()
-                if not api_key or not token or not _secrets.compare_digest(token, api_key):
-                    resp = JSONResponse(
-                        {"detail": "Invalid or missing Bearer token"}, status_code=401
-                    )
-                    await resp(scope, receive, send)
-                    return
-
-        await _mcp_starlette(scope, receive, send)
-
-
-app.mount("/mcp", app=_MCPAuthMiddleware())
 
 
 # ---------------------------------------------------------------------------
@@ -251,10 +151,6 @@ def _get_slack_signing_secret() -> str:
 
 
 def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> tuple[bool, str]:
-    """Verify a Slack request signature (v0 scheme).
-
-    See https://api.slack.com/authentication/verifying-requests-from-slack
-    """
     signing_secret = _get_slack_signing_secret()
     if not signing_secret:
         log.warning("slack_signing_secret_not_set")
@@ -329,7 +225,6 @@ async def proxy_webhooks(request: Request, path: str):
         )
         return JSONResponse({"detail": "Invalid Slack signature"}, status_code=401)
 
-    # Handle Slack URL verification challenge directly
     try:
         payload = json.loads(body)
         if payload.get("type") == "url_verification":
@@ -350,7 +245,9 @@ async def proxy_webhooks(request: Request, path: str):
         log.warning("slack_webhook_upstream_timeout", path=path, target=target)
         return JSONResponse({"detail": "Webhook upstream timeout"}, status_code=504)
     except httpx.RequestError as exc:
-        log.warning("slack_webhook_upstream_unreachable", path=path, target=target, error=str(exc))
+        log.warning(
+            "slack_webhook_upstream_unreachable", path=path, target=target, error=str(exc)
+        )
         return JSONResponse({"detail": "Webhook upstream unavailable"}, status_code=502)
     return Response(
         content=resp.content,

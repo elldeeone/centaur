@@ -26,6 +26,7 @@ htmlcov/
 # Environment
 .env
 .env.local
+.env.remote-backup
 
 # IDE
 .vscode/
@@ -39,6 +40,16 @@ pgdata/
 # Docker
 sandbox/repos/
 tools/agent/repos/*/
+
+# Agent / AI IDE config
+.agents/
+.claude/
+.windsurf/
+skills-lock.json
+
+# Output artifacts
+dogfood-output/
+tool-qa-output/
 
 # OS
 .DS_Store

@@ -12,7 +12,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -20,7 +20,7 @@ import { ThreadStatusTabs } from "@/components/thread/thread-status-tabs";
 import { ThreadSummaryCard } from "@/components/thread/thread-summary-card";
 import { type VisibleThreadStatusFilter } from "@/components/thread/thread-ui-constants";
 import { useThreadList } from "@/hooks/use-thread-list";
-import { useThreadPresence } from "@/hooks/use-thread-presence";
+
 import { cn } from "@/lib/utils";
 import { detailHrefWithEntrySource, nextListQueryString } from "@/lib/thread-navigation";
 import { isRunningState } from "@/lib/thread-ordering";
@@ -129,12 +129,6 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
       setFocusedThreadKey(sortedThreads[0].slack_thread_key);
     }
   }, [focusedThreadKey, selectedThreadKey, sortedThreads]);
-
-  const presenceThreads = useMemo(
-    () => (active && !collapsed ? sortedThreads.filter((thread) => isRunningState(thread.state)).slice(0, 8) : []),
-    [active, collapsed, sortedThreads],
-  );
-  const { liveStatusByThread } = useThreadPresence(presenceThreads);
 
   const activeCount = useMemo(
     () => threads.filter((thread) => isRunningState(thread.state)).length,
@@ -269,23 +263,17 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" onKeyDown={handleListKeyDown}>
-      <div className="border-b border-border/60 bg-background/60 px-4 py-3 backdrop-blur-md">
-        <div className="thread-surface-soft rounded-xl p-3">
+      <div className="border-b border-border/40 px-3 py-3">
         <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold tracking-tight text-foreground text-balance">Threads</h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {activeCount} live agent{activeCount === 1 ? "" : "s"}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold tracking-tight text-foreground">Threads</h2>
+          <div className="flex items-center gap-1.5">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   asChild
-                  variant="outline"
+                  variant="ghost"
                   size="icon-sm"
-                  className="ui-control-icon"
+                  className="size-7"
                   data-touch-target
                 >
                   <Link href="/" onClick={() => onNavigate?.()}>
@@ -295,28 +283,15 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
               </TooltipTrigger>
               <TooltipContent>New Session</TooltipContent>
             </Tooltip>
-            <Button
-              type="button"
-              onClick={() => void refreshThreads()}
-              disabled={isRefreshing || !active}
-              variant="outline"
-              size="xs"
-              className="gap-1.5 min-h-11 md:min-h-8 border-border/80 bg-card/60 px-3 text-sm md:text-xs text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
-              aria-busy={isRefreshing}
-              data-touch-target
-            >
-              <RefreshCw className={cn("size-3", isRefreshing ? "animate-spin" : "")} />
-              {isRefreshing ? "Refreshing…" : "Refresh"}
-            </Button>
             {canToggle ? (
               <Button
                 ref={toggleRef}
                 type="button"
                 onClick={() => onCollapsedChange?.(true)}
                 aria-label="Collapse sidebar"
-                variant="outline"
+                variant="ghost"
                 size="icon-sm"
-                className="ui-control-icon"
+                className="size-7"
                 data-touch-target
               >
                 <ChevronLeft className="size-4" />
@@ -324,44 +299,43 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             ) : null}
           </div>
         </div>
-        <div className="mt-3 relative">
+        <div className="mt-2 relative">
           <label htmlFor={filterId} className="sr-only">
             Filter threads
           </label>
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={searchRef}
             id={filterId}
             name={filterId}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter threads… (/)"
+            placeholder="Filter… (/)"
             autoComplete="off"
-            className="h-10 md:h-9 border-input/80 bg-background/80 pl-9 pr-8 text-sm shadow-none focus-visible:ring-1"
+            className="h-8 rounded-none border-x-0 border-t-0 border-b border-border/40 bg-transparent pl-8 pr-7 text-xs shadow-none focus-visible:ring-0 focus-visible:border-border/60"
           />
-          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border/80 px-2 py-0.5 text-xs font-mono text-muted-foreground">
+          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono text-muted-foreground/50">
             /
           </span>
         </div>
         <ThreadStatusTabs
-          className="mt-3"
+          className="mt-2"
           density="compact"
           value={visibleStatusFilter}
           counts={{ all: counts.all, active: counts.active, error: counts.error }}
           onChange={setStatusFilter}
         />
-        </div>
       </div>
 
       <nav
-        className="thread-sidebar-list thin-scrollbar flex-1 min-h-0 overflow-y-auto px-3 py-3"
+        className="thread-sidebar-list thin-scrollbar flex-1 min-h-0 overflow-y-auto"
         aria-label="Thread list"
         data-thread-list-scroll="true"
       >
         {loading ? (
-          <div className="space-y-3 py-1">
+          <div className="divide-y divide-border/40">
             {[0, 1, 2].map((index) => (
-              <div key={index} className="rounded-lg border border-border/60 bg-card/35 p-3">
+              <div key={index} className="px-3 py-3">
                 <div className="h-3.5 w-5/6 rounded bg-secondary animate-pulse" />
                 <div className="mt-1.5 h-3 w-2/3 rounded bg-secondary animate-pulse" />
                 <div className="mt-1.5 h-3 w-4/5 rounded bg-secondary animate-pulse" />
@@ -386,14 +360,14 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             No threads match your filter.
           </div>
         ) : (
-          <ul className="space-y-3" role="list">
+          <ul className="divide-y divide-border/40" role="list">
             {sortedThreads.map((thread) => {
               const href = detailHrefWithEntrySource(thread.slack_thread_key, {
                 source: "threads",
                 listQuery: sidebarQueryString,
                 anchor: thread.slack_thread_key,
               });
-              const statusSubtitle = liveStatusByThread[thread.slack_thread_key] ?? runningSubtitle(thread);
+              const statusSubtitle = runningSubtitle(thread);
               const isSelected = selectedThreadKey === thread.slack_thread_key;
               const isFocused = focusedThreadKey === thread.slack_thread_key;
 

@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
-import { z } from "zod";
+import { generateId } from "ai";
+import type { UIMessage } from "ai";
 import type { ThreadDetail, ThreadTokenUsage } from "@/lib/types";
 import { BASE } from "@/lib/constants";
 import { AgentThreadTransport } from "@/lib/agent-transport";
-import { stepsFromUiMessages } from "@/lib/chat-steps";
-import { stepsFromTurns } from "@/lib/turn-steps";
 import { isActiveState } from "@/lib/thread-ordering";
-import type { Step } from "@/lib/describe";
-import { mergeSubagentStep, subagentSelectionKey } from "@/lib/subagent-steps";
+import { dataPartSchemas } from "@/lib/data-part-schemas";
 
 type SendRoute = "execute";
 
@@ -87,111 +85,16 @@ function mergeTokenUsageSnapshots(
   };
 }
 
-function maxStepSequence(steps: Step[]): number | undefined {
-  let max = -1;
-  for (const step of steps) {
-    if (typeof step.eventSeq === "number" && step.eventSeq > max) {
-      max = step.eventSeq;
-    }
-  }
-  return max > 0 ? max : undefined;
-}
-
-function stepTurnId(step: Step): number | undefined {
-  if (typeof step.turnId === "number" && Number.isFinite(step.turnId)) {
-    return step.turnId;
-  }
-  const match = step.id.match(/turn-(\d+)/);
-  if (!match) return undefined;
-  const parsed = Number(match[1]);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function compactStepTextKey(text: string): string {
-  return text.trim().replace(/\s+/g, " ").slice(0, 240);
-}
-
-function toolGroupCallKey(step: Extract<Step, { type: "tool-group" }>): string {
-  const ids = step.calls
-    .map((call) => call.id.trim() || call.name.trim())
-    .filter((value) => value.length > 0);
-  if (ids.length > 0) return ids.join("|");
-  return compactStepTextKey(step.summary);
-}
-
-function semanticMergeKey(step: Step): string {
-  const turnId = stepTurnId(step);
-  const seq = step.eventSeq;
-  if (step.type === "phase" && turnId !== undefined) {
-    if (seq !== undefined) return `phase:${turnId}:${seq}:${step.phase}`;
-    return `phase:${turnId}:${step.phase}`;
-  }
-  if (step.type === "user-message" && turnId !== undefined) {
-    return `user:${turnId}:${step.text.trim()}`;
-  }
-  if (step.type === "result" && turnId !== undefined && seq !== undefined) {
-    return `result:${turnId}:${seq}:${compactStepTextKey(step.text)}`;
-  }
-  if (step.type === "thinking" && turnId !== undefined && seq !== undefined) {
-    return `thinking:${turnId}:${seq}:${compactStepTextKey(step.text)}`;
-  }
-  if (step.type === "terminal" && turnId !== undefined && seq !== undefined) {
-    return `terminal:${turnId}:${seq}`;
-  }
-  if (step.type === "error" && turnId !== undefined && seq !== undefined) {
-    return `error:${turnId}:${seq}`;
-  }
-  if (step.type === "system" && turnId !== undefined && seq !== undefined) {
-    return `system:${turnId}:${seq}`;
-  }
-  if (step.type === "file-changes" && turnId !== undefined && seq !== undefined) {
-    return `file:${turnId}:${seq}`;
-  }
-  if (step.type === "subagent") {
-    return `subagent:${subagentSelectionKey(step)}`;
-  }
-  if (step.type === "diff" && turnId !== undefined && seq !== undefined) {
-    return `diff:${turnId}:${seq}`;
-  }
-  if (step.type === "tool-group" && turnId !== undefined && seq !== undefined) {
-    return `tool:${turnId}:${seq}:${toolGroupCallKey(step)}`;
-  }
-  if (step.type === "context-group") {
-    if (turnId !== undefined) return `context:${turnId}`;
-    return `context:${step.id}`;
-  }
-  return `id:${step.id}`;
-}
-
-function mergeStepsPreferLive(historical: Step[], live: Step[]): Step[] {
-  const mergedById = new Map<string, Step>();
-  for (const step of historical) {
-    mergedById.set(semanticMergeKey(step), step);
-  }
-  for (const step of live) {
-    const key = semanticMergeKey(step);
-    const existing = mergedById.get(key);
-    if (existing?.type === "subagent" && step.type === "subagent") {
-      mergedById.set(key, mergeSubagentStep(existing, step));
-      continue;
-    }
-    mergedById.set(key, step);
-  }
-  const indexed = Array.from(mergedById.values()).map((step, index) => ({ step, index }));
-  indexed.sort((a, b) => {
-    const seqA = a.step.eventSeq ?? Number.MAX_SAFE_INTEGER;
-    const seqB = b.step.eventSeq ?? Number.MAX_SAFE_INTEGER;
-    if (seqA !== seqB) return seqA - seqB;
-    return a.index - b.index;
-  });
-  return indexed.map((entry) => entry.step);
-}
-
-export function useThreadStream(threadKey: string, initialThread?: Partial<ThreadDetail> | null) {
+export function useThreadStream(
+  threadKey: string,
+  initialThread?: Partial<ThreadDetail> | null,
+  initialMessages?: UIMessage[],
+) {
   const [thread, setThread] = useState<ThreadDetail | null>(() => {
     if (!initialThread) return null;
     return {
-      turns: [],
+      message_count: 0,
+      last_user_message: null,
       participants: [],
       token_usage: null,
       ...initialThread,
@@ -205,97 +108,20 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
   const fetchInFlightRef = useRef(0);
   const fetchThreadRef = useRef<(() => Promise<boolean>) | null>(null);
   const [reconnectExhausted, setReconnectExhausted] = useState(false);
+  const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
   const fetchAbortRef = useRef<AbortController | null>(null);
   const fetchSeqRef = useRef(0);
   const transport = useMemo(() => new AgentThreadTransport(threadKey), [threadKey]);
 
   const chat = useChat({
     id: `thread-${threadKey}`,
+    generateId,
     transport,
+    messages: initialMessages,
     // Don't auto-resume — we control when to connect based on thread state
     resume: false,
     experimental_throttle: 80,
-    dataPartSchemas: {
-      "agent-status": z.object({ text: z.string() }),
-      "phase-progress": z.object({
-        phase: z.string(),
-        turn_id: z.number(),
-        event_seq: z.number().nullable().optional(),
-      }),
-      "file-changes": z.object({
-        changes: z.array(z.object({ path: z.string(), kind: z.string() })),
-        event_seq: z.number().nullable().optional(),
-      }),
-      "shell-command": z.object({
-        command: z.string(),
-        output: z.unknown().optional(),
-        exitCode: z.number().nullable().optional(),
-        status: z.string().nullable().optional(),
-        event_seq: z.number().nullable().optional(),
-      }),
-      "subagent": z.object({
-        subagent_id: z.string().nullable().optional(),
-        phase: z.string().nullable().optional(),
-        status: z.string(),
-        name: z.string().nullable().optional(),
-        summary: z.string().nullable().optional(),
-        error: z.string().nullable().optional(),
-        activity: z.string().nullable().optional(),
-        tool_name: z.string().nullable().optional(),
-        branch_index: z.number().nullable().optional(),
-        total_branches: z.number().nullable().optional(),
-        completed: z.number().nullable().optional(),
-        acceptable: z.union([z.number(), z.boolean()]).nullable().optional(),
-        failed: z.number().nullable().optional(),
-        completed_count: z.number().nullable().optional(),
-        acceptable_count: z.number().nullable().optional(),
-        failed_count: z.number().nullable().optional(),
-        is_acceptable: z.boolean().nullable().optional(),
-        turns: z.number().nullable().optional(),
-        tool_calls: z.number().nullable().optional(),
-        duration_s: z.number().nullable().optional(),
-        max_parallel: z.number().nullable().optional(),
-        input_tokens: z.number().nullable().optional(),
-        output_tokens: z.number().nullable().optional(),
-        total_tokens: z.number().nullable().optional(),
-        cost_usd: z.number().nullable().optional(),
-        model: z.string().nullable().optional(),
-        event_seq: z.number().nullable().optional(),
-      }),
-      "user-message": z.object({
-        id: z.string(),
-        turn_id: z.number(),
-        text: z.string(),
-        source: z.string().optional(),
-        user_id: z.string().nullable().optional(),
-        created_at: z.string().optional(),
-        event_seq: z.number().nullable().optional(),
-      }),
-      "context-message": z.object({
-        id: z.string(),
-        turn_id: z.number(),
-        text: z.string(),
-        source: z.string().optional(),
-        user_id: z.string().nullable().optional(),
-        created_at: z.string().optional(),
-        event_seq: z.number().nullable().optional(),
-      }),
-      "system-event": z.object({
-        title: z.string(),
-        text: z.string(),
-        tone: z.enum(["info", "warn"]).optional(),
-        event_seq: z.number().nullable().optional(),
-      }),
-      "token-usage": z.object({
-        input_tokens: z.number().nullable().optional(),
-        output_tokens: z.number().nullable().optional(),
-        total_tokens: z.number(),
-        cost_usd: z.number().nullable().optional(),
-        quality: z.enum(["authoritative", "estimated"]).optional(),
-        breakdown: z.enum(["known", "unknown"]).optional(),
-        models: z.array(z.string()).optional(),
-      }),
-    },
+    dataPartSchemas,
     onData: (part) => {
       if (part.type === "data-agent-status") {
         const data = part.data as { text?: string };
@@ -310,10 +136,16 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
             token_usage: mergeTokenUsageSnapshots(prev.token_usage, nextTokenUsage),
           };
         });
+      } else if (part.type === "data-handoff") {
+        const data = part.data as { new_thread_key: string; follow: boolean };
+        if (data.follow && data.new_thread_key) {
+          setHandoffTarget(data.new_thread_key);
+        }
       }
     },
     onFinish: () => {
       setAgentStatus(null);
+
       const refetch = fetchThreadRef.current;
       if (refetch) {
         void refetch();
@@ -368,8 +200,9 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
         setError(message);
         return false;
       }
+      const detail = data as ThreadDetail;
       setThread((prev) => ({
-        ...(data as ThreadDetail),
+        ...detail,
         token_usage: mergeTokenUsageSnapshots(
           prev?.token_usage ?? null,
           parseTokenUsage((data as { token_usage?: unknown }).token_usage),
@@ -421,11 +254,12 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
 
     setThread(
       initialThread
-        ? ({ turns: [], participants: [], token_usage: null, ...initialThread } as ThreadDetail)
+        ? ({ message_count: 0, last_user_message: null, participants: [], token_usage: null, ...initialThread } as ThreadDetail)
         : null,
     );
     setError(null);
     setAgentStatus(null);
+    setHandoffTarget(null);
     streamAttachedRef.current = false;
     setReconnectExhausted(false);
 
@@ -532,32 +366,6 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
     [chat.sendMessage],
   );
 
-  // Steps from Postgres turns (historical data)
-  const historicalSteps = useMemo(
-    () => (thread?.turns?.length ? stepsFromTurns(thread.turns) : []),
-    [thread?.turns],
-  );
-
-  // Steps from live SSE stream (only populated when connected)
-  const liveStreamSteps = useMemo(() => stepsFromUiMessages(chat.messages), [chat.messages]);
-
-  const shouldPreferLiveSteps = useMemo(() => {
-    if (liveStreamSteps.length === 0) return false;
-    const historicalMax = maxStepSequence(historicalSteps);
-    if (historicalMax === undefined) return true;
-    const liveMax = maxStepSequence(liveStreamSteps);
-    if (liveMax === undefined) return liveStreamSteps.length >= historicalSteps.length;
-    return liveMax >= historicalMax;
-  }, [historicalSteps, liveStreamSteps]);
-
-  // Merge: prefer live stream only once replay catches up.
-  const steps: Step[] = useMemo(() => {
-    if (shouldPreferLiveSteps) {
-      return mergeStepsPreferLive(historicalSteps, liveStreamSteps);
-    }
-    return historicalSteps;
-  }, [historicalSteps, liveStreamSteps, shouldPreferLiveSteps]);
-
   return {
     thread,
     error,
@@ -568,6 +376,7 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
     isFetchingThread,
     chatStatus: chat.status,
     sendThreadMessage,
-    liveSteps: steps,
+    chatMessages: chat.messages,
+    handoffTarget,
   };
 }

@@ -141,6 +141,7 @@ export interface DataTableNode {
   compact?: boolean; // denser row height
   striped?: boolean; // alternating row colors, default true
   stickyHeader?: boolean; // default true
+  dataSource?: DataSource;
 }
 
 export interface KPICardNode {
@@ -150,6 +151,7 @@ export interface KPICardNode {
   format: CellFormat;
   delta?: number;
   sparkline?: number[]; // optional inline sparkline
+  dataSource?: DataSource;
 }
 
 export interface LineChartNode {
@@ -161,6 +163,7 @@ export interface LineChartNode {
   xFormat?: CellFormat;
   yFormat?: CellFormat;
   height?: number;
+  dataSource?: DataSource;
 }
 
 export interface BarChartNode {
@@ -171,6 +174,7 @@ export interface BarChartNode {
   data: readonly Record<string, unknown>[];
   height?: number;
   horizontal?: boolean;
+  dataSource?: DataSource;
 }
 
 export interface PieChartNode {
@@ -180,6 +184,7 @@ export interface PieChartNode {
   valueKey: string;
   data: readonly Record<string, unknown>[];
   height?: number;
+  dataSource?: DataSource;
 }
 
 // New domain components
@@ -265,6 +270,32 @@ export interface DashboardSpec {
   title: string;
   layout: "single" | "grid-2" | "grid-3";
   components: ComponentNode[];
+}
+
+// --- Data source types (live polling) ---
+export interface InlineDataSource {
+  type: "inline";
+}
+
+export interface SqlDataSource {
+  type: "sql";
+  query: string;
+  refreshInterval?: number; // seconds between polls (0 or absent = static)
+  target?: "internal" | "allium" | "bigquery";
+}
+
+export interface ApiDataSource {
+  type: "api";
+  endpoint: string;
+  params?: Record<string, string>;
+  refreshInterval?: number;
+}
+
+export type DataSource = InlineDataSource | SqlDataSource | ApiDataSource;
+
+// --- Data source mixin for data components ---
+export interface DataSourceMixin {
+  dataSource?: DataSource;
 }
 
 // --- Backward compatibility aliases ---

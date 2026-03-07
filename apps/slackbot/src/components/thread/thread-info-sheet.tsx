@@ -241,7 +241,7 @@ export function ThreadInfoSheet({
             <Stat label="Model">{modelList}</Stat>
             <Stat label="Usage">{usageConfidence}</Stat>
             <Stat label="Split">{breakdownLabel}</Stat>
-            <Stat label="Turns">{thread.turns.length}</Stat>
+            <Stat label="Messages">{thread.message_count}</Stat>
           </dl>
 
           {thread.participants && thread.participants.length > 0 && (

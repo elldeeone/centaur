@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { createIdGenerator } from "ai";
 import { Menu, MessageSquarePlus } from "lucide-react";
 import { toast } from "sonner";
 import { MessageInput } from "@/components/thread/message-input";
@@ -14,6 +15,7 @@ export default function NewSessionPage() {
   const { openMobileSidebar } = useThreadLayout();
   const { trigger } = useHaptics();
   const [sending, setSending] = useState(false);
+  const generateThreadId = useMemo(() => createIdGenerator({ prefix: "ui", size: 16 }), []);
 
   const handleSend = useCallback(
     async (message: string) => {
@@ -21,7 +23,7 @@ export default function NewSessionPage() {
       if (!text || sending) return;
       setSending(true);
 
-      const threadKey = `ui:${crypto.randomUUID()}`;
+      const threadKey = `ui:${generateThreadId()}`;
       const encoded = encodeURIComponent(threadKey);
 
       try {
@@ -46,7 +48,7 @@ export default function NewSessionPage() {
         setSending(false);
       }
     },
-    [router, sending],
+    [generateThreadId, router, sending],
   );
 
   return (

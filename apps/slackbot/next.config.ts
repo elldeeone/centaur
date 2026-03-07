@@ -7,7 +7,7 @@ const nextConfig: NextConfig = {
   transpilePackages: ["shiki"],
   experimental: {
     reactCompiler: true,
-    optimizePackageImports: ["lucide-react", "@tanstack/react-virtual"],
+    optimizePackageImports: ["lucide-react", "@tanstack/react-virtual", "shiki"],
   },
   async redirects() {
     return [

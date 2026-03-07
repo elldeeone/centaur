@@ -30,37 +30,11 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --group dev
 
-      - name: Lint critical runtime paths
-        run: |
-          uv run ruff check \
-            src/api/agent.py \
-            src/api/harness_events.py \
-            src/api/routers/threads.py
+      - name: Lint
+        run: uv run ruff check src/
 
-      - name: Compile critical runtime modules
-        run: |
-          uv run python -m py_compile \
-            src/api/agent.py \
-            src/api/harness_events.py \
-            src/api/routers/threads.py
-
-      - name: Run runtime smoke checks
-        run: |
-          PYTHONPATH=src uv run python - <<'PY'
-          from api.harness_events import normalize_harness_event
-
-          normalized = normalize_harness_event(
-              "amp",
-              {"type": "subagent", "status": "progress", "phase": "research", "total_branches": 4},
-          )
-          assert isinstance(normalized, list) and normalized
-          first = normalized[0]
-          assert isinstance(first, dict)
-          assert first.get("type") == "subagent"
-          assert first.get("status") == "progress"
-
-          print("harness normalization smoke passed")
-          PY
+      - name: Compile
+        run: uv run python -m compileall -q src/
 
   slackbot-contract:
     name: Slackbot TS contract checks

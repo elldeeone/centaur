@@ -110,15 +110,88 @@ export const ToolContent = ({ className, ...props }: ToolContentProps) => (
 
 export type ToolInputProps = ComponentProps<"div"> & {
   input: ToolPart["input"];
+  toolName?: string;
 };
 
-export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
-  <div className={cn("overflow-hidden", className)} {...props}>
-    <div className="rounded-md bg-muted/40">
-      <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
+function formatToolInput(input: Record<string, unknown>, toolName?: string): { code: string; language: string } {
+  const name = (toolName ?? "").replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+  const isShell = /^(shell|bash|command_execution)$/.test(name);
+  const isRead = /^(read_file|read|readfile)$/.test(name);
+  const isGrep = /^(grep_search|grep|grepsearch)$/.test(name);
+  const isEdit = /^(str_replace|strreplace|edit_file)$/.test(name);
+  const isWrite = /^(write_file|write|writefile|create_file|createfile)$/.test(name);
+
+  if (isShell && typeof input.command === "string") {
+    const cmd = input.command as string;
+    const cwd = input.working_directory ?? input.cwd;
+    const prefix = cwd ? `$ cd ${cwd}\n$ ` : "$ ";
+    return { code: `${prefix}${cmd}`, language: "bash" };
+  }
+
+  if (isRead && typeof input.path === "string") {
+    return { code: input.path as string, language: "text" };
+  }
+
+  if (isGrep) {
+    const parts: string[] = [];
+    if (input.pattern) parts.push(`pattern: ${input.pattern}`);
+    if (input.path) parts.push(`path: ${input.path}`);
+    if (input.glob) parts.push(`glob: ${input.glob}`);
+    return { code: parts.join("\n"), language: "text" };
+  }
+
+  if (isEdit && typeof input.path === "string") {
+    const parts: string[] = [`file: ${input.path}`];
+    if (input.old_str || input.old) parts.push(`old: ${input.old_str ?? input.old}`);
+    if (input.new_str || input.new) parts.push(`new: ${input.new_str ?? input.new}`);
+    return { code: parts.join("\n"), language: "text" };
+  }
+
+  if (isWrite && typeof input.path === "string") {
+    const content = (input.content ?? input.new_string ?? "") as string;
+    const ext = (input.path as string).split(".").pop() ?? "text";
+    return { code: content, language: ext };
+  }
+
+  if (/^(task|subagent|sub_agent)$/.test(name)) {
+    const parts: string[] = [];
+    if (input.description) parts.push(`Task: ${input.description}`);
+    if (typeof input.prompt === "string") {
+      const prompt = (input.prompt as string).slice(0, 200);
+      parts.push(prompt);
+    }
+    if (parts.length > 0) return { code: parts.join("\n"), language: "text" };
+  }
+
+  if (/^(web_search|websearch|search)$/.test(name) && (input.query || input.search_query)) {
+    return { code: `search: ${input.query ?? input.search_query}`, language: "text" };
+  }
+
+  if (/^(web_fetch|read_web_page|readwebpage)$/.test(name) && typeof input.url === "string") {
+    return { code: input.url as string, language: "text" };
+  }
+
+  if (/^(glob|list_dir|listdir|list)$/.test(name)) {
+    const target = input.pattern ?? input.path ?? input.filePattern ?? input.directory;
+    if (typeof target === "string") return { code: target as string, language: "text" };
+  }
+
+  return { code: JSON.stringify(input, null, 2), language: "json" };
+}
+
+export const ToolInput = ({ className, input, toolName, ...props }: ToolInputProps) => {
+  const { code, language } = formatToolInput(
+    input as Record<string, unknown>,
+    toolName,
+  );
+  return (
+    <div className={cn("overflow-hidden", className)} {...props}>
+      <div className="rounded-md bg-muted/40">
+        <CodeBlock code={code} language={language as import("shiki").BundledLanguage} />
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export type ToolOutputProps = ComponentProps<"div"> & {
   output: ToolPart["output"];
