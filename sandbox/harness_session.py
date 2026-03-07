@@ -44,7 +44,7 @@ def build_persistent_cmd() -> list[str]:
     if engine == "amp":
         cmd = [
             "amp", "--no-ide", "--no-notifications", "--dangerously-allow-all",
-            "--stream-json", "--stream-json-input",
+            "--execute", "--stream-json", "--stream-json-input",
         ]
         if model_override:
             cmd.extend(["--model", model_override])
