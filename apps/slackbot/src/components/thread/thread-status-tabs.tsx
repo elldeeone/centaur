@@ -2,6 +2,7 @@
 
 import React from "react";
 import { useHaptics } from "@/components/haptics-provider";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { THREAD_STATUS_FILTER_OPTIONS, type VisibleThreadStatusFilter } from "@/components/thread/thread-ui-constants";
 
@@ -35,7 +36,7 @@ export function ThreadStatusTabs({
       {THREAD_STATUS_FILTER_OPTIONS.map((option) => {
         const active = value === option.id;
         return (
-          <button
+          <Button
             key={option.id}
             type="button"
             onClick={() => {
@@ -44,8 +45,9 @@ export function ThreadStatusTabs({
             }}
             role="tab"
             aria-selected={active}
+            variant="ghost"
             className={cn(
-              "inline-flex flex-1 items-center justify-center gap-1 py-1.5 text-xs font-medium transition-colors duration-[var(--dur-fast)]",
+              "inline-flex flex-1 items-center justify-center gap-1 py-1.5 text-xs font-medium transition-colors duration-fast",
               active
                 ? "text-foreground"
                 : "text-muted-foreground hover:text-foreground",
@@ -53,12 +55,12 @@ export function ThreadStatusTabs({
           >
             <span>{compact ? option.shortLabel : option.label}</span>
             <span className={cn(
-              "text-[10px] tabular-nums",
+              "text-3xs tabular-nums",
               active ? "text-foreground/60" : "text-muted-foreground/60",
             )}>
               {counts[option.id]}
             </span>
-          </button>
+          </Button>
         );
       })}
     </div>

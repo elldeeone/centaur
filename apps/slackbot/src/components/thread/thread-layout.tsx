@@ -13,7 +13,9 @@ import {
   useSyncExternalStore,
 } from "react";
 import { X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useHaptics } from "@/components/haptics-provider";
+import { OverlayBackdrop } from "@/components/ui/overlay-backdrop";
 import { ThreadSidebar, type ThreadSidebarHandle } from "@/components/thread/thread-sidebar";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { isTextInputTarget } from "@/lib/thread-utils";
@@ -263,8 +265,8 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <ThreadLayoutContext.Provider value={contextValue}>
-      <div className="thread-shell relative flex h-full overflow-hidden md:h-[calc(100dvh-44px)]">
-        <aside className="thread-shell-sidebar relative hidden shrink-0 border-r border-border/60 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--card)_82%,transparent),color-mix(in_oklab,var(--background)_94%,transparent))] md:flex">
+      <div className="thread-shell relative flex h-full overflow-hidden md-h-minus-header">
+        <aside className="thread-shell-sidebar thread-shell-sidebar-bg relative hidden shrink-0 border-r border-border/60 md:flex">
           <Suspense fallback={<div className="h-full w-full bg-card/35" />}>
             <ThreadSidebar
               ref={desktopSidebarRef}
@@ -278,7 +280,7 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
         <section
           ref={panelRef}
           tabIndex={-1}
-          className="thread-shell-panel min-h-0 min-w-0 flex-1 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_94%,transparent),var(--background))] outline-none"
+          className="thread-shell-panel thread-shell-panel-bg min-h-0 min-w-0 flex-1 outline-none"
         >
           {children}
         </section>
@@ -286,29 +288,34 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
 
       {mobileSidebarOpen ? (
         <div className="fixed inset-0 z-50 md:hidden">
-          <button
-            type="button"
-            className="absolute inset-0 border-0 bg-black/60 p-0 backdrop-blur-[2px] transition-opacity duration-[var(--dur-base)] ease-out motion-reduce:transition-none opacity-100"
-            aria-label="Close thread sidebar"
-            onClick={() => closeMobileSidebar()}
-          />
+          <OverlayBackdrop
+            asChild
+            className="absolute inset-0 border-0 p-0 transition-opacity duration-base ease-out motion-reduce:transition-none opacity-100"
+          >
+            <Button
+              type="button"
+              aria-label="Close thread sidebar"
+              onClick={() => closeMobileSidebar()}
+            />
+          </OverlayBackdrop>
           <aside
             ref={mobileDialogRef}
             role="dialog"
             aria-modal="true"
             aria-label="Threads"
-            className="absolute inset-y-0 left-0 flex w-[360px] max-w-[92vw] flex-col overflow-y-auto overscroll-contain border-r border-border/80 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--card)_92%,transparent),color-mix(in_oklab,var(--background)_96%,transparent))] shadow-[0_24px_80px_rgba(0,0,0,0.6),inset_-1px_0_0_rgba(255,255,255,0.04)] transition-transform duration-[var(--dur-slow)] ease-[var(--ease-snappy)] motion-reduce:transition-none motion-reduce:transform-none translate-x-0"
+            className="thread-shell-mobile-sidebar-bg absolute inset-y-0 left-0 flex w-sidebar-w max-w-mobile flex-col overflow-y-auto overscroll-contain border-r border-border/80 transition-transform duration-slow ease-snappy motion-reduce:transition-none motion-reduce:transform-none translate-x-0"
           >
             <div className="flex items-center justify-end border-b border-border px-3 py-3">
-              <button
-                type="button"
+              <Button
+                variant="outline"
+                size="icon-lg"
+                className="size-11"
                 onClick={() => closeMobileSidebar()}
                 aria-label="Close thread sidebar"
-                className="inline-flex size-11 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 data-touch-target
               >
                 <X className="size-4" />
-              </button>
+              </Button>
             </div>
             <div className="min-h-0 flex-1">
               <Suspense fallback={<div className="h-full w-full bg-background" />}>

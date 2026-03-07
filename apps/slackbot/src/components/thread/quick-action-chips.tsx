@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Suggestions, Suggestion } from "@/components/ai-elements/suggestion";
 import { useHaptics } from "@/components/haptics-provider";
+import { SurfaceBar } from "@/components/ui/surface-bar";
 import { cn } from "@/lib/utils";
 
 type ChipAction = {
@@ -49,28 +50,28 @@ export function QuickActionChips({ threadState, onAction, className }: QuickActi
   if (!renderedChips || renderedChips.length === 0) return null;
 
   return (
-    <div
+    <SurfaceBar
       data-state={visibility}
       className={cn(
-        "border-t border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_88%,transparent),color-mix(in_oklab,var(--card)_82%,transparent))] px-2.5 py-1.5 backdrop-blur-md md:hidden",
-        "data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom-2 data-[state=open]:fade-in data-[state=open]:duration-[var(--dur-base)]",
-        "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom-2 data-[state=closed]:fade-out data-[state=closed]:duration-[var(--dur-fast)]",
+        "border-t border-border/70 px-2.5 py-1.5 md:hidden",
+        "data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom-2 data-[state=open]:fade-in data-[state=open]:duration-base",
+        "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom-2 data-[state=closed]:fade-out data-[state=closed]:duration-fast",
         className,
       )}
     >
-      <Suggestions className="rounded-lg border border-border/70 bg-card/45 p-1 shadow-[0_10px_26px_rgba(0,0,0,0.16)]">
+      <Suggestions className="rounded-lg border border-border/70 bg-card/45 p-1 shadow-chips">
         {renderedChips.map((chip) => (
           <Suggestion
             key={chip.value}
             suggestion={chip.value}
             variant={chip.variant ?? "outline"}
             onClick={(value) => { trigger("medium"); onAction(value); }}
-            className="min-h-[44px] rounded-lg border-border/70"
+            className="min-h-touch rounded-lg border-border/70"
           >
             {chip.label}
           </Suggestion>
         ))}
       </Suggestions>
-    </div>
+    </SurfaceBar>
   );
 }

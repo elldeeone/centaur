@@ -74,6 +74,193 @@
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
   --animate-collapsible-down: collapsible-down var(--dur-base) ease-out;
   --animate-collapsible-up: collapsible-up var(--dur-fast) ease-out;
+
+  /* Duration tokens → duration-micro, duration-fast, duration-base, duration-slow */
+  --transition-duration-micro: var(--dur-micro);
+  --transition-duration-fast: var(--dur-fast);
+  --transition-duration-base: var(--dur-base);
+  --transition-duration-slow: var(--dur-slow);
+
+  /* Easing tokens → ease-standard, ease-snappy, ease-emphasized */
+  --ease-standard: var(--ease-standard);
+  --ease-snappy: var(--ease-snappy);
+  --ease-emphasized: var(--ease-emphasized);
+
+  /* Font-size tokens → text-2xs (9px), text-3xs (10px), text-detail (11px), text-label (13px) */
+  --font-size-2xs: 0.5625rem;
+  --font-size-2xs--line-height: 0.75rem;
+  --font-size-3xs: 0.625rem;
+  --font-size-3xs--line-height: 0.875rem;
+  --font-size-detail: 0.6875rem;
+  --font-size-detail--line-height: 1rem;
+  --font-size-label: 0.8125rem;
+  --font-size-label--line-height: 1.125rem;
+
+  /* Spacing tokens */
+  --spacing-content-max: 960px;
+  --spacing-touch: 44px;
+  --spacing-input-min: 36px;
+  --spacing-tab-bar: 66px;
+  --spacing-meta-min: 16px;
+  --spacing-palette-max: 320px;
+  --spacing-diff-max: 400px;
+  --spacing-popover-w: 320px;
+  --spacing-sidebar-w: 360px;
+  --spacing-portfolio-max: 1400px;
+
+  /* Letter-spacing token */
+  --tracking-section: 0.14em;
+
+  /* Scale token */
+  --scale-press: 0.998;
+
+  /* Alignment tweak token */
+  --spacing-align-nudge: -1px;
+  --spacing-timeline-tail: -12px;
+}
+
+/* ── Design-system utility classes ── */
+
+.shadow-sheet {
+  box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.38);
+}
+
+.shadow-dialog {
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.shadow-chips {
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.16);
+}
+
+.shadow-ring-subtle {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.safe-area-bottom {
+  padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+}
+
+.safe-area-bottom-sm {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+.safe-area-inset-x {
+  padding-left: max(0.625rem, env(safe-area-inset-left));
+  padding-right: max(0.625rem, env(safe-area-inset-right));
+}
+
+.safe-area-inset-top {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+}
+
+.h-dvh-full {
+  height: 100dvh;
+}
+
+.max-h-dvh-full {
+  max-height: 100dvh;
+}
+
+.max-h-dvh-82 {
+  max-height: 82dvh;
+}
+
+.content-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 140px;
+}
+
+.grid-timeline {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.grid-sidebar-layout {
+  grid-template-columns: 200px 1fr;
+}
+
+.w-sheet-panel {
+  width: clamp(440px, 34vw, 560px);
+  max-width: clamp(440px, 34vw, 560px);
+}
+
+.md-h-minus-header {
+  height: calc(100dvh - 44px);
+}
+
+.transition-opacity-transform {
+  transition-property: opacity, transform;
+}
+
+.text-input-base {
+  font-size: 16px;
+  line-height: 22px;
+}
+
+@media (min-width: 768px) {
+  .md\:text-input-base {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+}
+
+.min-h-60vh {
+  min-height: 60vh;
+}
+
+.harness-badge-sm {
+  height: 18px;
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+  font-size: 0.5625rem;
+  gap: 0.125rem;
+  border-radius: 3px;
+}
+
+.cmd-palette-top {
+  top: 18vh;
+}
+
+.cmd-palette-w {
+  width: min(92vw, 560px);
+}
+
+.max-w-mobile {
+  max-width: 92vw;
+}
+
+.text-portfolio-sm {
+  font-size: 11px;
+}
+
+@media (min-width: 1024px) {
+  .lg-grid-sidebar-layout {
+    grid-template-columns: 200px 1fr;
+  }
+}
+
+.align-icon-nudge {
+  vertical-align: -1px;
+}
+
+.stat-row-value {
+  max-width: 60%;
+}
+
+.chat-textarea {
+  max-height: var(--chat-textarea-max-h, 152px);
+  field-sizing: content;
+}
+
+.tool-compact-code pre {
+  padding: 0.5rem 0.625rem;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+}
+
+.tool-compact-code code {
+  font-size: 0.75rem;
+  line-height: 1.25rem;
 }
 
 [data-slot="badge"] {
@@ -180,6 +367,48 @@ select {
   background: color-mix(in oklab, var(--card) 30%, transparent);
 }
 
+/* Gradient toolbar / header / panel surface */
+.surface-bar {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--background) 88%, transparent),
+      color-mix(in oklab, var(--card) 80%, transparent)
+    );
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+/* Overlay dim behind sheets/modals/drawers */
+.overlay-backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(1px);
+  -webkit-backdrop-filter: blur(1px);
+}
+
+/* Tappable list row / action button inside sheets */
+.sheet-action {
+  display: flex;
+  min-height: 2.75rem;
+  width: 100%;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 0.375rem;
+  padding: 0.75rem 0.5rem;
+  text-align: left;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  transition: background-color var(--dur-fast) var(--ease-standard);
+}
+
+.sheet-action:hover {
+  background: color-mix(in oklab, var(--accent) 70%, transparent);
+}
+
+.sheet-action:active {
+  background: var(--accent);
+}
+
 .ui-control-icon {
   border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
   background: color-mix(in oklab, var(--card) 52%, transparent);
@@ -200,6 +429,36 @@ select {
   transition-property: background-color, border-color, color, box-shadow, transform, opacity;
   transition-duration: var(--dur-fast);
   transition-timing-function: var(--ease-standard);
+}
+
+.thread-shell-sidebar-bg {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--card) 82%, transparent),
+      color-mix(in oklab, var(--background) 94%, transparent)
+    );
+}
+
+.thread-shell-panel-bg {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--background) 94%, transparent),
+      var(--background)
+    );
+}
+
+.thread-shell-mobile-sidebar-bg {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--card) 92%, transparent),
+      color-mix(in oklab, var(--background) 96%, transparent)
+    );
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.6),
+    inset -1px 0 0 rgba(255, 255, 255, 0.04);
 }
 
 .thread-shell-sidebar {

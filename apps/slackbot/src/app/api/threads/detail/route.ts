@@ -7,6 +7,9 @@ import type { Harness, ThreadDetail, ThreadState } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
+const detailCache = new Map<string, { data: ThreadDetail; ts: number }>();
+const DETAIL_TTL = 5_000;
+
 type PipeStatus = {
   thread_key: string;
   status: string;
@@ -32,44 +35,52 @@ export async function GET(request: Request) {
   }
 
   try {
-    const pool = getPool();
-    const { rows } = await pool.query(
-      `SELECT
-        MIN(created_at) AS created_at,
-        MAX(created_at) AS last_activity,
-        COUNT(*)::int AS message_count,
-        (SELECT parts FROM chat_messages cm2
-         WHERE cm2.thread_key = $1 AND cm2.role = 'user'
-         ORDER BY cm2.created_at DESC LIMIT 1
-        ) AS last_user_parts,
-        (SELECT metadata->>'thread_name' FROM chat_messages cm3
-         WHERE cm3.thread_key = $1 AND cm3.metadata->>'thread_name' IS NOT NULL
-         ORDER BY cm3.created_at DESC LIMIT 1
-        ) AS thread_name
-      FROM chat_messages
-      WHERE thread_key = $1`,
-      [key],
-    );
+    let detail: ThreadDetail;
+    const cached = detailCache.get(key);
 
-    const row = rows[0];
-    if (!row || !row.created_at) {
-      return Response.json(
-        { error: `Thread not found: ${key}` },
-        { status: 404, headers: { "Cache-Control": "no-store" } },
+    if (cached && Date.now() - cached.ts < DETAIL_TTL) {
+      detail = { ...cached.data };
+    } else {
+      const pool = getPool();
+      const { rows } = await pool.query(
+        `SELECT
+          MIN(created_at) AS created_at,
+          MAX(created_at) AS last_activity,
+          COUNT(*)::int AS message_count,
+          (SELECT parts FROM chat_messages cm2
+           WHERE cm2.thread_key = $1 AND cm2.role = 'user'
+           ORDER BY cm2.created_at DESC LIMIT 1
+          ) AS last_user_parts,
+          (SELECT metadata->>'thread_name' FROM chat_messages cm3
+           WHERE cm3.thread_key = $1 AND cm3.metadata->>'thread_name' IS NOT NULL
+           ORDER BY cm3.created_at DESC LIMIT 1
+          ) AS thread_name
+        FROM chat_messages
+        WHERE thread_key = $1`,
+        [key],
       );
-    }
 
-    const detail: ThreadDetail = {
-      slack_thread_key: key,
-      harness: "amp",
-      state: "idle",
-      created_at: new Date(row.created_at).getTime() / 1000,
-      last_activity: new Date(row.last_activity).getTime() / 1000,
-      message_count: row.message_count,
-      last_user_message: extractText(row.last_user_parts),
-      token_usage: null,
-      thread_name: row.thread_name,
-    };
+      const row = rows[0];
+      if (!row || !row.created_at) {
+        return Response.json(
+          { error: `Thread not found: ${key}` },
+          { status: 404, headers: { "Cache-Control": "no-store" } },
+        );
+      }
+
+      detail = {
+        slack_thread_key: key,
+        harness: "amp",
+        state: "idle",
+        created_at: new Date(row.created_at).getTime() / 1000,
+        last_activity: new Date(row.last_activity).getTime() / 1000,
+        message_count: row.message_count,
+        last_user_message: extractText(row.last_user_parts),
+        token_usage: null,
+        thread_name: row.thread_name,
+      };
+      detailCache.set(key, { data: detail, ts: Date.now() });
+    }
 
     // Enrich with live pipe status (best-effort)
     try {
@@ -87,7 +98,9 @@ export async function GET(request: Request) {
       // Pipe server unreachable — keep idle state
     }
 
-    return Response.json(detail, { headers: { "Cache-Control": "no-store" } });
+    return Response.json(detail, {
+      headers: { "Cache-Control": "public, s-maxage=5, stale-while-revalidate=3" },
+    });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Database error" },

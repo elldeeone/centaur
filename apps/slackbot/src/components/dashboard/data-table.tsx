@@ -4,6 +4,7 @@ import { useMemo, useState, useRef, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ColumnDef, CellRenderer } from "./types";
 import { formatValue } from "./format-value";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 const DEFAULT_PAGE_SIZE = 25;
@@ -43,7 +44,7 @@ function renderCell(value: unknown, col: ColumnDef, row: Record<string, unknown>
     case "badge": {
       const intent = cell.intentMap?.[strVal] ?? "default";
       return (
-        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${BADGE_INTENTS[intent]}`}>
+        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-3xs font-medium uppercase tracking-wide ${BADGE_INTENTS[intent]}`}>
           {strVal}
         </span>
       );
@@ -53,7 +54,7 @@ function renderCell(value: unknown, col: ColumnDef, row: Record<string, unknown>
       const bg = color ? `var(--${color})` : "var(--primary)";
       return (
         <span
-          className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium text-white"
+          className="inline-flex items-center rounded-full px-2 py-0.5 text-3xs font-medium text-white"
           style={{ backgroundColor: bg }}
         >
           {strVal}
@@ -66,7 +67,7 @@ function renderCell(value: unknown, col: ColumnDef, row: Record<string, unknown>
       return (
         <div className="flex items-center gap-2">
           <div
-            className="flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-medium text-white"
+            className="flex h-6 w-6 items-center justify-center rounded-full text-3xs font-medium text-white"
             style={{ backgroundColor: bg }}
           >
             {getInitials(name)}
@@ -80,7 +81,7 @@ function renderCell(value: unknown, col: ColumnDef, row: Record<string, unknown>
       return (
         <div className="flex flex-col">
           <span>{formatValue(value, col.format)}</span>
-          <span className="text-[10px] text-muted-foreground">{formatValue(secondary, cell.secondaryFormat ?? "text")}</span>
+          <span className="text-3xs text-muted-foreground">{formatValue(secondary, cell.secondaryFormat ?? "text")}</span>
         </div>
       );
     }
@@ -315,35 +316,39 @@ export function DataTable({
                 const active = activeFilters[col.key];
                 return (
                   <div key={col.key} className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{col.label}</span>
+                    <span className="text-3xs font-medium uppercase tracking-wide text-muted-foreground">{col.label}</span>
                     {options.map((val) => {
                       const isActive = active?.has(val);
                       return (
-                        <button
+                        <Button
                           key={val}
                           type="button"
+                          variant="ghost"
+                          size="xs"
                           onClick={() => toggleFilter(col.key, val)}
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                          className={`rounded-full px-2 py-0.5 text-3xs font-medium transition-colors ${
                             isActive
                               ? "bg-primary text-primary-foreground"
                               : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
                           }`}
                         >
                           {val}
-                        </button>
+                        </Button>
                       );
                     })}
                   </div>
                 );
               })}
               {hasActiveFilters && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={clearFilters}
-                  className="text-[10px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                  className="text-3xs font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                 >
                   Clear
-                </button>
+                </Button>
               )}
             </div>
           )}
@@ -384,8 +389,8 @@ export function DataTable({
                 {safePage * pageSize + 1}–{Math.min((safePage + 1) * pageSize, sorted.length)} of {sorted.length}
               </span>
               <div className="flex gap-2">
-                <button type="button" disabled={safePage === 0} onClick={() => setPage((p) => p - 1)} className="rounded border border-border px-2 py-0.5 hover:bg-muted disabled:opacity-40">Prev</button>
-                <button type="button" disabled={safePage >= totalPages - 1} onClick={() => setPage((p) => p + 1)} className="rounded border border-border px-2 py-0.5 hover:bg-muted disabled:opacity-40">Next</button>
+                <Button type="button" variant="outline" size="xs" disabled={safePage === 0} onClick={() => setPage((p) => p - 1)} className="rounded border border-border px-2 py-0.5 hover:bg-muted disabled:opacity-40">Prev</Button>
+                <Button type="button" variant="outline" size="xs" disabled={safePage >= totalPages - 1} onClick={() => setPage((p) => p + 1)} className="rounded border border-border px-2 py-0.5 hover:bg-muted disabled:opacity-40">Next</Button>
               </div>
             </div>
           )}

@@ -16,6 +16,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { SurfaceBar } from "@/components/ui/surface-bar";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { categorizeToolCall } from "@/lib/describe";
@@ -37,7 +39,7 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <Badge
       variant={isFailed ? "destructive" : isDone ? "default" : "secondary"}
-      className="text-[10px]"
+      className="text-3xs"
     >
       {subagentStatusLabel(status)}
     </Badge>
@@ -60,7 +62,7 @@ function formatTokens(count: number): string {
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="thread-surface-soft rounded-lg px-3 py-2">
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-detail uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-1 text-sm font-mono tabular-nums text-foreground/85">{value}</div>
     </div>
   );
@@ -70,7 +72,7 @@ function StatRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3 py-1.5">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="max-w-[60%] truncate text-right text-xs font-mono tabular-nums text-foreground/82">
+      <span className="stat-row-value truncate text-right text-xs font-mono tabular-nums text-foreground/82">
         {value}
       </span>
     </div>
@@ -79,7 +81,7 @@ function StatRow({ label, value }: { label: string; value: string }) {
 
 function MetaChip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-md border border-border/60 bg-background/40 px-2 py-1 text-[11px] text-muted-foreground">
+    <span className="inline-flex items-center rounded-md border border-border/60 bg-background/40 px-2 py-1 text-detail text-muted-foreground">
       {children}
     </span>
   );
@@ -102,10 +104,10 @@ function ActivityTimeline({
         const showSpinner = isLast && isRunning;
         const ActivityIcon = act.toolName ? categorizeToolCall(act.toolName).icon : null;
         return (
-          <div key={`${act.toolName ?? ""}:${act.description}:${i}`} className="grid grid-cols-[18px_minmax(0,1fr)] gap-3 pb-3 last:pb-0">
+          <div key={`${act.toolName ?? ""}:${act.description}:${i}`} className="grid grid-timeline gap-3 pb-3 last:pb-0">
             <div className="relative flex justify-center">
               {!isLast && (
-                <span className="absolute left-1/2 top-4 bottom-[-12px] w-px -translate-x-1/2 bg-border/40" />
+                <span className="absolute left-1/2 top-4 bottom-timeline-tail w-px -translate-x-1/2 bg-border/40" />
               )}
               {showSpinner ? (
                 <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
@@ -120,7 +122,7 @@ function ActivityTimeline({
             <div className="min-w-0">
               <p className="text-sm leading-6 text-foreground/82">{act.description}</p>
               {act.toolName && (
-                <p className="mt-0.5 text-[11px] font-mono text-muted-foreground/75">
+                <p className="mt-0.5 text-detail font-mono text-muted-foreground/75">
                   {act.toolName}
                 </p>
               )}
@@ -146,7 +148,7 @@ const SubagentDetailContent = memo(function SubagentDetailContent({
 
   return (
     <div className="thin-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-      <div className="space-y-5 px-4 py-4 md:px-6 md:py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+      <div className="space-y-5 px-4 py-4 md:px-6 md:py-5 safe-area-bottom">
         {(step.turns !== undefined ||
           step.toolCalls !== undefined ||
           step.durationS !== undefined ||
@@ -160,7 +162,7 @@ const SubagentDetailContent = memo(function SubagentDetailContent({
           step.outputTokens !== undefined ||
           step.branchIndex !== undefined) && (
           <section>
-            <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            <div className="mb-3 text-detail font-medium uppercase tracking-section text-muted-foreground">
               Overview
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -195,7 +197,7 @@ const SubagentDetailContent = memo(function SubagentDetailContent({
 
         {activities.length > 0 && (
           <section>
-            <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            <div className="mb-3 text-detail font-medium uppercase tracking-section text-muted-foreground">
               Activity
             </div>
             <div className="thread-surface-soft rounded-xl px-3 py-3">
@@ -206,7 +208,7 @@ const SubagentDetailContent = memo(function SubagentDetailContent({
 
         {step.summary && (
           <section>
-            <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            <div className="mb-3 text-detail font-medium uppercase tracking-section text-muted-foreground">
               {isTerminal ? "Result" : "Progress"}
             </div>
             <div className="thread-surface-soft rounded-xl px-3 py-3">
@@ -217,7 +219,7 @@ const SubagentDetailContent = memo(function SubagentDetailContent({
 
         {step.error && (
           <section>
-            <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-destructive">
+            <div className="mb-3 text-detail font-medium uppercase tracking-section text-destructive">
               Error
             </div>
             <div className="rounded-xl border border-destructive/30 bg-destructive/8 px-3 py-3">
@@ -231,7 +233,7 @@ const SubagentDetailContent = memo(function SubagentDetailContent({
           step.branchIndex !== undefined ||
           step.isAcceptable !== undefined) && (
           <section>
-            <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            <div className="mb-3 text-detail font-medium uppercase tracking-section text-muted-foreground">
               Details
             </div>
             <div className="thread-surface-soft rounded-xl px-3 py-2">
@@ -285,34 +287,35 @@ export const SubagentDetailPanel = memo(function SubagentDetailPanel({
         overlayClassName={
           isDesktop
             ? "pointer-events-none bg-black/12 backdrop-blur-[1px]"
-            : "bg-black/60 backdrop-blur-[1px]"
+            : "overlay-backdrop"
         }
         className={cn(
           "p-0 flex flex-col",
           isDesktop
-            ? "thread-surface h-full w-full border-l border-border/70 sm:w-[clamp(440px,34vw,560px)] sm:max-w-[clamp(440px,34vw,560px)]"
-            : "h-[100dvh] max-h-[100dvh] rounded-none shadow-[0_-12px_36px_rgba(0,0,0,0.38)]",
+            ? "thread-surface h-full w-full border-l border-border/70 w-sheet-panel"
+            : "h-dvh-full max-h-dvh-full rounded-none shadow-sheet",
         )}
       >
-        <SheetHeader
-          className={cn(
-            "shrink-0 border-b border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_88%,transparent),color-mix(in_oklab,var(--card)_80%,transparent))] backdrop-blur-xl",
-            isDesktop
-              ? "px-6 pt-5 pb-4"
-              : "px-[max(0.625rem,env(safe-area-inset-left))] pr-[max(0.625rem,env(safe-area-inset-right))] pt-[max(0.75rem,env(safe-area-inset-top))] pb-3",
-          )}
-        >
+        <SurfaceBar asChild>
+          <SheetHeader
+            className={cn(
+              "shrink-0 border-b border-border/70",
+              isDesktop
+                ? "px-6 pt-5 pb-4"
+                : "safe-area-inset-x safe-area-inset-top pb-3",
+            )}
+          >
           {!isDesktop && (
             <div className="mb-3 flex items-center justify-between">
               <SheetClose asChild>
-                <button
-                  type="button"
-                  data-touch-target
-                  className="ui-control-icon inline-flex size-9 items-center justify-center"
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="ui-control-icon"
                   aria-label="Back to thread"
                 >
                   <ArrowLeft className="size-4" />
-                </button>
+                </Button>
               </SheetClose>
               <StatusBadge status={step.status} />
             </div>
@@ -356,7 +359,8 @@ export const SubagentDetailPanel = memo(function SubagentDetailPanel({
               )}
             </div>
           </div>
-        </SheetHeader>
+          </SheetHeader>
+        </SurfaceBar>
 
         <SubagentDetailContent key={subagentSelectionKey(step)} step={step} />
       </SheetContent>

@@ -285,7 +285,7 @@ export default function ThreadDetailPage() {
             </Button>
             <Link
               href={backHref}
-              className="inline-flex min-h-[44px] items-center rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-[var(--dur-fast)] hover:bg-accent hover:text-foreground"
+              className="inline-flex min-h-touch items-center rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-fast hover:bg-accent hover:text-foreground"
               data-touch-target
             >
               Back to threads
@@ -339,7 +339,7 @@ export default function ThreadDetailPage() {
       <ConnectivityBanner isReconnecting={isReconnecting} threadState={thread.state} />
 
       {/* Activity feed - the only scrollable area */}
-      <div className="mx-auto flex min-h-0 w-full max-w-[960px] flex-1 flex-col px-1 py-1 md:px-3 md:py-2.5">
+      <div className="mx-auto flex min-h-0 w-full max-w-content-max flex-1 flex-col px-1 py-1 md:px-3 md:py-2.5">
         <ActivityFeedV2
           messages={chatMessages}
           state={thread.state}

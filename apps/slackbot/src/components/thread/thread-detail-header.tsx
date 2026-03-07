@@ -27,7 +27,9 @@ import {
   tokenUsageConfidenceLabel,
   tokenUsageModelLabel,
 } from "@/lib/token-usage";
+import { Button } from "@/components/ui/button";
 import { useHaptics } from "@/components/haptics-provider";
+import { SurfaceBar } from "@/components/ui/surface-bar";
 import { HarnessBadge } from "@/components/ui/harness-badge";
 import { StateDot } from "@/components/ui/state-dot";
 import { ParticipantAvatars } from "@/components/thread/participant-avatars";
@@ -113,27 +115,31 @@ export function ThreadDetailHeader({
   }, [error, isRunning, stableStatus, thread.state]);
 
   return (
-    <div className="relative shrink-0 border-b border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_88%,transparent),color-mix(in_oklab,var(--card)_80%,transparent))] backdrop-blur-xl">
+    <SurfaceBar className="relative shrink-0 border-b border-border/70">
       <div className="flex min-h-10 items-center gap-2 px-2.5 py-1.5">
-        <button
+        <Button
           type="button"
           onClick={() => { trigger("light"); onOpenDrawer(); }}
-          className="flex size-9 items-center justify-center rounded-lg ui-control-icon md:hidden"
+          variant="ghost"
+          size="icon"
+          className="ui-control-icon md:hidden"
           aria-label="Open thread list"
           data-touch-target
         >
           <Menu className="size-5" />
-        </button>
+        </Button>
 
-        <button
+        <Button
           type="button"
           onClick={() => { trigger("light"); onBack(); }}
+          variant="ghost"
+          size="icon-sm"
+          className="mr-0.5 ui-control-icon"
           aria-label="Back to source"
-          className="mr-0.5 inline-flex size-8 items-center justify-center rounded-lg ui-control-icon text-xs"
           data-touch-target
         >
           <ArrowLeft className="size-4" />
-        </button>
+        </Button>
 
         <Link
           href={upHref}
@@ -149,7 +155,7 @@ export function ThreadDetailHeader({
 
         <span className="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight text-balance">{humanName}</span>
 
-        <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background/65 px-2 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+        <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background/65 px-2 py-0.5 text-detail uppercase tracking-wide text-muted-foreground">
           <StateDot state={thread.state} className="flex-shrink-0" />
           <span className="hidden min-[380px]:inline">{thread.state}</span>
         </span>
@@ -187,27 +193,30 @@ export function ThreadDetailHeader({
           Cmd+K
         </span>
 
-        <button
+        <Button
           type="button"
           onClick={() => { trigger("light"); onOpenInfo(); }}
-          className="flex size-9 items-center justify-center rounded-lg ui-control-icon md:hidden"
+          variant="ghost"
+          size="icon"
+          className="ui-control-icon md:hidden"
           aria-label="Thread info"
           data-touch-target
         >
           <Info className="size-4" />
-        </button>
+        </Button>
 
         <Popover>
           <PopoverTrigger asChild>
-            <button
+            <Button
               type="button"
+              variant="ghost"
               className="hidden rounded-lg ui-control-icon p-1.5 md:block"
               aria-label="Show thread metadata"
             >
               <Info className="size-3.5" />
-            </button>
+            </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[320px]">
+          <PopoverContent className="w-popover-w">
             <div className="space-y-2 text-xs">
               <div className="font-semibold text-foreground">Debug IDs</div>
               <div className="font-mono text-muted-foreground break-all">{thread.slack_thread_key}</div>
@@ -218,29 +227,33 @@ export function ThreadDetailHeader({
         {canInterrupt && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <Button
                 type="button"
                 onClick={() => { trigger("warning"); onInterrupt(); }}
                 disabled={isInterrupting}
-                className="hidden rounded-md border border-destructive/35 bg-destructive/8 px-1.5 py-1 md:inline-flex items-center gap-1 text-xs text-destructive transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-destructive/14 disabled:opacity-60"
+                variant="destructive"
+                size="xs"
+                className="hidden md:inline-flex items-center gap-1 border border-destructive/35 bg-destructive/8 text-destructive hover:bg-destructive/14 disabled:opacity-60"
               >
                 <CircleStop className={isInterrupting ? "size-3.5 animate-pulse" : "size-3.5"} />
                 {isInterrupting ? "Stopping…" : "Stop"}
-              </button>
+              </Button>
             </TooltipTrigger>
             <TooltipContent>Stop Alt+S</TooltipContent>
           </Tooltip>
         )}
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
+            <Button
               type="button"
               onClick={() => { trigger("light"); onRefresh(); }}
-              className="hidden rounded-md border border-border/70 bg-card/45 px-1.5 py-1 md:inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
+              variant="outline"
+              size="xs"
+              className="hidden md:inline-flex items-center gap-1 border-border/70 bg-card/45 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <RefreshCw className="size-3.5" />
               Refresh
-            </button>
+            </Button>
           </TooltipTrigger>
           <TooltipContent>Refresh Alt+R</TooltipContent>
         </Tooltip>
@@ -280,6 +293,6 @@ export function ThreadDetailHeader({
           <PhaseProgress phases={phases} />
         </div>
       )}
-    </div>
+    </SurfaceBar>
   );
 }

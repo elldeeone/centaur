@@ -22,7 +22,8 @@ import { dedupeSources, extractSourcesFromUnknown, type StepSource } from "@/lib
 import { stringifyToolOutput } from "@/lib/tool-output-detect";
 import type { Participant } from "@/lib/types";
 
-import { DiffCard } from "@/components/thread/diff-card";
+import dynamic from "next/dynamic";
+const DiffCard = dynamic(() => import("@/components/thread/diff-card").then(m => ({ default: m.DiffCard })), { ssr: false });
 import { StepGroup } from "@/components/thread/step-group";
 import {
   Reasoning,
@@ -40,7 +41,7 @@ import {
 } from "@/components/ai-elements/terminal";
 import { SubagentCard } from "@/components/thread/subagent-card";
 import type { SubagentStep } from "@/lib/describe";
-import { normalizeSubagentStatus } from "@/lib/subagent-steps";
+import { normalizeSubagentStatus, subagentSelectionKey } from "@/lib/subagent-steps";
 import {
   Checkpoint,
   CheckpointIcon,
@@ -156,9 +157,13 @@ type ToolGroup = {
 export function UIMessageRenderer({
   message,
   participantsById,
+  onSelectSubagent,
+  selectedSubagentKey,
 }: {
   message: UIMessage;
   participantsById: Map<string, Participant>;
+  onSelectSubagent?: (step: SubagentStep) => void;
+  selectedSubagentKey?: string | null;
 }) {
   const parts = message.parts ?? [];
 
@@ -177,15 +182,26 @@ export function UIMessageRenderer({
 
   if (message.role !== "assistant") return null;
 
-  return <AssistantParts parts={parts} participantsById={participantsById} />;
+  return (
+    <AssistantParts
+      parts={parts}
+      participantsById={participantsById}
+      onSelectSubagent={onSelectSubagent}
+      selectedSubagentKey={selectedSubagentKey}
+    />
+  );
 }
 
 function AssistantParts({
   parts,
   participantsById,
+  onSelectSubagent,
+  selectedSubagentKey,
 }: {
   parts: UIMessage["parts"];
   participantsById: Map<string, Participant>;
+  onSelectSubagent?: (step: SubagentStep) => void;
+  selectedSubagentKey?: string | null;
 }) {
   // Group consecutive tool calls of the same category
   const elements = useMemo(() => buildElements(parts), [parts]);
@@ -197,6 +213,8 @@ function AssistantParts({
           key={el.key}
           element={el}
           participantsById={participantsById}
+          onSelectSubagent={onSelectSubagent}
+          selectedSubagentKey={selectedSubagentKey}
         />
       ))}
     </div>
@@ -435,9 +453,13 @@ function buildElements(parts: UIMessage["parts"]): Element[] {
 function PartElement({
   element,
   participantsById,
+  onSelectSubagent,
+  selectedSubagentKey,
 }: {
   element: Element;
   participantsById: Map<string, Participant>;
+  onSelectSubagent?: (step: SubagentStep) => void;
+  selectedSubagentKey?: string | null;
 }) {
   switch (element.kind) {
     case "text":
@@ -579,7 +601,13 @@ function PartElement({
         maxParallel: asNumber(d.max_parallel) ?? undefined,
         activity: asString(d.activity) || undefined,
       };
-      return <SubagentCard step={step} />;
+      return (
+        <SubagentCard
+          step={step}
+          onSelect={onSelectSubagent}
+          isSelected={selectedSubagentKey === subagentSelectionKey(step)}
+        />
+      );
     }
 
     case "user-message": {
@@ -620,7 +648,7 @@ function PartElement({
             {participant?.avatar_url ? (
               <img src={participant.avatar_url} alt={displayName} className="size-[16px] rounded-full" />
             ) : (
-              <div className="flex size-[16px] items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
+              <div className="flex size-[16px] items-center justify-center rounded-full bg-muted text-3xs font-medium text-muted-foreground">
                 {initials(displayName)}
               </div>
             )}

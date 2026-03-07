@@ -359,13 +359,13 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
   // ── Render ──
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 py-6">
+    <div className="mx-auto max-w-portfolio-max px-6 py-6">
       {/* Header */}
       <div className="mb-6 flex items-start justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Positions</h1>
         <div className="flex items-center gap-6">
           <div className="text-right">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="text-portfolio-sm font-medium uppercase tracking-wide text-muted-foreground">
               Market Value
             </p>
             <div className="flex items-baseline gap-1.5 justify-end">
@@ -376,7 +376,7 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
             </div>
           </div>
           <div className="text-right">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="text-portfolio-sm font-medium uppercase tracking-wide text-muted-foreground">
               Invested Capital
             </p>
             <div className="flex items-baseline gap-1.5 justify-end">
@@ -387,7 +387,7 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
             </div>
           </div>
           <div className="text-right">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="text-portfolio-sm font-medium uppercase tracking-wide text-muted-foreground">
               Positions
             </p>
             <div className="flex items-baseline gap-1.5 justify-end">
@@ -548,17 +548,18 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[200px_1fr]">
+          <div className="grid grid-cols-1 gap-6 lg-grid-sidebar-layout">
             {/* Palette */}
             <aside className="space-y-1">
               {palette.map((item) => {
                 const Icon = item.icon;
                 return (
-                  <button
+                  <Button
                     key={item.id}
                     type="button"
+                    variant="ghost"
                     onClick={() => addComponent(item)}
-                    className="group flex w-full items-center gap-2 rounded-lg border border-border/50 bg-card/30 px-2 py-1.5 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
+                    className="group h-auto w-full justify-start gap-2 rounded-lg border border-border/50 bg-card/30 px-2 py-1.5 text-left hover:border-primary/40 hover:bg-primary/5"
                   >
                     <div className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted/50 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary">
                       <Icon className="size-3" />
@@ -567,7 +568,7 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
                       <div className="truncate text-xs font-medium">{item.label}</div>
                     </div>
                     <Plus className="size-3 shrink-0 text-muted-foreground/50 group-hover:text-primary" />
-                  </button>
+                  </Button>
                 );
               })}
             </aside>
@@ -595,13 +596,15 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
                       className={`group/grid-item overflow-hidden rounded-lg border bg-card/40 ${locked ? "border-border/30" : "border-border/60 hover:border-primary/40"}`}
                     >
                       {!locked && (
-                        <button
+                        <Button
                           type="button"
+                          variant="destructive"
+                          size="icon-xs"
                           onClick={() => removeComponent(item.instanceId)}
-                          className="absolute right-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-destructive/80 text-destructive-foreground opacity-0 transition-opacity hover:bg-destructive group-hover/grid-item:opacity-100"
+                          className="absolute right-1.5 top-1.5 z-10 rounded-full opacity-0 group-hover/grid-item:opacity-100"
                         >
                           <X className="size-3" />
-                        </button>
+                        </Button>
                       )}
                       <div className="size-full overflow-auto p-2">
                         <RenderNode node={item.node} />
@@ -664,13 +667,15 @@ function PositionRows({
         {/* Chevron */}
         <td className="px-2 py-2.5 text-center">
           {hasMultipleFunds ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-xs"
               onClick={onToggle}
-              className="inline-flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               {isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-            </button>
+            </Button>
           ) : (
             <span className="inline-block size-5" />
           )}
@@ -688,10 +693,10 @@ function PositionRows({
               <span className="font-medium text-foreground">{pos.assetName}</span>
               <div className="flex items-center gap-2">
                 {pos.ticker && (
-                  <span className="text-[11px] text-muted-foreground">{pos.ticker}</span>
+                  <span className="text-portfolio-sm text-muted-foreground">{pos.ticker}</span>
                 )}
                 {!hasMultipleFunds && pos.funds[0] && (
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-portfolio-sm text-muted-foreground">
                     · {pos.funds[0].fundShort}
                   </span>
                 )}
@@ -747,7 +752,7 @@ function PositionRows({
             </td>
             <td className="px-4 py-2 text-right">
               <span
-                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums ${
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-portfolio-sm font-medium tabular-nums ${
                   fund.moic >= 1.0
                     ? "bg-primary/10 text-primary"
                     : "bg-destructive/10 text-destructive"

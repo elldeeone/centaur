@@ -4,6 +4,8 @@ import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createIdGenerator } from "ai";
 import { Menu, MessageSquarePlus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { MobileHeader } from "@/components/ui/mobile-header";
 import { MessageInput } from "@/components/thread/message-input";
 import { MobileTabBar } from "@/components/thread/mobile-tab-bar";
 import { useThreadLayout } from "@/components/thread/thread-layout";
@@ -32,19 +34,22 @@ export default function NewSessionPage() {
 
   return (
     <div className="app-shell h-dvh md:h-full flex flex-col bg-background overflow-hidden">
-      <div className="md:hidden flex items-center justify-between border-b border-border/60 bg-background/70 px-3 py-2 backdrop-blur-md">
-        <button
-          type="button"
-          onClick={() => { trigger("light"); openMobileSidebar(); }}
-          className="inline-flex size-10 items-center justify-center rounded-lg ui-control-icon"
-          aria-label="Open thread list"
-          data-touch-target
-        >
-          <Menu className="size-5" />
-        </button>
-        <span className="text-sm font-medium text-foreground">New Session</span>
-        <span className="size-10" aria-hidden="true" />
-      </div>
+      <MobileHeader
+        title="New Session"
+        leading={
+          <Button
+            type="button"
+            onClick={() => { trigger("light"); openMobileSidebar(); }}
+            variant="ghost"
+            size="icon"
+            className="size-10 ui-control-icon"
+            aria-label="Open thread list"
+            data-touch-target
+          >
+            <Menu className="size-5" />
+          </Button>
+        }
+      />
       <div className="flex-1 min-h-0 flex items-center justify-center px-4 overflow-auto">
         <div className="text-center max-w-md">
           <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl border border-border/80 bg-card/60">

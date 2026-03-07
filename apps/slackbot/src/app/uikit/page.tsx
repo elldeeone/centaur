@@ -10,7 +10,8 @@ import ReactGridLayout, { useContainerWidth, verticalCompactor } from "react-gri
 import type { Layout, LayoutItem } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { DiffCard } from "@/components/thread/diff-card";
+import dynamic from "next/dynamic";
+const DiffCard = dynamic(() => import("@/components/thread/diff-card").then(m => ({ default: m.DiffCard })), { ssr: false });
 import { File as PierreFile } from "@pierre/diffs/react";
 import type { FileContents } from "@pierre/diffs";
 
@@ -537,7 +538,7 @@ function FullLayoutTab() {
                 <div className="mt-2 relative">
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input placeholder="Filter… (/)" value={filterQuery} onChange={(e) => setFilterQuery(e.target.value)} className="h-8 rounded-none border-x-0 border-t-0 border-b border-border/40 bg-transparent pl-8 pr-7 text-xs shadow-none focus-visible:ring-0 focus-visible:border-border/60" />
-                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono text-muted-foreground/50">/</span>
+                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-3xs font-mono text-muted-foreground/50">/</span>
                 </div>
                 <ThreadStatusTabs
                   className="mt-2"

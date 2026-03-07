@@ -121,7 +121,6 @@ function stableSortedStringify(value: unknown): string {
  */
 function sha1Hex(input: string): string {
   // In Next.js / Node.js environment, use the built-in crypto module
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const crypto = require("crypto") as typeof import("crypto");
   return crypto.createHash("sha1").update(input, "utf-8").digest("hex");
 }
@@ -271,10 +270,14 @@ function normalizeAmpLikeEvent(event: Record<string, unknown>): CanonicalEvent[]
     eventType === "tool" ||
     eventType === "command_execution" ||
     eventType === "file_change" ||
-    eventType === "subagent" ||
-    eventType === "result"
+    eventType === "subagent"
   ) {
     return [event as unknown as CanonicalEvent];
+  }
+
+  if (eventType === "result") {
+    const text = asString(event.result) || asString(event.text);
+    return text ? [{ type: "result", text }] : [];
   }
 
   if (eventType === "error") {

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ComponentProps, Ref } from "react";
+import { memo, type ComponentProps, type Ref } from "react";
 import Link from "next/link";
 import { HarnessBadge } from "@/components/ui/harness-badge";
 import { StateDot } from "@/components/ui/state-dot";
@@ -30,7 +30,7 @@ function ThreadAge({ thread }: { thread: ThreadSummary }) {
   return <span>{elapsed}</span>;
 }
 
-export function ThreadSummaryCard({
+export const ThreadSummaryCard = memo(function ThreadSummaryCard({
   thread,
   href,
   statusSubtitle,
@@ -68,16 +68,16 @@ export function ThreadSummaryCard({
     >
       <div className="flex min-w-0 items-center gap-2">
         <StateDot state={thread.state} className="size-2 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
+        <span className="min-w-0 flex-1 truncate text-label font-medium text-foreground">
           {name}
         </span>
-        <span className="shrink-0 text-[11px] text-muted-foreground/70">
+        <span className="shrink-0 text-detail text-muted-foreground/70">
           <ThreadAge thread={thread} />
         </span>
       </div>
 
-      <div className="mt-0.5 flex items-center gap-1 pl-4 text-[11px] text-muted-foreground">
-        <HarnessBadge harness={thread.harness} className="h-[18px] px-1 text-[9px] gap-0.5 rounded-[3px]" />
+      <div className="mt-0.5 flex items-center gap-1 pl-4 text-detail text-muted-foreground">
+        <HarnessBadge harness={thread.harness} className="harness-badge-sm" />
         <span className="text-border/60">·</span>
         <span>{thread.turn_count} turn{thread.turn_count === 1 ? "" : "s"}</span>
         <span className="text-border/60">·</span>
@@ -85,16 +85,16 @@ export function ThreadSummaryCard({
       </div>
 
       {taskPreview ? (
-        <div className="mt-0.5 line-clamp-1 pl-4 text-[11px] leading-relaxed text-muted-foreground/70">
+        <div className="mt-0.5 line-clamp-1 pl-4 text-detail leading-relaxed text-muted-foreground/70">
           {taskPreview}
         </div>
       ) : null}
       {resolvedStatusSubtitle ? (
-        <div className="mt-0.5 line-clamp-1 pl-4 text-[11px] text-muted-foreground">
+        <div className="mt-0.5 line-clamp-1 pl-4 text-detail text-muted-foreground">
           {resolvedStatusSubtitle}
         </div>
       ) : null}
       {activePhase ? <Progress value={progress} className="mt-1.5 h-0.5 bg-muted/70" /> : null}
     </Link>
   );
-}
+});

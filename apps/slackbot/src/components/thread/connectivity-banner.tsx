@@ -74,9 +74,9 @@ export function ConnectivityBanner({
       aria-live="polite"
       data-state={visibility}
       className={cn(
-        "mx-auto my-1 flex w-full max-w-[960px] items-center justify-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium md:px-3",
-        "data-[state=open]:animate-in data-[state=open]:slide-in-from-top-1 data-[state=open]:fade-in data-[state=open]:duration-[var(--dur-base)]",
-        "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-top-1 data-[state=closed]:fade-out data-[state=closed]:duration-[var(--dur-fast)]",
+        "mx-auto my-1 flex w-full max-w-content-max items-center justify-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium md:px-3",
+        "data-[state=open]:animate-in data-[state=open]:slide-in-from-top-1 data-[state=open]:fade-in data-[state=open]:duration-base",
+        "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-top-1 data-[state=closed]:fade-out data-[state=closed]:duration-fast",
         renderedState === "offline" && "border-destructive/30 bg-destructive/10 text-destructive",
         renderedState === "reconnecting" && "border-primary/30 bg-primary/10 text-primary",
       )}

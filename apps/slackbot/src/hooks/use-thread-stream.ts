@@ -280,7 +280,7 @@ export function useThreadStream(
     return () => {
       cancelled = true;
     };
-  }, [threadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [threadKey]);
 
   // Attach stream only when thread is active; re-attach on every active run.
   const threadState = thread?.state;

@@ -77,7 +77,6 @@ export function ParticipantAvatars({
                 style={{ width: size, height: size }}
               >
                 {participant.avatar_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={participant.avatar_url}
                     alt=""

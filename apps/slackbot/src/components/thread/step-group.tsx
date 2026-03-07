@@ -209,16 +209,16 @@ export function StepGroup({
       className="group rounded-md border border-border/50 bg-card/30"
     >
       <CollapsibleTrigger
-        className="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-1.5 transition-colors hover:bg-accent/40 active:bg-accent/60 min-h-[36px] md:min-h-0"
+        className="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-1.5 transition-colors hover:bg-accent/40 active:bg-accent/60 min-h-input-min md:min-h-0"
         data-touch-target
       >
-        <ChevronRight className="size-3 text-muted-foreground/60 shrink-0 transition-transform duration-[var(--dur-fast)] group-data-[state=open]:rotate-90" />
+        <ChevronRight className="size-3 text-muted-foreground/60 shrink-0 transition-transform duration-fast group-data-[state=open]:rotate-90" />
         <Icon className="size-3.5 text-muted-foreground shrink-0" />
-        <span className="truncate flex-1 min-w-0 text-left text-[13px] text-foreground/80">
+        <span className="truncate flex-1 min-w-0 text-left text-label text-foreground/80">
           {summary}
         </span>
         {statusLabel && (
-          <span className="text-[11px] font-mono text-muted-foreground tabular-nums shrink-0">
+          <span className="text-detail font-mono text-muted-foreground tabular-nums shrink-0">
             {statusLabel}
           </span>
         )}

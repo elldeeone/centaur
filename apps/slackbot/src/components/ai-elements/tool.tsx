@@ -85,10 +85,10 @@ export const ToolHeader = ({
       data-touch-target
       {...props}
     >
-      <ChevronRightIcon className="size-3 text-muted-foreground/60 shrink-0 transition-transform duration-[var(--dur-fast)] group-data-[state=open]/tool:rotate-90" />
+      <ChevronRightIcon className="size-3 text-muted-foreground/60 shrink-0 transition-transform duration-fast group-data-[state=open]/tool:rotate-90" />
       <span className="min-w-0 flex-1 truncate text-left text-foreground/80">{title ?? derivedName}</span>
       {detail ? (
-        <span className="hidden max-w-[45%] truncate text-[11px] text-muted-foreground md:block group-data-[state=open]/tool:hidden">
+        <span className="hidden max-w-[45%] truncate text-detail text-muted-foreground md:block group-data-[state=open]/tool:hidden">
           {detail}
         </span>
       ) : null}
@@ -176,6 +176,14 @@ function formatToolInput(input: Record<string, unknown>, toolName?: string): { c
     if (typeof target === "string") return { code: target as string, language: "text" };
   }
 
+  const entries = Object.entries(input).filter(([, v]) => v != null);
+  if (entries.length === 1 && typeof entries[0][1] === "string") {
+    return { code: entries[0][1] as string, language: "text" };
+  }
+  const allSimple = entries.every(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean");
+  if (allSimple && entries.length > 0) {
+    return { code: entries.map(([k, v]) => `${k}: ${v}`).join("\n"), language: "text" };
+  }
   return { code: JSON.stringify(input, null, 2), language: "json" };
 }
 
@@ -185,7 +193,7 @@ export const ToolInput = ({ className, input, toolName, ...props }: ToolInputPro
     toolName,
   );
   return (
-    <div className={cn("overflow-hidden", className)} {...props}>
+    <div className={cn("overflow-hidden tool-compact-code", className)} {...props}>
       <div className="rounded-md bg-muted/40">
         <CodeBlock code={code} language={language as import("shiki").BundledLanguage} />
       </div>
@@ -242,7 +250,7 @@ export const ToolOutput = ({
   }
 
   return (
-    <div className={cn("overflow-hidden", className)} {...props}>
+    <div className={cn("overflow-hidden tool-compact-code", className)} {...props}>
       <div
         className={cn(
           "overflow-x-auto rounded-md text-xs [&_table]:w-full",

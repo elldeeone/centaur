@@ -8,7 +8,10 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { HarnessBadge } from "@/components/ui/harness-badge";
+import { OverlayBackdrop } from "@/components/ui/overlay-backdrop";
+import { SheetAction } from "@/components/ui/sheet-action";
 import { StateDot } from "@/components/ui/state-dot";
 import { ParticipantAvatars } from "@/components/thread/participant-avatars";
 import { cn } from "@/lib/utils";
@@ -189,13 +192,13 @@ export function ThreadInfoSheet({
 
   return (
     <div className="fixed inset-0 z-50 md:hidden" aria-modal="true" role="dialog" aria-label="Thread details">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] animate-in fade-in duration-[var(--dur-base)] motion-reduce:animate-none" onClick={onClose} />
+      <OverlayBackdrop className="absolute inset-0 animate-in fade-in duration-base motion-reduce:animate-none" onClick={onClose} />
       <div
         ref={sheetRef}
         tabIndex={-1}
         className={cn(
-          "absolute inset-x-0 bottom-0 max-h-[82dvh] overflow-y-auto overscroll-contain rounded-t-2xl border-t border-border/80 bg-card shadow-[0_-12px_36px_rgba(0,0,0,0.38)] will-change-transform animate-in slide-in-from-bottom duration-[var(--dur-slow)] ease-[var(--ease-emphasized)] motion-reduce:animate-none",
-          dragY > 0 ? "transition-none" : "transition-transform duration-[var(--dur-slow)] ease-[var(--ease-emphasized)]",
+          "absolute inset-x-0 bottom-0 max-h-dvh-82 overflow-y-auto overscroll-contain rounded-t-2xl border-t border-border/80 bg-card shadow-sheet will-change-transform animate-in slide-in-from-bottom duration-slow ease-emphasized motion-reduce:animate-none",
+          dragY > 0 ? "transition-none" : "transition-transform duration-slow ease-emphasized",
         )}
         style={{ transform: dragY > 0 ? `translateY(${dragY}px)` : undefined }}
         onTouchStart={handleTouchStart}
@@ -206,20 +209,21 @@ export function ThreadInfoSheet({
           <div className="w-8 h-1 bg-border rounded-full" />
         </div>
 
-        <div className="px-4 sm:px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+        <div className="px-4 sm:px-5 safe-area-bottom">
           <div className="flex items-center justify-between mt-2">
             <h2 className="text-lg font-semibold text-foreground">
               {thread.thread_name || thread.slack_thread_key}
             </h2>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-lg"
+              className="size-11 text-muted-foreground"
               onClick={onClose}
-              className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors duration-[var(--dur-fast)] hover:bg-accent hover:text-foreground"
               aria-label="Close"
               data-touch-target
             >
               <X className="size-4" />
-            </button>
+            </Button>
           </div>
 
           <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
@@ -254,47 +258,30 @@ export function ThreadInfoSheet({
           <div className="mt-5 space-y-2 border-t border-border pt-4">
             <h3 className="mb-2 text-xs font-medium text-muted-foreground">Actions</h3>
 
-            <button
-              type="button"
-              onClick={() => { onRefresh(); onClose(); }}
-              className="flex min-h-11 w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-foreground transition-colors duration-[var(--dur-fast)] hover:bg-accent/70 active:bg-accent"
-              data-touch-target
-            >
-              <RefreshCw className="size-5 text-muted-foreground" />
+            <SheetAction type="button" onClick={() => { onRefresh(); onClose(); }} data-touch-target>
+              <RefreshCw className="size-5" />
               Refresh thread
-            </button>
+            </SheetAction>
 
             {canStop && onStop && (
-              <button
-                type="button"
-                onClick={() => { onStop(); onClose(); }}
-                className="flex min-h-11 w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-destructive transition-colors duration-[var(--dur-fast)] hover:bg-destructive/10 active:bg-accent"
-                data-touch-target
-              >
+              <SheetAction type="button" variant="destructive" onClick={() => { onStop(); onClose(); }} data-touch-target>
                 <CircleStop className="size-5" />
                 Stop agent
-              </button>
+              </SheetAction>
             )}
 
-            <button
-              type="button"
-              onClick={copyLink}
-              className="flex min-h-11 w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-foreground transition-colors duration-[var(--dur-fast)] hover:bg-accent/70 active:bg-accent"
-              data-touch-target
-            >
-              <Copy className="size-5 text-muted-foreground" />
+            <SheetAction type="button" onClick={copyLink} data-touch-target>
+              <Copy className="size-5" />
               Copy link
-            </button>
+            </SheetAction>
 
             {slackUrl ? (
-              <a
-                href={slackUrl}
-                className="flex min-h-11 w-full items-center gap-3 rounded-md px-2 py-3 text-sm text-foreground no-underline transition-colors duration-[var(--dur-fast)] hover:bg-accent/70 active:bg-accent"
-                data-touch-target
-              >
-                <ExternalLink className="size-5 text-muted-foreground" />
-                Open in Slack
-              </a>
+              <SheetAction asChild data-touch-target>
+                <a href={slackUrl}>
+                  <ExternalLink className="size-5" />
+                  Open in Slack
+                </a>
+              </SheetAction>
             ) : null}
           </div>
         </div>

@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import type { FileContents } from "@pierre/diffs";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { MessageAction, MessageActions } from "@/components/ai-elements/message";
 import { CopyIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -40,7 +41,7 @@ const LANGUAGE_CLASSES: Record<string, string> = {
   sh: "bg-primary/10 text-primary",
 };
 
-export function DiffCard({
+export const DiffCard = memo(function DiffCard({
   file,
   lang,
   oldStr,
@@ -76,7 +77,7 @@ export function DiffCard({
 
   return (
     <div
-      className={`overflow-hidden rounded-md border border-border/80 bg-card/55 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] ${didFail ? "border-destructive/30" : ""}`}
+      className={`overflow-hidden rounded-md border border-border/80 bg-card/55 shadow-ring-subtle ${didFail ? "border-destructive/30" : ""}`}
     >
       <div className="flex items-center justify-between border-b border-border/80 bg-background/60 px-3 py-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -91,13 +92,15 @@ export function DiffCard({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={() => setDiffStyle(diffStyle === "unified" ? "split" : "unified")}
-            className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="text-3xs font-medium"
           >
             {diffStyle === "unified" ? "Split" : "Unified"}
-          </button>
+          </Button>
           <MessageActions>
             <MessageAction
               tooltip="Copy diff"
@@ -113,7 +116,7 @@ export function DiffCard({
           </MessageActions>
         </div>
       </div>
-      <div className="max-h-[400px] overflow-auto overscroll-contain [&_*]:text-xs">
+      <div className="max-h-diff-max overflow-auto overscroll-contain [&_*]:text-xs">
         <MultiFileDiff
           oldFile={oldFile}
           newFile={newFile}
@@ -129,4 +132,4 @@ export function DiffCard({
       </div>
     </div>
   );
-}
+});

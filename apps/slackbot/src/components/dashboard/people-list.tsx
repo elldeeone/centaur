@@ -2,6 +2,7 @@
 
 import { memo, useMemo, useState } from "react";
 import type { PeopleListPerson } from "./types";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 const AVATAR_COLORS = [
@@ -94,7 +95,7 @@ export const PeopleList = memo(function PeopleList({
               {person.tags && person.tags.length > 0 && (
                 <div className="flex gap-1">
                   {person.tags.slice(0, 3).map((tag) => (
-                    <span key={tag} className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground uppercase">
+                    <span key={tag} className="rounded-full bg-muted px-2 py-0.5 text-3xs font-medium text-muted-foreground uppercase">
                       {tag}
                     </span>
                   ))}
@@ -108,8 +109,8 @@ export const PeopleList = memo(function PeopleList({
         <div className="flex items-center justify-between border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
           <span>{safePage * pageSize + 1}–{Math.min((safePage + 1) * pageSize, filtered.length)} of {filtered.length}</span>
           <div className="flex gap-2">
-            <button type="button" disabled={safePage === 0} onClick={() => setPage((p) => p - 1)} className="rounded border border-border px-2 py-0.5 hover:bg-muted disabled:opacity-40">Prev</button>
-            <button type="button" disabled={safePage >= totalPages - 1} onClick={() => setPage((p) => p + 1)} className="rounded border border-border px-2 py-0.5 hover:bg-muted disabled:opacity-40">Next</button>
+            <Button type="button" variant="outline" size="xs" disabled={safePage === 0} onClick={() => setPage((p) => p - 1)} className="rounded border border-border px-2 py-0.5 hover:bg-muted disabled:opacity-40">Prev</Button>
+            <Button type="button" variant="outline" size="xs" disabled={safePage >= totalPages - 1} onClick={() => setPage((p) => p + 1)} className="rounded border border-border px-2 py-0.5 hover:bg-muted disabled:opacity-40">Next</Button>
           </div>
         </div>
       )}

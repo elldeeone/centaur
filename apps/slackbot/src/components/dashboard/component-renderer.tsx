@@ -12,6 +12,7 @@ import { Timeline } from "./timeline";
 import { PeopleList } from "./people-list";
 import { formatValue } from "./format-value";
 import { LiveDataWrapper } from "./live-data-wrapper";
+import { Button } from "@/components/ui/button";
 
 const AVATAR_COLORS = [
   "var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)",
@@ -123,7 +124,7 @@ export const RenderNode = memo(function RenderNode({ node }: { node: ComponentNo
     }
 
     case "avatar": {
-      const sizes = { sm: "h-6 w-6 text-[10px]", md: "h-8 w-8 text-xs", lg: "h-10 w-10 text-sm" };
+      const sizes = { sm: "h-6 w-6 text-3xs", md: "h-8 w-8 text-xs", lg: "h-10 w-10 text-sm" };
       const size = sizes[node.size ?? "md"];
       const bg = AVATAR_COLORS[hashCode(node.name) % AVATAR_COLORS.length];
       if (node.src) {
@@ -288,9 +289,10 @@ const TabsComponent = memo(function TabsComponent({
     <div>
       <div className="flex gap-1 border-b border-border">
         {tabs.map((tab) => (
-          <button
+          <Button
             key={tab.key}
             type="button"
+            variant="ghost"
             onClick={() => setActive(tab.key)}
             className={`px-3 py-2 text-xs font-medium transition-colors ${
               tab.key === active
@@ -300,11 +302,11 @@ const TabsComponent = memo(function TabsComponent({
           >
             {tab.label}
             {tab.count != null && (
-              <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums">
+              <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium tabular-nums">
                 {tab.count}
               </span>
             )}
-          </button>
+          </Button>
         ))}
       </div>
       {activeTab && (

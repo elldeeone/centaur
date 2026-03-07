@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { LayoutList, Zap } from "lucide-react";
 import { useHaptics } from "@/components/haptics-provider";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { Button } from "@/components/ui/button";
+import { SurfaceBar } from "@/components/ui/surface-bar";
 import { cn } from "@/lib/utils";
 import { useKeyboardHeight } from "@/hooks/use-visual-viewport";
 
@@ -61,13 +63,13 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
   }
 
   const threadsClassName = cn(
-    "relative flex w-full min-h-11 flex-col items-center justify-center gap-0.5 rounded-lg px-3 py-2 transition-colors duration-[var(--dur-fast)]",
+    "relative flex w-full min-h-11 flex-col items-center justify-center gap-0.5 rounded-lg px-3 py-2 transition-colors duration-fast",
     isThreads
       ? "border border-primary/40 bg-primary/14 text-primary"
       : "border border-transparent text-muted-foreground hover:bg-accent/40 hover:text-foreground",
   );
   const activeClassName = cn(
-    "relative flex w-full min-h-11 flex-col items-center justify-center gap-0.5 rounded-lg px-3 py-2 transition-colors duration-[var(--dur-fast)]",
+    "relative flex w-full min-h-11 flex-col items-center justify-center gap-0.5 rounded-lg px-3 py-2 transition-colors duration-fast",
     isActive
       ? "border border-primary/40 bg-primary/14 text-primary"
       : "border border-transparent text-muted-foreground hover:bg-accent/40 hover:text-foreground",
@@ -75,39 +77,40 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
   const activeHref = activeThreadHref || "/";
 
   return (
-    <nav
-      className={cn(
-        "md:hidden flex-shrink-0 flex items-center justify-center border-t border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_88%,transparent),color-mix(in_oklab,var(--card)_82%,transparent))] px-3 backdrop-blur-xl min-h-[66px] pb-[max(0.5rem,env(safe-area-inset-bottom))] transition-[opacity,transform] duration-[var(--dur-base)] ease-[var(--ease-standard)]",
-      )}
-      aria-label="Thread navigation"
+    <SurfaceBar
+      asChild
+      className="md:hidden flex-shrink-0 flex items-center justify-center border-t border-border/70 px-3 min-h-tab-bar safe-area-bottom-sm transition-opacity-transform duration-base ease-standard"
     >
-      <div className="thread-surface-soft grid w-full max-w-[360px] grid-cols-2 gap-1.5 rounded-xl p-1.5">
+      <nav aria-label="Thread navigation">
+      <div className="thread-surface-soft grid w-full max-w-sidebar-w grid-cols-2 gap-1.5 rounded-xl p-1.5">
       {isThreads ? (
-        <button
+        <Button
           type="button"
           aria-current="page"
           onClick={handleThreadsTab}
+          variant="ghost"
           className={threadsClassName}
           data-touch-target
         >
           <LayoutList className="size-5" />
-          <span className="text-[13px] font-medium">Threads</span>
-        </button>
+          <span className="text-label font-medium">Threads</span>
+        </Button>
       ) : (
         <Link href="/" scroll={false} aria-current={undefined} onClick={() => trigger("selection")} className={threadsClassName} data-touch-target>
           {hasError && !isThreads && (
             <span className="absolute top-1.5 right-3 size-1.5 rounded-full bg-destructive" />
           )}
           <LayoutList className="size-5" />
-          <span className="text-[13px] font-medium">Threads</span>
+          <span className="text-label font-medium">Threads</span>
         </Link>
       )}
 
       {isActive ? (
-        <button
+        <Button
           type="button"
           aria-current="page"
           onClick={handleActiveTab}
+          variant="ghost"
           className={activeClassName}
           data-touch-target
         >
@@ -115,18 +118,18 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
             <span className="absolute top-1.5 right-3 size-2 rounded-full bg-primary animate-pulse motion-reduce:animate-none" />
           )}
           <Zap className="size-5" />
-          <span className="text-[13px] font-medium">Active</span>
-        </button>
+          <span className="text-label font-medium">Active</span>
+        </Button>
       ) : (
         <Link href={activeHref} scroll={false} aria-current={undefined} onClick={() => trigger("selection")} className={activeClassName} data-touch-target>
           {hasRunningAgent && (
             <span className="absolute top-1.5 right-3 size-2 rounded-full bg-primary animate-pulse motion-reduce:animate-none" />
           )}
           <Zap className="size-5" />
-          <span className="text-[13px] font-medium">Active</span>
+          <span className="text-label font-medium">Active</span>
         </Link>
       )}
       </div>
-    </nav>
+    </nav></SurfaceBar>
   );
 }

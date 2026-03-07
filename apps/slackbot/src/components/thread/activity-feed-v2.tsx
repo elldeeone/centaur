@@ -12,8 +12,9 @@
  */
 
 import { ChevronUp, LoaderCircle, MessagesSquare } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { UIMessage } from "ai";
+import { Button } from "@/components/ui/button";
 
 import {
   Conversation,
@@ -30,7 +31,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import type { SubagentStep } from "@/lib/describe";
 import type { Participant } from "@/lib/types";
 
-export function ActivityFeedV2({
+export const ActivityFeedV2 = memo(function ActivityFeedV2({
   messages,
   state,
   isStreaming,
@@ -114,14 +115,16 @@ export function ActivityFeedV2({
             {isLoadingOlder ? (
               <LoaderCircle className="size-4 animate-spin text-muted-foreground/60" />
             ) : (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="xs"
                 onClick={onLoadMore}
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                className="text-muted-foreground/60 hover:text-muted-foreground"
               >
                 <ChevronUp className="size-3" />
                 Load earlier messages
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -147,7 +150,7 @@ export function ActivityFeedV2({
             <Message
               key={message.id}
               from={message.role === "user" ? "user" : "assistant"}
-              className="group max-w-full rounded-md border border-border/40 bg-card/20 [content-visibility:auto] [contain-intrinsic-size:140px]"
+              className="group max-w-full rounded-md border border-border/40 bg-card/20 content-auto"
             >
               <MessageContent
                 className={
@@ -159,6 +162,8 @@ export function ActivityFeedV2({
                 <UIMessageRenderer
                   message={message}
                   participantsById={participantsById}
+                  onSelectSubagent={onSelectSubagent}
+                  selectedSubagentKey={selectedSubagentKey}
                 />
               </MessageContent>
             </Message>
@@ -168,4 +173,4 @@ export function ActivityFeedV2({
       <ConversationScrollButton aria-label="Scroll to latest" />
     </Conversation>
   );
-}
+});

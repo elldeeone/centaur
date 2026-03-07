@@ -20,6 +20,9 @@ import { getPool } from "@/lib/db";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
+const messagesCache = new Map<string, { data: unknown; ts: number }>();
+const MESSAGES_TTL = 3_000;
+
 export async function GET(request: NextRequest) {
   const threadKey = request.nextUrl.searchParams.get("key");
   if (!threadKey) {
@@ -60,6 +63,12 @@ export async function GET(request: NextRequest) {
       rows = result.rows;
     } else {
       // No pagination — return everything (backwards-compatible)
+      const cached = messagesCache.get(threadKey);
+      if (cached && Date.now() - cached.ts < MESSAGES_TTL) {
+        return Response.json(cached.data, {
+          headers: { "Cache-Control": "public, s-maxage=5, stale-while-revalidate=3" },
+        });
+      }
       const result = await pool.query(
         `SELECT id, role, parts, created_at, metadata
          FROM chat_messages
@@ -105,8 +114,11 @@ export async function GET(request: NextRequest) {
     }
 
     // Backwards-compatible: flat array
+    if (!paginated) {
+      messagesCache.set(threadKey, { data: validatedMessages, ts: Date.now() });
+    }
     return Response.json(validatedMessages, {
-      headers: { "Cache-Control": "no-store" },
+      headers: { "Cache-Control": "public, s-maxage=5, stale-while-revalidate=3" },
     });
   } catch (err) {
     console.error("Failed to fetch messages:", err);

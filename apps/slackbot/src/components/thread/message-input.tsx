@@ -5,6 +5,9 @@ import { ArrowUp, Loader2, Square } from "lucide-react";
 import { toast } from "sonner";
 import { useHaptics } from "@/components/haptics-provider";
 import { useKeyboardHeight } from "@/hooks/use-visual-viewport";
+import { Button } from "@/components/ui/button";
+import { ChatTextarea } from "@/components/ui/chat-textarea";
+import { SurfaceBar } from "@/components/ui/surface-bar";
 import { cn } from "@/lib/utils";
 
 type InputMode = "idle" | "running" | "error";
@@ -106,9 +109,9 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
   }, []);
 
   return (
-    <div
+    <SurfaceBar
       className={cn(
-        "flex-shrink-0 border-t border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_90%,transparent),color-mix(in_oklab,var(--card)_84%,transparent))] px-2.5 py-2 backdrop-blur-md",
+        "flex-shrink-0 border-t border-border/70 px-2.5 py-2",
         className,
       )}
       style={{
@@ -120,11 +123,11 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
     >
       <form
         onSubmit={(e) => { e.preventDefault(); void handleSend(); }}
-        className="thread-surface mx-auto flex max-w-[960px] items-end gap-1.5 rounded-xl px-3 py-1.5 md:gap-2 md:px-3.5 md:py-2"
+        className="thread-surface mx-auto flex max-w-content-max items-end gap-1.5 rounded-xl px-3 py-1.5 md:gap-2 md:px-3.5 md:py-2"
         aria-label="Message composer"
       >
         <label htmlFor="chat-input" className="sr-only">Message</label>
-        <textarea
+        <ChatTextarea
           ref={textareaRef}
           id="chat-input"
           name="chat-input"
@@ -134,50 +137,34 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
           placeholder={PLACEHOLDERS[mode]}
+          disabled={submitting}
           rows={1}
           enterKeyHint="send"
           autoComplete="off"
           aria-describedby="chat-input-hint"
-          className={cn(
-            "flex-1 min-w-0 min-h-[36px] resize-none",
-            "text-[16px] md:text-sm leading-[22px]",
-            "border-none bg-transparent py-1.5",
-            "placeholder:text-muted-foreground/60 text-foreground",
-            "outline-none",
-            submitting && "opacity-50",
-          )}
-          style={{ maxHeight: MAX_HEIGHT, fieldSizing: "content" } as React.CSSProperties}
         />
         <span id="chat-input-hint" className="sr-only">
           Press Enter to send, Shift+Enter for a new line.
         </span>
 
         {submitting ? (
-          <button
-            type="button"
-            disabled
-            aria-label="Sending message"
-            className="flex size-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary/60 text-primary-foreground"
-          >
+          <Button type="button" disabled aria-label="Sending message" variant="default" size="icon-sm" className="flex-shrink-0 rounded-lg bg-primary/60 text-primary-foreground">
             <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-          </button>
+          </Button>
         ) : (
           <>
             {showStop ? (
-              <button
-                type="button"
-                onClick={() => void handleStop()}
-                className="flex size-8 flex-shrink-0 items-center justify-center rounded-lg bg-destructive/80 text-destructive-foreground transition-colors duration-[var(--dur-base)] ease-[var(--ease-standard)] hover:bg-destructive"
-                aria-label="Stop agent"
-              >
+              <Button type="button" onClick={() => void handleStop()} variant="destructive" size="icon-sm" className="flex-shrink-0 rounded-lg bg-destructive/80 transition-colors duration-base ease-standard hover:bg-destructive" aria-label="Stop agent">
                 <Square aria-hidden="true" className="size-3.5" />
-              </button>
+              </Button>
             ) : null}
-            <button
+            <Button
               type="submit"
               disabled={!hasText}
+              variant="ghost"
+              size="icon-sm"
               className={cn(
-                "flex size-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors duration-[var(--dur-base)] ease-[var(--ease-standard)]",
+                "flex-shrink-0 rounded-lg transition-colors duration-base ease-standard",
                 hasText
                   ? "bg-foreground text-background hover:bg-foreground/90"
                   : "bg-muted-foreground/20 text-muted-foreground/30 pointer-events-none",
@@ -185,10 +172,10 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
               aria-label="Send message"
             >
               <ArrowUp aria-hidden="true" className="size-4" />
-            </button>
+            </Button>
           </>
         )}
       </form>
-    </div>
+    </SurfaceBar>
   );
 }
