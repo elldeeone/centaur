@@ -4,22 +4,31 @@ export interface Position {
   fundName: string;
   fundShort: string;
   assetType: string; // "Token" | "Public" | "Private" | "Other"
+  organizationId: string | null;
+  organizationName: string | null;
   marketValue: number;
   grossInvestedCapital: number;
+  grossRealizedValue: number;
+  dividendValue: number;
   moic: number;
   holding: number;
   realizedGainLoss: number;
+  unrealizedGainLoss: number;
   latestPrice: number | null;
 }
 
-/** Aggregated position: same asset across funds, with per-fund sub-rows. */
+/** Aggregated position: same organization across funds/assets, with per-asset sub-rows. */
 export interface AggregatedPosition {
-  assetName: string;
+  organizationName: string;
   ticker: string | null;
   assetType: string;
   marketValue: number;
   grossInvestedCapital: number;
+  grossRealizedValue: number;
+  dividendValue: number;
   moic: number;
+  unrealizedGainLoss: number;
+  realizedGainLoss: number;
   latestPrice: number | null;
-  funds: Position[]; // per-fund breakdown
+  funds: Position[]; // per-fund/asset breakdown
 }

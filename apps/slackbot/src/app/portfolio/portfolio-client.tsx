@@ -68,31 +68,37 @@ function fmtPct(v: number): string {
 function aggregate(positions: Position[]): AggregatedPosition[] {
   const map = new Map<string, AggregatedPosition>();
   for (const p of positions) {
-    const key = p.assetName;
+    const key = p.organizationId ?? p.assetName;
     const existing = map.get(key);
     if (existing) {
       existing.marketValue += p.marketValue;
       existing.grossInvestedCapital += p.grossInvestedCapital;
+      existing.grossRealizedValue += p.grossRealizedValue;
+      existing.dividendValue += p.dividendValue;
+      existing.unrealizedGainLoss += p.unrealizedGainLoss;
+      existing.realizedGainLoss += p.realizedGainLoss;
       existing.funds.push(p);
     } else {
       map.set(key, {
-        assetName: p.assetName,
+        organizationName: p.organizationName ?? p.assetName,
         ticker: p.ticker,
         assetType: p.assetType,
         marketValue: p.marketValue,
         grossInvestedCapital: p.grossInvestedCapital,
+        grossRealizedValue: p.grossRealizedValue,
+        dividendValue: p.dividendValue,
         moic: p.moic,
+        unrealizedGainLoss: p.unrealizedGainLoss,
+        realizedGainLoss: p.realizedGainLoss,
         latestPrice: p.latestPrice,
         funds: [p],
       });
     }
   }
-  // Recalculate aggregate MOIC
+  // Recalculate aggregate MOIC: (MV + Realized + Dividends) / IC
   for (const agg of map.values()) {
-    if (agg.funds.length > 1) {
-      const ic = agg.grossInvestedCapital;
-      agg.moic = ic > 0 ? agg.marketValue / ic : 0;
-    }
+    const ic = agg.grossInvestedCapital;
+    agg.moic = ic > 0 ? (agg.marketValue + agg.grossRealizedValue + agg.dividendValue) / ic : 0;
   }
   return [...map.values()];
 }
@@ -116,7 +122,7 @@ function getInitials(name: string): string {
 
 // ── Sort ──
 
-type SortKey = "assetName" | "marketValue" | "grossInvestedCapital" | "moic" | "latestPrice";
+type SortKey = "organizationName" | "marketValue" | "grossInvestedCapital" | "moic" | "latestPrice" | "unrealizedGainLoss" | "realizedGainLoss";
 type SortDir = "asc" | "desc";
 
 function SortIcon({ column, sortKey, sortDir }: { column: SortKey; sortKey: SortKey; sortDir: SortDir }) {
@@ -177,7 +183,7 @@ function buildPalette(): PaletteItem[] {
       description: "Top 10 assets by market value",
       buildNode: (pos) => {
         const agg = aggregate(pos).sort((a, b) => b.marketValue - a.marketValue);
-        const top = agg.slice(0, 10).map((p) => ({ name: p.ticker || p.assetName, value: p.marketValue }));
+        const top = agg.slice(0, 10).map((p) => ({ name: p.ticker || p.organizationName, value: p.marketValue }));
         const rest = agg.slice(10).reduce((s, p) => s + p.marketValue, 0);
         if (rest > 0) top.push({ name: "Other", value: rest });
         return { type: "pie-chart", title: "Top Holdings", labelKey: "name", valueKey: "value", height: 300, data: top };
@@ -220,7 +226,7 @@ function buildPalette(): PaletteItem[] {
         const agg = aggregate(pos).filter((p) => p.moic > 1).sort((a, b) => b.moic - a.moic).slice(0, 10);
         return {
           type: "bar-chart", title: "Top MOIC", categoryKey: "name", valueKey: "moic", height: 280,
-          data: agg.map((p) => ({ name: p.ticker || p.assetName.slice(0, 12), moic: Math.round(p.moic * 100) / 100 })),
+          data: agg.map((p) => ({ name: p.ticker || p.organizationName.slice(0, 12), moic: Math.round(p.moic * 100) / 100 })),
         };
       },
     },
@@ -295,7 +301,7 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
     if (typeFilter !== "all") rows = rows.filter((p) => p.assetType === typeFilter);
     if (search) {
       const q = search.toLowerCase();
-      rows = rows.filter((p) => p.assetName.toLowerCase().includes(q) || (p.ticker?.toLowerCase().includes(q)));
+      rows = rows.filter((p) => (p.organizationName ?? p.assetName).toLowerCase().includes(q) || p.assetName.toLowerCase().includes(q) || (p.ticker?.toLowerCase().includes(q)));
     }
     return rows;
   }, [positions, search, fundFilter, typeFilter]);
@@ -322,7 +328,7 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
   const toggleSort = useCallback((key: SortKey) => {
     setSortKey((prev) => {
       if (prev === key) { setSortDir((d) => (d === "asc" ? "desc" : "asc")); return prev; }
-      setSortDir(key === "assetName" ? "asc" : "desc");
+      setSortDir(key === "organizationName" ? "asc" : "desc");
       return key;
     });
   }, []);
@@ -454,11 +460,11 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
                 <tr className="border-b border-border bg-muted/30">
                   <th className="w-8 px-2 py-2.5" />
                   <th
-                    onClick={() => toggleSort("assetName")}
+                    onClick={() => toggleSort("organizationName")}
                     className="cursor-pointer select-none px-4 py-2.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
                   >
                     Position
-                    <SortIcon column="assetName" sortKey={sortKey} sortDir={sortDir} />
+                    <SortIcon column="organizationName" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th
                     onClick={() => toggleSort("latestPrice")}
@@ -488,22 +494,36 @@ export function PortfolioClient({ initialPositions }: { initialPositions: Positi
                     MOIC
                     <SortIcon column="moic" sortKey={sortKey} sortDir={sortDir} />
                   </th>
+                  <th
+                    onClick={() => toggleSort("unrealizedGainLoss")}
+                    className="cursor-pointer select-none px-4 py-2.5 text-right text-xs font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Unrealized G/L
+                    <SortIcon column="unrealizedGainLoss" sortKey={sortKey} sortDir={sortDir} />
+                  </th>
+                  <th
+                    onClick={() => toggleSort("realizedGainLoss")}
+                    className="cursor-pointer select-none px-4 py-2.5 text-right text-xs font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Realized G/L
+                    <SortIcon column="realizedGainLoss" sortKey={sortKey} sortDir={sortDir} />
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {aggregated.map((pos) => {
-                  const isExpanded = expanded.has(pos.assetName);
+                  const isExpanded = expanded.has(pos.organizationName);
                   const hasMultipleFunds = pos.funds.length > 1;
-                  const bg = AVATAR_COLORS[hashCode(pos.assetName) % AVATAR_COLORS.length];
+                  const bg = AVATAR_COLORS[hashCode(pos.organizationName) % AVATAR_COLORS.length];
 
                   return (
                     <PositionRows
-                      key={pos.assetName}
+                      key={pos.organizationName}
                       pos={pos}
                       isExpanded={isExpanded}
                       hasMultipleFunds={hasMultipleFunds}
                       bg={bg}
-                      onToggle={() => toggleExpand(pos.assetName)}
+                      onToggle={() => toggleExpand(pos.organizationName)}
                     />
                   );
                 })}
@@ -687,10 +707,10 @@ function PositionRows({
               className="flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-medium text-white"
               style={{ backgroundColor: bg }}
             >
-              {getInitials(pos.assetName)}
+              {getInitials(pos.organizationName)}
             </div>
             <div className="flex flex-col">
-              <span className="font-medium text-foreground">{pos.assetName}</span>
+              <span className="font-medium text-foreground">{pos.organizationName}</span>
               <div className="flex items-center gap-2">
                 {pos.ticker && (
                   <span className="text-portfolio-sm text-muted-foreground">{pos.ticker}</span>
@@ -728,18 +748,26 @@ function PositionRows({
             {pos.moic > 0 ? `${pos.moic.toFixed(2)}x` : "—"}
           </span>
         </td>
+        {/* Unrealized G/L */}
+        <td className={`px-4 py-2.5 text-right tabular-nums ${pos.unrealizedGainLoss >= 0 ? "text-primary" : "text-destructive"}`}>
+          {fmtCompact(pos.unrealizedGainLoss)}
+        </td>
+        {/* Realized G/L */}
+        <td className={`px-4 py-2.5 text-right tabular-nums ${pos.realizedGainLoss >= 0 ? "text-primary" : "text-destructive"}`}>
+          {fmtCompact(pos.realizedGainLoss)}
+        </td>
       </tr>
 
       {/* Expanded sub-rows */}
       {isExpanded &&
         pos.funds.map((fund, fi) => (
           <tr
-            key={`${pos.assetName}-${fund.fundShort}-${fi}`}
+            key={`${pos.organizationName}-${fund.assetName}-${fund.fundShort}-${fi}`}
             className="border-b border-border/20 bg-muted/10 last:border-0"
           >
             <td />
             <td className="px-4 py-2 pl-16">
-              <span className="text-xs text-muted-foreground">{fund.fundShort}</span>
+              <span className="text-xs text-muted-foreground">{fund.assetName} · {fund.fundShort}</span>
             </td>
             <td className="px-4 py-2 text-right tabular-nums text-xs text-muted-foreground">
               {fund.latestPrice != null ? fmtCurrency(fund.latestPrice) : "—"}
@@ -760,6 +788,12 @@ function PositionRows({
               >
                 {fund.moic > 0 ? `${fund.moic.toFixed(2)}x` : "—"}
               </span>
+            </td>
+            <td className={`px-4 py-2 text-right tabular-nums text-xs ${fund.unrealizedGainLoss >= 0 ? "text-primary" : "text-destructive"}`}>
+              {fmtCompact(fund.unrealizedGainLoss)}
+            </td>
+            <td className={`px-4 py-2 text-right tabular-nums text-xs ${fund.realizedGainLoss >= 0 ? "text-primary" : "text-destructive"}`}>
+              {fmtCompact(fund.realizedGainLoss)}
             </td>
           </tr>
         ))}

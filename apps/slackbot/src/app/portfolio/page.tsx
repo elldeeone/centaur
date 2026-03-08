@@ -26,12 +26,16 @@ async function dbQuery(sql: string): Promise<Record<string, unknown>[]> {
 
 const POSITIONS_SQL = `SELECT p."marketValue", p."grossInvestedCapital", p."moic",
   p."holding", p."liquidity", p."realizedGainLoss",
+  p."grossRealizedValue", p."dividendValue",
   a.name AS "assetName", a.ticker, a.type AS "rawAssetType", a.id AS "assetId",
-  f.name AS "fundName"
+  a."organizationId",
+  f.name AS "fundName",
+  o.name AS "organizationName"
   FROM "PerformanceLatest" p
   LEFT JOIN "Asset" a ON p."assetId" = a.id
   LEFT JOIN "Fund" f  ON p."fundId"  = f.id
-  WHERE p."marketValue" > 0
+  LEFT JOIN "Organization" o ON a."organizationId" = o.id
+  WHERE p."marketValue" >= 1
   ORDER BY p."marketValue" DESC NULLS LAST LIMIT 500`;
 
 const PRICES_SQL = `SELECT ps."assetId", lp.price
@@ -73,17 +77,25 @@ async function fetchPositions(): Promise<Position[]> {
       else if (["PRIVATE_EQUITY", "SAFT", "SAFE", "LLC_UNITS", "PARTNERSHIP_INTEREST", "TOKEN_WARRANT"].includes(rawType))
         assetType = "Private";
 
+      const mv = (r.marketValue as number) || 0;
+      const gic = (r.grossInvestedCapital as number) || 0;
+
       return {
         assetName: (r.assetName as string) || "Unknown",
         ticker: (r.ticker as string) || null,
         fundName,
         fundShort: FUND_SHORT[fundName] || fundName.slice(0, 4),
         assetType,
-        marketValue: (r.marketValue as number) || 0,
-        grossInvestedCapital: (r.grossInvestedCapital as number) || 0,
+        organizationId: (r.organizationId as string) || null,
+        organizationName: (r.organizationName as string) || null,
+        marketValue: mv,
+        grossInvestedCapital: gic,
+        grossRealizedValue: (r.grossRealizedValue as number) || 0,
+        dividendValue: (r.dividendValue as number) || 0,
         moic: (r.moic as number) || 0,
         holding: (r.holding as number) || 0,
         realizedGainLoss: (r.realizedGainLoss as number) || 0,
+        unrealizedGainLoss: mv - gic,
         latestPrice: priceMap.get(r.assetId as string) ?? null,
       };
     });
