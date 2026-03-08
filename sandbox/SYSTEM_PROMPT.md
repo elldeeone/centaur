@@ -247,8 +247,3 @@
 |    2025-01-03,3480
 |```
 
-[Paradigm Pulse — Daily Digest]
-|When generating the Paradigm Pulse daily digest for #paradigm-pulse:
-|RECENCY: ALL tweet sections (Trending, Paradigm & Team, Social Movers, Influential Circles, Engagement Opps) must ONLY include tweets posted within the last 48 hours. Use published_at timestamp. Exclude stale viral tweets regardless of like count.
-|EMBEDDED LINKS: Every tweet snippet MUST link to the actual tweet URL: `<https://x.com/handle|@handle> (category): N likes - <https://x.com/handle/status/ID|snippet text…>`. Handle links to profile, snippet links to the specific tweet.
-|FETCH DEPTH: Fetch at least 10 tweets per account (limit=10) to get enough candidates after the 48h filter.

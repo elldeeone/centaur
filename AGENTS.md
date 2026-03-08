@@ -278,27 +278,3 @@ docker ps --filter label=agent2=true -q | xargs -r docker stop
 docker container prune -f --filter label=agent2=true
 ```
 
-## Paradigm Pulse — Daily Digest Rules
-
-When generating the Paradigm Pulse daily digest for `#paradigm-pulse`, follow these rules strictly:
-
-### Recency filter (48h)
-**ALL tweet sections** must only include tweets posted within the last 48 hours. Use the `published_at` timestamp from the Twitter API to filter. This applies to:
-- 🔥 Trending Today (portfolio companies)
-- 🏛️ Paradigm & Team
-- 📈 Social Movers
-- 🎭 Influential Circles
-- 💡 Engagement Opps
-
-If a tweet's `published_at` is older than 48 hours from now, **exclude it**. Do not show stale viral tweets just because they have high like counts.
-
-### Embedded tweet links
-Every tweet snippet MUST link to the actual tweet URL, not just the account profile. Format:
-```
-• <https://x.com/handle|@handle> (category): N likes - <https://x.com/handle/status/ID|snippet text…>
-```
-The handle links to the profile. The snippet links to the specific tweet. Use `tweet_url` from the API response.
-
-### Timeline fetch depth
-Fetch at least 10 tweets per account (`limit=10`) to get enough candidates after the 48h recency filter removes stale tweets.
-
