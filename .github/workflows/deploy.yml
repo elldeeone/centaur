@@ -23,7 +23,10 @@ jobs:
     runs-on: [self-hosted, linux, x64, docker]
     env:
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      SECRET_MANAGER_TOKEN: ${{ secrets.SECRET_MANAGER_TOKEN }}
       API_SECRET_KEY: ${{ secrets.API_SECRET_KEY }}
+      SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+      UI_PASSWORD: ${{ secrets.UI_PASSWORD }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
     defaults:
