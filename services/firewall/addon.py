@@ -75,6 +75,7 @@ SECRET_MANAGER_TOKEN = os.environ.get("SECRET_MANAGER_TOKEN", "")
 CACHE_TTL = int(os.environ.get("FIREWALL_CACHE_TTL", "30"))
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8081"))
 KEYS_REFRESH_INTERVAL = int(os.environ.get("KEYS_REFRESH_INTERVAL", "60"))
+FIREWALL_API_URL = os.environ.get("FIREWALL_API_URL", "http://api:8000")
 
 _DEFAULT_INJECTION_HOSTS = (
     "api.openai.com,"
@@ -276,6 +277,9 @@ class CredentialInjector:
         self._reverse_lock = threading.Lock()
         # Body inspection LRU cache
         self._body_cache = _LRUCache(5000)
+        # Injection map: host_pattern → set of allowed key names
+        self._injection_map: dict[str, set[str]] = {}
+        self._injection_map_lock = threading.Lock()
         log.info("credential injector started (stateless header-value replacement)")
         log.info("secret injection allowlist: %s", SECRET_INJECTION_HOSTS)
         self._start_health_server()
@@ -340,7 +344,71 @@ class CredentialInjector:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
 
+    def _refresh_injection_map(self) -> None:
+        """Fetch the injection map from the API over control_net."""
+        try:
+            url = f"{FIREWALL_API_URL}/internal/injection-map"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+            new_map: dict[str, set[str]] = {}
+            host_count = 0
+            key_count = 0
+            for host_pattern, key_list in data.items():
+                new_map[host_pattern] = set(key_list)
+                host_count += 1
+                key_count += len(key_list)
+            with self._injection_map_lock:
+                self._injection_map = new_map
+            log.info(
+                "injection_map_refreshed",
+                extra={
+                    "event": "injection_map_refreshed",
+                    "host_count": host_count,
+                    "key_count": key_count,
+                },
+            )
+        except Exception as e:
+            log.warning(
+                "injection_map_refresh_failed",
+                extra={
+                    "event": "injection_map_refresh_failed",
+                    "error": str(e),
+                },
+            )
+
+    def _host_matches_pattern(self, host: str, pattern: str) -> bool:
+        """Check if a host matches a pattern (supports *.domain.com wildcards)."""
+        if pattern == host:
+            return True
+        if pattern.startswith("*."):
+            suffix = pattern[1:]  # ".domain.com"
+            # Match exact domain: *.domain.com matches domain.com
+            if host == pattern[2:]:
+                return True
+            # Match subdomains: *.domain.com matches sub.domain.com
+            if host.endswith(suffix):
+                return True
+        return False
+
+    def _get_allowed_keys_for_host(self, host: str) -> set[str] | None:
+        """Look up allowed keys for a host. Returns None if host is not in the map."""
+        with self._injection_map_lock:
+            injection_map = self._injection_map.copy()
+        if not injection_map:
+            return None  # No map loaded yet — fallback behavior
+        allowed: set[str] = set()
+        matched = False
+        for pattern, keys in injection_map.items():
+            if self._host_matches_pattern(host, pattern):
+                allowed.update(keys)
+                matched = True
+        return allowed if matched else None
+
     def _refresh_keys(self) -> None:
+        # Also refresh the injection map from the API
+        self._refresh_injection_map()
+
         try:
             data = json.loads(self._sm_request("/keys").decode())
             keys = set(data.get("keys", []))
@@ -424,12 +492,72 @@ class CredentialInjector:
                 value = value.replace(key_name, secret)
         return value
 
+    def _replace_key_names_filtered(
+        self,
+        value: str,
+        host: str,
+        allowed_keys: set[str] | None,
+        source_ip: str,
+    ) -> str:
+        """Replace key names with real secrets, respecting the injection map.
+
+        If allowed_keys is None (no map loaded), falls back to unrestricted
+        replacement. If allowed_keys is an empty set, the host is not in the
+        map — log exfil_attempt and strip placeholders.
+        """
+        with self._keys_lock:
+            keys = self._known_keys
+            canonicalize_google_key = self._canonicalize_google_key
+
+        # Normalize to catch homoglyph/zero-width smuggling
+        normalized = _normalize_text(value)
+        if normalized != value:
+            log.warning("unicode normalization changed header value (possible bypass attempt)")
+            value = normalized
+
+        if canonicalize_google_key and "GOOGLE_API_KEY" in value:
+            value = value.replace("GOOGLE_API_KEY", "GEMINI_API_KEY")
+
+        for key_name in keys:
+            if key_name not in value:
+                continue
+
+            # If injection map is loaded, enforce it
+            if allowed_keys is not None:
+                if key_name not in allowed_keys:
+                    # Key not allowed for this host — strip it
+                    log.warning(
+                        "injection_map_violation",
+                        extra={
+                            "event": "injection_map_violation",
+                            "key_name": key_name,
+                            "host": host,
+                            "allowed_keys": sorted(allowed_keys),
+                            "container_ip": source_ip,
+                        },
+                    )
+                    value = value.replace(key_name, "")
+                    continue
+
+            secret = self._get_secret(key_name)
+            if secret is not None:
+                value = value.replace(key_name, secret)
+        return value
+
     def _replace_in_headers(self, flow: http.HTTPFlow) -> None:
-        """Scan all header values and replace key names with real secrets."""
+        """Scan all header values and replace key names with real secrets.
+
+        When an injection map is available, only inject keys that are allowed
+        for the destination host. Strip any other key placeholders.
+        """
         with self._keys_lock:
             keys = self._known_keys
         if not keys:
             return
+
+        host = flow.request.pretty_host.lower().rstrip(".")
+        allowed_keys = self._get_allowed_keys_for_host(host)
+        source_ip = flow.client_conn.peername[0] if flow.client_conn.peername else "unknown"
 
         for header_name in list(flow.request.headers.keys()):
             value = flow.request.headers[header_name]
@@ -443,7 +571,7 @@ class CredentialInjector:
                 has_key = any(k in decoded for k in keys)
                 if not has_key:
                     continue
-                replaced = self._replace_key_names(decoded)
+                replaced = self._replace_key_names_filtered(decoded, host, allowed_keys, source_ip)
                 if replaced != decoded:
                     flow.request.headers[header_name] = (
                         "Basic " + base64.b64encode(replaced.encode()).decode()
@@ -454,7 +582,7 @@ class CredentialInjector:
             has_key = any(k in value for k in keys)
             if not has_key:
                 continue
-            replaced = self._replace_key_names(value)
+            replaced = self._replace_key_names_filtered(value, host, allowed_keys, source_ip)
             if replaced != value:
                 flow.request.headers[header_name] = replaced
 
@@ -465,13 +593,23 @@ class CredentialInjector:
         if not keys:
             return
 
+        host = flow.request.pretty_host.lower().rstrip(".")
+        source_ip = flow.client_conn.peername[0] if flow.client_conn.peername else "unknown"
         for header_name in list(flow.request.headers.keys()):
             value = flow.request.headers[header_name]
-            if any(k in value for k in keys):
-                log.warning(
-                    "stripping header %s containing secret placeholder for non-allowlisted host",
-                    header_name,
-                )
+            matched = [k for k in keys if k in value]
+            if matched:
+                for key_name in matched:
+                    log.warning(
+                        "placeholder_stripped",
+                        extra={
+                            "event": "placeholder_stripped",
+                            "key_name": key_name,
+                            "host": host,
+                            "header_name": header_name,
+                            "container_ip": source_ip,
+                        },
+                    )
                 del flow.request.headers[header_name]
 
     # ------------------------------------------------------------------
@@ -632,7 +770,8 @@ class CredentialInjector:
         if not flow.response or not flow.response.content:
             return
         host = flow.request.pretty_host.lower().rstrip(".")
-        if host not in SECRET_INJECTION_HOSTS:
+        # Scan responses from injection hosts and any host in the injection map
+        if host not in SECRET_INJECTION_HOSTS and self._get_allowed_keys_for_host(host) is None:
             return
         content_type = flow.response.headers.get("content-type", "").split(";")[0].strip()
         if content_type not in self._SCANNABLE_CONTENT_TYPES:
@@ -759,7 +898,9 @@ class CredentialInjector:
         #    limited to safe methods only (GET/HEAD/OPTIONS).  LLM API hosts,
         #    trusted internal services, and essential services are unrestricted.
         #    Skip if we just rewrote the request (it's now targeting an LLM host).
-        if not rewritten and host not in SECRET_INJECTION_HOSTS and host not in UNRESTRICTED_METHOD_HOSTS and host not in TRUSTED_INTERNAL_HOSTS:
+        #    Also allow hosts in the injection map (they're tool API hosts).
+        host_in_injection_map = self._get_allowed_keys_for_host(host) is not None
+        if not rewritten and not host_in_injection_map and host not in SECRET_INJECTION_HOSTS and host not in UNRESTRICTED_METHOD_HOSTS and host not in TRUSTED_INTERNAL_HOSTS:
             method = flow.request.method.upper()
             if method not in SAFE_METHODS:
                 flow.response = http.Response.make(
