@@ -35,9 +35,7 @@ log = structlog.get_logger()
 _MAX_INLINE_TOOL_BINARY_BYTES = max(
     1024, int(os.getenv("TOOL_BINARY_INLINE_MAX_BYTES", str(1 * 1024 * 1024)))
 )
-_TOOL_BINARY_PREVIEW_BYTES = max(
-    128, int(os.getenv("TOOL_BINARY_PREVIEW_BYTES", str(32 * 1024)))
-)
+_TOOL_BINARY_PREVIEW_BYTES = max(128, int(os.getenv("TOOL_BINARY_PREVIEW_BYTES", str(32 * 1024))))
 
 
 class ToolMethod:
@@ -69,9 +67,7 @@ def _flatten_for_tabular(data: Any) -> Any:
     keys = set(data[0].keys())
     if not all(set(d.keys()) == keys for d in data):
         return data
-    has_nested = any(
-        isinstance(v, (dict, list)) for item in data for v in item.values()
-    )
+    has_nested = any(isinstance(v, (dict, list)) for item in data for v in item.values())
     if not has_nested:
         return data
     flat = []
@@ -112,10 +108,7 @@ def _normalize_for_serialization(data: Any) -> Any:
     if is_dataclass(data):
         return _normalize_for_serialization(asdict(data))
     if isinstance(data, dict):
-        return {
-            str(key): _normalize_for_serialization(value)
-            for key, value in data.items()
-        }
+        return {str(key): _normalize_for_serialization(value) for key, value in data.items()}
     if isinstance(data, (list, tuple, set)):
         return [_normalize_for_serialization(item) for item in data]
 
@@ -145,6 +138,7 @@ def _to_toon(data: Any) -> str:
     except Exception:
         return json.dumps(normalized, default=str)
 
+
 # Mapping from Python built-in types to clean names for schema output
 _BUILTIN_TYPE_NAMES: dict[type, str] = {
     str: "string",
@@ -168,7 +162,9 @@ def _friendly_type_name(annotation: Any) -> str:
     origin = getattr(annotation, "__origin__", None)
     args = getattr(annotation, "__args__", None)
     # typing.Optional / Union
-    if (origin is types.UnionType or (origin is not None and str(origin) == "typing.Union")) and args:
+    if (
+        origin is types.UnionType or (origin is not None and str(origin) == "typing.Union")
+    ) and args:
         parts = [_friendly_type_name(a) for a in args]
         return " | ".join(parts)
     # list[X], dict[K, V], etc.
@@ -221,18 +217,41 @@ def _install_deps(deps: list[str]) -> None:
     subprocess.run(cmd, check=True, capture_output=True)
 
 
-def _load_env_file(path: Path) -> dict[str, str]:
-    """Parse a .env file into a dict. Ignores comments and blank lines."""
-    secrets: dict[str, str] = {}
-    if not path.exists():
+def _fetch_backend_secrets() -> dict[str, str]:
+    """Bulk-fetch all secrets from the pluggable secret backend.
+
+    Returns an empty dict if the backend is unavailable (e.g. no
+    ``SECRET_MANAGER_URL`` configured or the sidecar is down).
+    """
+    try:
+        from secret_backends.registry import get_backend
+
+        backend = get_backend()
+
+        import asyncio
+        import concurrent.futures
+
+        async def _list():
+            return await backend.list_keys()
+
+        try:
+            asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                keys = pool.submit(asyncio.run, _list()).result(timeout=10)
+        except RuntimeError:
+            keys = asyncio.run(_list())
+
+        secrets: dict[str, str] = {}
+        for key in keys:
+            val = backend.get_sync(key)
+            if val is not None:
+                secrets[key] = val
+        if secrets:
+            log.info("loaded_backend_secrets", count=len(secrets))
         return secrets
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        secrets[k.strip()] = v.strip()
-    return secrets
+    except Exception:
+        log.debug("failed to fetch secrets from backend", exc_info=True)
+        return {}
 
 
 def load_plugins_config(config_path: Path) -> list[Path]:
@@ -259,7 +278,6 @@ class ToolManager:
     def __init__(
         self,
         tools_dir: Path | list[Path],
-        root_env_path: Path | None = None,
     ):
         if isinstance(tools_dir, list):
             self.tools_dirs: list[Path] = list(tools_dir)
@@ -269,12 +287,8 @@ class ToolManager:
         self.tools: dict[str, LoadedTool] = {}
         self.load_failures: list[dict[str, str]] = []
         self._reload_lock = threading.Lock()
-        # Load root .env once — all tools inherit these secrets
-        self._root_secrets: dict[str, str] = {}
-        if root_env_path is None:
-            # Default: .env at the repo root (parent of primary tools_dir)
-            root_env_path = self.tools_dir.parent / ".env"
-        self._root_secrets = _load_env_file(root_env_path)
+        # All secrets come from the secret-manager HTTP sidecar.
+        self._root_secrets: dict[str, str] = _fetch_backend_secrets()
 
     def _collect_tools(self, enabled: set[str] | None) -> list[tuple[Path, dict]]:
         """Read pyproject.toml from each tool dir, optionally filtering.
@@ -398,10 +412,7 @@ class ToolManager:
     def _load_tool(self, tool_dir: Path, manifest: dict) -> LoadedTool | None:
         name = manifest["name"]
 
-        # Build secrets: root .env (base) → tool .env (override)
         secrets: dict[str, str] = dict(self._root_secrets)
-        tool_secrets = _load_env_file(tool_dir / ".env")
-        secrets.update(tool_secrets)
 
         ctx = ToolContext(name=name, secrets=secrets)
 
@@ -444,10 +455,10 @@ class ToolManager:
         module = importlib.util.module_from_spec(spec)
         module.__package__ = pkg_name  # type: ignore[attr-defined]
         sys.modules[mod_name] = module
-        spec.loader.exec_module(module)
 
-        # Inject secrets into os.environ so _client() factories using
-        # os.getenv() can find them, then restore afterwards.
+        # Inject secrets into os.environ BEFORE exec_module so that
+        # module-level os.environ.get() calls in the tool (and its
+        # transitive imports) see the correct values.
         original_env: dict[str, str | None] = {}
         for key, value in secrets.items():
             original_env[key] = os.environ.get(key)
@@ -456,6 +467,7 @@ class ToolManager:
         # Set tool context so _client() factories can call secret()
         token = set_tool_context(ctx)
         try:
+            spec.loader.exec_module(module)
             methods = self._collect_methods(name, module, ctx)
         finally:
             reset_tool_context(token)
@@ -747,9 +759,7 @@ class ToolManager:
                     for pname, pinfo in tool_schema.get("parameters", {}).items():
                         ptype = pinfo.get("type", "")
                         if bad_pattern.search(str(ptype)):
-                            problems.append(
-                                f"{tool_schema['name']}.{pname}: raw type '{ptype}'"
-                            )
+                            problems.append(f"{tool_schema['name']}.{pname}: raw type '{ptype}'")
             results.append(
                 {
                     "tool": lt.name,
@@ -798,7 +808,9 @@ class ToolManager:
                 {
                     "tool": lt.name,
                     "description": lt.description,
-                    "methods": [m.method_name for m in sorted(lt.methods, key=lambda m: m.method_name)],
+                    "methods": [
+                        m.method_name for m in sorted(lt.methods, key=lambda m: m.method_name)
+                    ],
                 }
             )
         return items
@@ -868,6 +880,13 @@ class ToolManager:
                 }
             )
 
+        # Inject secrets into os.environ so tools using os.getenv() at
+        # runtime (not just import time) can find them.
+        original_env: dict[str, str | None] = {}
+        for key, value in method.ctx.secrets.items():
+            original_env[key] = os.environ.get(key)
+            os.environ[key] = value
+
         token = set_tool_context(method.ctx)
         try:
             if inspect.iscoroutinefunction(method.fn):
@@ -880,14 +899,21 @@ class ToolManager:
             return _to_toon(result)
         except SystemExit as e:
             return json.dumps(
-                {"error": f"Tool called sys.exit({e.code})", "tool": tool_name, "method": method_name}
+                {
+                    "error": f"Tool called sys.exit({e.code})",
+                    "tool": tool_name,
+                    "method": method_name,
+                }
             )
         except Exception as e:
-            return json.dumps(
-                {"error": str(e), "tool": tool_name, "method": method_name}
-            )
+            return json.dumps({"error": str(e), "tool": tool_name, "method": method_name})
         finally:
             reset_tool_context(token)
+            for key, previous in original_env.items():
+                if previous is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = previous
 
     def create_rest_router(self) -> APIRouter:
         """Create a stable FastAPI router that dispatches to tools via live lookup.
@@ -909,6 +935,7 @@ class ToolManager:
             for name, p in pm.tools.items():
                 if key_info is not None:
                     from api.api_keys import check_scope
+
                     if not check_scope(key_info, "tools", name):
                         continue
                 result[name] = {
@@ -922,6 +949,7 @@ class ToolManager:
             key_info = getattr(request.state, "api_key_info", None)
             if key_info is not None:
                 from api.api_keys import check_scope
+
                 if not check_scope(key_info, "tools", tool_name):
                     raise HTTPException(
                         status_code=403,
@@ -938,7 +966,11 @@ class ToolManager:
                     body = json.loads(raw_body)
                 except json.JSONDecodeError:
                     error = json.dumps(
-                        {"error": "Request body must be valid JSON", "tool": tool_name, "method": method_name}
+                        {
+                            "error": "Request body must be valid JSON",
+                            "tool": tool_name,
+                            "method": method_name,
+                        }
                     )
                     if "text/plain" in request.headers.get("accept", ""):
                         return PlainTextResponse(error)
@@ -958,6 +990,7 @@ class ToolManager:
             key_info = getattr(request.state, "api_key_info", None)
             if key_info is not None:
                 from api.api_keys import check_scope
+
                 if not check_scope(key_info, "tools", tool_name):
                     raise HTTPException(
                         status_code=403,
@@ -1021,5 +1054,3 @@ def _register_mcp_tool(mcp: Any, tool: ToolMethod) -> None:
     # FastMCP uses the function name as the tool name
     wrapper.__name__ = tool.qualified_name.replace(".", "_")
     mcp.tool(name=tool.qualified_name)(wrapper)
-
-
