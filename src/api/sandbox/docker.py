@@ -15,7 +15,6 @@ from docker.errors import NotFound
 
 from api.deps import mint_sandbox_token
 from api.sandbox.base import SandboxBackend, SandboxSession
-from shared.tool_sdk import _sm_read
 
 log = structlog.get_logger()
 
@@ -38,25 +37,20 @@ def _repos_host_dir() -> str:
     return os.getenv("REPOS_HOST_DIR", os.path.expanduser("~/github"))
 
 
-def _fetch_secret(key: str) -> str:
-    return _sm_read(key) or os.getenv(key, "")
-
-
-def _sm_list_keys() -> list[str]:
-    url = os.environ.get("SECRET_MANAGER_URL", "http://secrets:8100")
-    token = os.environ.get("SECRET_MANAGER_TOKEN", "")
+def _get_injection_key_names() -> list[str]:
+    """Get all secret key names from the tool manager's injection map."""
     try:
-        import httpx
+        from api.app import get_tool_manager
 
-        headers: dict[str, str] = {}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        resp = httpx.get(f"{url}/keys", timeout=5.0, headers=headers)
-        if resp.status_code == 200:
-            return resp.json().get("keys", [])
+        tm = get_tool_manager()
+        injection_map = tm.build_injection_map()
+        keys: set[str] = set()
+        for key_list in injection_map.values():
+            keys.update(key_list)
+        return sorted(keys)
     except Exception:
-        pass
-    return []
+        log.warning("failed to get injection key names from tool manager")
+        return []
 
 
 def _container_env(thread_key: str, container_name: str) -> list[str]:
@@ -69,7 +63,7 @@ def _container_env(thread_key: str, container_name: str) -> list[str]:
     except Exception:
         # Fallback to root key if minting fails (e.g. API_SECRET_KEY not configured)
         log.warning("sandbox_token_mint_failed, falling back to root key", thread_key=thread_key)
-        api_key = _fetch_secret("API_SECRET_KEY")
+        api_key = os.getenv("API_SECRET_KEY", "")
 
     env = [
         f"AI_V2_API_URL={os.getenv('AGENT_API_URL', 'http://api:8000')}",
@@ -77,13 +71,14 @@ def _container_env(thread_key: str, container_name: str) -> list[str]:
     ]
 
     if local_dev:
-        for key in _sm_list_keys():
-            real = _fetch_secret(key).strip()
+        # In local dev mode, real secrets come from environment
+        for key in _get_injection_key_names():
+            real = os.getenv(key, "").strip()
             if real:
                 env.append(f"{key}={real}")
     else:
         firewall_host = os.getenv("FIREWALL_HOST", "firewall")
-        for key in _sm_list_keys():
+        for key in _get_injection_key_names():
             env.append(f"{key}={key}")
         env.extend(
             [
@@ -214,9 +209,12 @@ class DockerSandboxBackend(SandboxBackend):
             backend_name=self.name,
         )
         log.info(
-            "docker_sandbox_created",
+            "sandbox_spawned",
             thread_key=thread_key,
-            container=container.id[:12],
+            container_id=container.id[:12],
+            container_name=container_name,
+            harness=harness,
+            engine=engine,
             warm=warm,
         )
         return session
@@ -265,7 +263,12 @@ class DockerSandboxBackend(SandboxBackend):
             container = client.containers.get(session.sandbox_id)
             container.stop(timeout=5)
             container.remove()
-        log.info("docker_sandbox_stopped", thread_key=session.thread_key)
+        log.info(
+            "sandbox_stopped",
+            thread_key=session.thread_key,
+            container_id=session.sandbox_id[:12],
+            reason="explicit_stop",
+        )
 
     def status(self, session: SandboxSession) -> str:
         client = _docker_client()

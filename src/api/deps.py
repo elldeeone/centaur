@@ -12,10 +12,12 @@ import threading
 import time
 from typing import Annotated
 
+import structlog
 from fastapi import Header, HTTPException, Request
 
 from api.api_keys import APIKeyInfo, check_scope, lookup_key
-from shared.tool_sdk import _sm_read
+
+log = structlog.get_logger()
 
 # Only localhost is trusted without an API key (e.g. health checks).
 # All other callers — including sandbox containers on agent_net — must
@@ -131,7 +133,7 @@ def _is_loopback_ip(client_ip: str) -> bool:
 
 
 def _get_api_secret_key() -> str:
-    return _sm_read("API_SECRET_KEY") or os.environ.get("API_SECRET_KEY", "")
+    return os.environ.get("API_SECRET_KEY", "")
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +229,13 @@ async def verify_api_key(
                 scopes=["agent", "tools:*"], created_by="system", source="sandbox",
             )
             return f"sandbox:{claims['container_id']}"
+        log.warning(
+            "sbx_token_rejected",
+            token_prefix=token[:20] if token else "",
+            reason="invalid_signature_or_expired",
+            client_ip=client_ip,
+            path=str(request.url.path),
+        )
         raise HTTPException(status_code=401, detail="Invalid or expired sandbox token")
 
     # Root key check
