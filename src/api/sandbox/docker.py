@@ -330,6 +330,25 @@ class DockerSandboxBackend(SandboxBackend):
             container = client.containers.get(session.sandbox_id)
             container.rename(new_name)
 
+    def refresh_token(self, session: SandboxSession, new_token: str) -> None:
+        """Write a fresh API token into a running sandbox container.
+
+        Uses an env var to pass the token safely, avoiding shell injection.
+        """
+        client = _docker_client()
+        container = client.containers.get(session.sandbox_id)
+        exit_code, _ = container.exec_run(
+            ["sh", "-c", 'printf "%s" "$_TOKEN" > /home/agent/.api_key'],
+            environment={"_TOKEN": new_token},
+            user="agent",
+        )
+        if exit_code != 0:
+            log.warning(
+                "sandbox_token_refresh_failed",
+                sandbox=session.sandbox_id[:12],
+                exit_code=exit_code,
+            )
+
     def recover_warm(self, pool_harness: str) -> list[SandboxSession]:
         """Recover existing warm containers from Docker on API restart."""
         client = _docker_client()

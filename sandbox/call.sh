@@ -8,13 +8,18 @@
 U="${AI_V2_API_URL:-http://api:8000}"
 T="Accept: text/plain"
 J="Content-Type: application/json"
-A="Authorization: Bearer ${AI_V2_API_KEY:-}"
+# Prefer refreshed token (written on warm-pool claim) over original env var
+_KEY="${AI_V2_API_KEY:-}"
+if [ -f /home/agent/.api_key ]; then
+  _KEY="$(cat /home/agent/.api_key)"
+fi
+A="Authorization: Bearer ${_KEY}"
 tool="$1"
 method="$2"
 body="$3"
 
 auth_headers=()
-if [ -n "${AI_V2_API_KEY:-}" ]; then
+if [ -n "${_KEY}" ]; then
   auth_headers=(-H "$A")
 fi
 

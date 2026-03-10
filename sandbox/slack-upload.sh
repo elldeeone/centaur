@@ -30,9 +30,13 @@ BODY=$(jq -nc \
   --arg thread_ts "$THREAD" \
   '{content_base64: $content_base64, filename: $filename, comment: $comment, channel: $channel, thread_ts: $thread_ts}')
 
+_KEY="${AI_V2_API_KEY:-}"
+if [ -f /home/agent/.api_key ]; then
+  _KEY="$(cat /home/agent/.api_key)"
+fi
 AUTH_ARGS=()
-if [ -n "${AI_V2_API_KEY:-}" ]; then
-  AUTH_ARGS=(-H "Authorization: Bearer ${AI_V2_API_KEY}")
+if [ -n "${_KEY}" ]; then
+  AUTH_ARGS=(-H "Authorization: Bearer ${_KEY}")
 fi
 
 RESP=$(curl -sf "${AUTH_ARGS[@]}" -H "Content-Type: application/json" -d "$BODY" "$U/tools/slack/upload_file") || {

@@ -82,6 +82,9 @@ class SandboxBackend(abc.ABC):
     def rename(self, session: SandboxSession, new_name: str) -> None:  # noqa: B027
         """Rename a sandbox (e.g. when claiming a warm container). Default: no-op."""
 
+    def refresh_token(self, session: SandboxSession, new_token: str) -> None:  # noqa: B027
+        """Inject a fresh API token into a running sandbox. Default: no-op."""
+
     def recover_warm(self, pool_harness: str) -> list[SandboxSession]:
         """Discover warm (pre-created, unclaimed) sandboxes. Default: empty."""
         return []

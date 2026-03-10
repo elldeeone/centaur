@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from api.deps import mint_sandbox_token
 from api.sandbox.base import SandboxSession
 from api.sandbox.registry import get_backend
 
@@ -144,6 +145,14 @@ def claim_container(thread_key: str, harness: str = "amp") -> SandboxSession | N
     # Rename sandbox to match the thread key
     new_name = f"pipe-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
     backend.rename(dummy_session, new_name)
+
+    # Mint a fresh sandbox token and inject it into the container.
+    # The original token was created at pool-spawn time and may have expired.
+    try:
+        fresh_token = mint_sandbox_token(thread_key, new_name)
+        backend.refresh_token(dummy_session, fresh_token)
+    except Exception:
+        log.warning("warm_claim_token_refresh_failed", sandbox=warm.sandbox_id[:12])
 
     session = SandboxSession(
         sandbox_id=warm.sandbox_id,
