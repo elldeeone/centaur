@@ -1,24 +1,25 @@
-"""Stateless pipe agent — spawn sandboxes, pipe stdin/stdout, no Postgres.
+"""Pipe agent — spawn sandboxes, pipe stdin/stdout, Postgres-backed sessions.
 
 Thin orchestration layer: one sandbox per thread_key, raw NDJSON streaming.
-Sessions are in-memory only and reconstructable from the backend on restart.
+Session mapping lives in Postgres (sandbox_sessions table). Process-local
+runtime state (queues, locks, reader threads, sockets) stays in-memory keyed
+by sandbox_id.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import queue
 import threading
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import Any
 
 import structlog
 
-from api.sandbox.base import SandboxBackend, SandboxSession
+from api.sandbox.base import RuntimeState, SandboxSession
 from api.sandbox.registry import get_backend
 
 log = structlog.get_logger()
@@ -50,36 +51,107 @@ _PERSONA_PROFILES: dict[str, dict[str, str]] = {
     },
 }
 
+# ── Process-local runtime state (ephemeral: queues, locks, sockets) ──────────
 
-# In-memory sessions — reconstructable from backend on restart
-_sessions: dict[str, SandboxSession] = {}
-
-
-def _init_session_metadata(session: SandboxSession) -> None:
-    """Initialize orchestration metadata on a session."""
-    session.metadata["turn_counter"] = 0
-    session.metadata["_active_turn_id"] = 0
-    session.metadata["_turn_lock"] = threading.Lock()
-    session.metadata["_active_queue"] = None
+_runtime: dict[str, RuntimeState] = {}
 
 
-def _get_override_backend(name: str) -> SandboxBackend:
-    if name == "docker":
-        from api.sandbox.docker import DockerSandboxBackend
-
-        return DockerSandboxBackend()
-    if name == "iron":
-        from api.sandbox.iron import IronSandboxBackend
-
-        return IronSandboxBackend()
-    raise ValueError(f"Unknown backend: {name}")
+def _get_runtime(sandbox_id: str) -> RuntimeState:
+    """Get or create process-local runtime state for a sandbox."""
+    if sandbox_id not in _runtime:
+        _runtime[sandbox_id] = RuntimeState()
+    return _runtime[sandbox_id]
 
 
-def _backend_for(session: SandboxSession) -> SandboxBackend:
-    default = get_backend()
-    if session.backend_name and session.backend_name != default.name:
-        return _get_override_backend(session.backend_name)
-    return default
+def _drop_runtime(sandbox_id: str) -> None:
+    """Remove process-local runtime state for a sandbox."""
+    _runtime.pop(sandbox_id, None)
+
+
+# ── DB pool access ───────────────────────────────────────────────────────────
+
+
+def _get_pool():
+    """Get the asyncpg pool from the FastAPI app state."""
+    from api.app import app
+
+    return app.state.db_pool
+
+
+# ── DB helpers (async) ───────────────────────────────────────────────────────
+
+
+async def _db_get_session(thread_key: str) -> SandboxSession | None:
+    """Load a session from the DB. Returns None if not found."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT thread_key, sandbox_id, harness, engine, state, config_sent, started_at "
+        "FROM sandbox_sessions WHERE thread_key = $1",
+        thread_key,
+    )
+    if row is None:
+        return None
+    session = SandboxSession(
+        sandbox_id=row["sandbox_id"],
+        thread_key=row["thread_key"],
+        harness=row["harness"],
+        engine=row["engine"],
+        started_at=row["started_at"].timestamp() if row["started_at"] else 0.0,
+        backend_name="docker",
+        db_state=row["state"],
+    )
+    rt = _get_runtime(session.sandbox_id)
+    rt.config_sent = row["config_sent"]
+    return session
+
+
+async def _db_insert_session(
+    session: SandboxSession,
+    *,
+    harness: str,
+    engine: str,
+) -> bool:
+    """Insert a session row. Returns True if we won the insert race."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state, started_at) "
+        "VALUES ($1, $2, $3, $4, 'running', NOW()) "
+        "ON CONFLICT (thread_key) DO NOTHING "
+        "RETURNING thread_key",
+        session.thread_key,
+        session.sandbox_id,
+        harness,
+        engine,
+    )
+    return row is not None
+
+
+async def _db_update_state(thread_key: str, state: str) -> None:
+    """Update the state of a session in the DB."""
+    pool = _get_pool()
+    await pool.execute(
+        "UPDATE sandbox_sessions SET state = $1, updated_at = NOW() WHERE thread_key = $2",
+        state,
+        thread_key,
+    )
+
+
+async def _db_set_config_sent(thread_key: str) -> None:
+    """Mark config as sent for a session."""
+    pool = _get_pool()
+    await pool.execute(
+        "UPDATE sandbox_sessions SET config_sent = TRUE, updated_at = NOW() WHERE thread_key = $1",
+        thread_key,
+    )
+
+
+async def _db_delete_session(thread_key: str) -> None:
+    """Delete a session row from the DB."""
+    pool = _get_pool()
+    await pool.execute("DELETE FROM sandbox_sessions WHERE thread_key = $1", thread_key)
+
+
+# ── Harness / persona resolution ────────────────────────────────────────────
 
 
 def _resolve_harness_profile(
@@ -94,8 +166,15 @@ def _resolve_harness_profile(
         return normalized_engine_override or normalized, None, None
     profile = _PERSONA_PROFILES.get(normalized)
     if profile:
-        return normalized_engine_override or profile["engine"], profile.get("persona"), profile.get("repo")
+        return (
+            normalized_engine_override or profile["engine"],
+            profile.get("persona"),
+            profile.get("repo"),
+        )
     return normalized_engine_override or "amp", None, None
+
+
+# ── Sync helpers (called from background threads) ───────────────────────────
 
 
 def _ensure_reader(session: SandboxSession, *, force: bool = False) -> None:
@@ -105,33 +184,32 @@ def _ensure_reader(session: SandboxSession, *, force: bool = False) -> None:
     Pass force=True after a stream reconnect to start a new reader even if the
     old one is still alive (it will be invalidated via the generation counter).
     """
-    reader = session.metadata.get("_reader_thread")
-    if not force and reader and reader.is_alive():
+    rt = _get_runtime(session.sandbox_id)
+    if not force and rt.reader_thread and rt.reader_thread.is_alive():
         return
 
-    backend = _backend_for(session)
-    gen = session.metadata.get("_reader_gen", 0) + 1
-    session.metadata["_reader_gen"] = gen
+    backend = get_backend()
+    rt.reader_gen += 1
+    gen = rt.reader_gen
 
     def _read_loop(my_gen: int = gen) -> None:
         try:
             for line in backend.stream_stdout(session):
-                if session.metadata.get("_reader_gen") != my_gen:
+                cur = _runtime.get(session.sandbox_id)
+                if cur is None or cur.reader_gen != my_gen:
                     return
-                q = session.metadata.get("_active_queue")
-                if q is not None:
-                    q.put(line)
+                if cur.active_queue is not None:
+                    cur.active_queue.put(line)
         except Exception:
             pass
         # EOF — signal the active queue only if this reader is still current
-        if session.metadata.get("_reader_gen") == my_gen:
-            q = session.metadata.get("_active_queue")
-            if q is not None:
-                q.put(None)
+        cur = _runtime.get(session.sandbox_id)
+        if cur is not None and cur.reader_gen == my_gen and cur.active_queue is not None:
+            cur.active_queue.put(None)
 
     t = threading.Thread(target=_read_loop, daemon=True)
     t.start()
-    session.metadata["_reader_thread"] = t
+    rt.reader_thread = t
 
 
 def _spawn_sync(
@@ -139,40 +217,52 @@ def _spawn_sync(
     harness: str,
     *,
     engine_override: str | None = None,
-    backend_override: str | None = None,
 ) -> SandboxSession:
     """Synchronous spawn: create sandbox + register session."""
     engine, persona, repo = _resolve_harness_profile(harness, engine_override=engine_override)
 
-    backend = _get_override_backend(backend_override) if backend_override else get_backend()
+    backend = get_backend()
     session = backend.create(thread_key, harness, engine, persona=persona, repo=repo)
 
-    _init_session_metadata(session)
+    _get_runtime(session.sandbox_id)
 
-    _sessions[thread_key] = session
     log.info("pipe_session_spawned", thread_key=thread_key, sandbox=session.sandbox_id[:12])
     return session
 
 
-def _send_turn_and_stream(session: SandboxSession, message: str):
-    """Send a turn via stdin, yield stdout lines until turn.done (blocking generator).
+def _stream_turn(
+    session: SandboxSession,
+    message: str | None = None,
+    *,
+    logs: bool = False,
+):
+    """Stream stdout lines from the sandbox (blocking generator).
 
-    A single reader thread reads stdout and dispatches lines to the active turn's
-    queue. When a new turn starts, the old queue gets a None sentinel so the old
-    consumer stops, and the new turn's queue takes over.
+    If *message* is provided, sends a turn.start first. Otherwise just
+    reconnects to the running sandbox's stdout (for mid-turn reconnects).
+
+    A single reader thread reads stdout and dispatches lines to the active
+    turn's queue. When a new turn starts, the old queue gets a None sentinel.
     """
-    backend = _backend_for(session)
-    backend.attach(session)
+    backend = get_backend()
+    rt = _get_runtime(session.sandbox_id)
+
+    if message is not None:
+        backend.attach(session)
+    else:
+        # Reconnect: force fresh sockets
+        backend.close_streams(session)
+        backend.attach(session, logs=True)
 
     # Create a new queue for this turn and swap it in atomically
     turn_queue: queue.SimpleQueue[str | None] = queue.SimpleQueue()
-    turn_lock = session.metadata["_turn_lock"]
-    with turn_lock:
-        session.metadata["turn_counter"] = session.metadata.get("turn_counter", 0) + 1
-        turn_id = session.metadata["turn_counter"]
-        session.metadata["_active_turn_id"] = turn_id
-        old_queue = session.metadata.get("_active_queue")
-        session.metadata["_active_queue"] = turn_queue
+    with rt.turn_lock:
+        if message is not None:
+            rt.turn_counter += 1
+        turn_id = rt.turn_counter
+        rt.active_turn_id = turn_id
+        old_queue = rt.active_queue
+        rt.active_queue = turn_queue
 
     # Signal old turn to stop
     if old_queue is not None:
@@ -189,24 +279,26 @@ def _send_turn_and_stream(session: SandboxSession, message: str):
         turn_id=turn_id,
     )
 
-    try:
-        backend.write_stdin(session, {"type": "turn.start", "turn_id": turn_id, "text": message})
-    except (BrokenPipeError, OSError) as exc:
-        log.warning("stdin_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc))
-        # Verify the container is still alive — no point retrying a dead sandbox.
-        st = backend.status(session)
-        if st != "running":
-            raise RuntimeError(f"sandbox exited (status={st})") from exc
-        # Stale sockets — close, re-attach, restart reader, and retry.
-        # Swap in a fresh queue so the stale reader (invalidated via generation
-        # counter) cannot enqueue a spurious None sentinel.
-        backend.close_streams(session)
-        backend.attach(session)
-        turn_queue = queue.SimpleQueue()
-        with turn_lock:
-            session.metadata["_active_queue"] = turn_queue
-        _ensure_reader(session, force=True)
-        backend.write_stdin(session, {"type": "turn.start", "turn_id": turn_id, "text": message})
+    if message is not None:
+        try:
+            backend.write_stdin(
+                session, {"type": "turn.start", "turn_id": turn_id, "text": message}
+            )
+        except (BrokenPipeError, OSError) as exc:
+            log.warning("stdin_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc))
+            st = backend.status(session)
+            if st != "running":
+                raise RuntimeError(f"sandbox exited (status={st})") from exc
+            # Stale sockets — close, re-attach, restart reader, and retry.
+            backend.close_streams(session)
+            backend.attach(session)
+            turn_queue = queue.SimpleQueue()
+            with rt.turn_lock:
+                rt.active_queue = turn_queue
+            _ensure_reader(session, force=True)
+            backend.write_stdin(
+                session, {"type": "turn.start", "turn_id": turn_id, "text": message}
+            )
 
     first_output = False
     while True:
@@ -235,7 +327,9 @@ def _send_turn_and_stream(session: SandboxSession, message: str):
         yield line
         try:
             evt = json.loads(line)
-            if evt.get("type") == "turn.done" and evt.get("turn_id") == turn_id:
+            if evt.get("type") == "turn.done" and (
+                message is None or evt.get("turn_id") == turn_id
+            ):
                 log.info(
                     "turn_done",
                     thread_key=session.thread_key,
@@ -250,32 +344,34 @@ def _send_turn_and_stream(session: SandboxSession, message: str):
             pass
 
 
-def _stop_sync(thread_key: str) -> bool:
-    """Stop sandbox and remove session. Returns True if stopped."""
-    session = _sessions.pop(thread_key, None)
+async def _stop_async(thread_key: str) -> bool:
+    """Stop sandbox and update DB. Returns True if stopped."""
+    session = await _db_get_session(thread_key)
     if not session:
         return False
-    # Signal active queue to stop
-    q = session.metadata.get("_active_queue")
-    if q is not None:
-        q.put(None)
-    session.metadata["_active_queue"] = None
 
-    backend = _backend_for(session)
-    backend.stop(session)
+    rt = _runtime.get(session.sandbox_id)
+    if rt is not None and rt.active_queue is not None:
+        rt.active_queue.put(None)
+
+    _drop_runtime(session.sandbox_id)
+
+    backend = get_backend()
+    await asyncio.to_thread(backend.stop, session)
+    await _db_update_state(thread_key, "stopped")
     log.info("pipe_session_stopped", thread_key=thread_key)
     return True
 
 
-def _get_status_sync(thread_key: str) -> dict[str, Any]:
+async def _get_status_async(thread_key: str) -> dict[str, Any]:
     """Check if a session/sandbox is alive."""
-    session = _sessions.get(thread_key)
+    session = await _db_get_session(thread_key)
     if not session:
         return {"thread_key": thread_key, "status": "not_found"}
-    backend = _backend_for(session)
-    st = backend.status(session)
+    backend = get_backend()
+    st = await asyncio.to_thread(backend.status, session)
     if st == "gone":
-        _sessions.pop(thread_key, None)
+        await _db_update_state(thread_key, "gone")
         return {"thread_key": thread_key, "status": "gone"}
     return {
         "thread_key": thread_key,
@@ -287,31 +383,13 @@ def _get_status_sync(thread_key: str) -> dict[str, Any]:
     }
 
 
-def _recover_sync() -> dict[str, Any]:
-    """Scan backend for running sandboxes, rebuild _sessions."""
-    backend = get_backend()
-    recovered = 0
-    try:
-        sessions = backend.recover()
-    except Exception as exc:
-        log.warning("pipe_recover_failed", error=str(exc))
-        return {"recovered": 0, "error": str(exc)}
-
-    for session in sessions:
-        if not session.thread_key or session.thread_key in _sessions:
-            continue
-        _init_session_metadata(session)
-        _sessions[session.thread_key] = session
-        recovered += 1
-        log.info("pipe_session_recovered", thread_key=session.thread_key)
-
-    return {"recovered": recovered}
+# ── Async bridge ─────────────────────────────────────────────────────────────
 
 
-async def _sync_gen_to_async(gen_fn: Callable[..., Any], *args: Any) -> AsyncIterator[str]:
-    """Bridge a blocking generator to an async iterator via thread + asyncio.Queue."""
-    loop = asyncio.get_event_loop()
+async def _async_stream(gen_fn, *args) -> AsyncIterator[str]:
+    """Bridge a blocking generator to an async iterator via asyncio.to_thread."""
     q: asyncio.Queue[str | None] = asyncio.Queue()
+    loop = asyncio.get_event_loop()
 
     def _run() -> None:
         try:
@@ -325,9 +403,7 @@ async def _sync_gen_to_async(gen_fn: Callable[..., Any], *args: Any) -> AsyncIte
         finally:
             loop.call_soon_threadsafe(q.put_nowait, None)
 
-    thread = asyncio.to_thread(_run)
-    task = asyncio.ensure_future(thread)
-
+    task = asyncio.ensure_future(asyncio.to_thread(_run))
     try:
         while True:
             item = await q.get()
@@ -337,11 +413,9 @@ async def _sync_gen_to_async(gen_fn: Callable[..., Any], *args: Any) -> AsyncIte
     finally:
         if not task.done():
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
 
 
-# ── Async public API (wraps sync backend calls in threads) ────────────────
+# ── Async public API ─────────────────────────────────────────────────────────
 
 
 async def get_or_spawn(
@@ -349,92 +423,76 @@ async def get_or_spawn(
     harness: str = "amp",
     *,
     engine: str | None = None,
-    backend: str | None = None,
 ) -> SandboxSession:
     """Get existing session or spawn a new sandbox.
 
-    Tries (in order): existing session → warm pool → cold spawn.
+    Tries (in order): DB session → warm pool → cold spawn.
     """
-    session = _sessions.get(thread_key)
+    session = await _db_get_session(thread_key)
     if session:
-        sb = _backend_for(session)
-        st = await asyncio.to_thread(sb.status, session)
-        if st == "running":
-            return session
-        _sessions.pop(thread_key, None)
+        if session.db_state == "running":
+            backend = get_backend()
+            st = await asyncio.to_thread(backend.status, session)
+            if st == "running":
+                _get_runtime(session.sandbox_id)
+                return session
+            # DB says running but container is gone — clean up
+            await _db_delete_session(thread_key)
+            _drop_runtime(session.sandbox_id)
+        else:
+            # state is stopped/gone/creating — clean up stale row
+            await _db_delete_session(thread_key)
+            _drop_runtime(session.sandbox_id)
+            backend = get_backend()
+            await asyncio.to_thread(backend.stop_by_id, session.sandbox_id)
 
-    if not backend and not engine:
+    # Try warm pool first
+    if not engine:
         from api.warm_pool import claim_container
 
         claimed = await asyncio.to_thread(claim_container, thread_key, harness)
         if claimed:
-            _sessions[thread_key] = claimed
-            return claimed
+            won = await _db_insert_session(claimed, harness=claimed.harness, engine=claimed.engine)
+            if won:
+                _get_runtime(claimed.sandbox_id)
+                return claimed
 
-    return await asyncio.to_thread(
-        _spawn_sync,
-        thread_key,
-        harness,
-        engine_override=engine,
-        backend_override=backend,
+    session = await asyncio.to_thread(
+        _spawn_sync, thread_key, harness, engine_override=engine
     )
 
+    # INSERT into sandbox_sessions — race-safe
+    won = await _db_insert_session(session, harness=session.harness, engine=session.engine)
+    if not won:
+        # Another request won the race — stop our container, return the winner
+        log.warning("spawn_race_lost", thread_key=thread_key, sandbox=session.sandbox_id[:12])
+        backend = get_backend()
+        await asyncio.to_thread(backend.stop_by_id, session.sandbox_id)
+        _drop_runtime(session.sandbox_id)
+        winner = await _db_get_session(thread_key)
+        if winner is None:
+            raise RuntimeError(f"spawn race: winner row vanished for {thread_key}")
+        _get_runtime(winner.sandbox_id)
+        return winner
 
-def _reconnect_and_stream(session: SandboxSession):
-    """Re-attach to a running sandbox's stdout and stream lines.
-
-    Unlike _send_turn_and_stream, this does NOT send a turn.start — the agent
-    is assumed to be mid-turn already.  We just hook up a fresh stdout socket
-    and relay whatever it produces until turn.done or EOF.
-    """
-    backend = _backend_for(session)
-    # Force fresh sockets
-    backend.close_streams(session)
-    backend.attach(session, logs=True)
-
-    turn_queue: queue.SimpleQueue[str | None] = queue.SimpleQueue()
-    turn_lock = session.metadata["_turn_lock"]
-    with turn_lock:
-        old_queue = session.metadata.get("_active_queue")
-        session.metadata["_active_queue"] = turn_queue
-
-    if old_queue is not None:
-        old_queue.put(None)
-
-    _ensure_reader(session)
-
-    while True:
-        line = turn_queue.get()
-        if line is None:
-            return
-        yield line
-        try:
-            evt = json.loads(line)
-            if evt.get("type") == "turn.done":
-                return
-        except (json.JSONDecodeError, TypeError):
-            pass
+    return session
 
 
 async def stream_reconnect(session: SandboxSession) -> AsyncIterator[str]:
     """Async wrapper for reconnecting to a running sandbox's stdout."""
-    async for line in _sync_gen_to_async(_reconnect_and_stream, session):
+    async for line in _async_stream(_stream_turn, session):
         yield line
 
 
 async def stream_exec(session: SandboxSession, message: str) -> AsyncIterator[str]:
     """Run a command in the sandbox and yield raw stdout lines."""
-    async for line in _sync_gen_to_async(_send_turn_and_stream, session, message):
+    async for line in _async_stream(_stream_turn, session, message):
         yield line
 
 
 async def stop_session(thread_key: str) -> bool:
-    return await asyncio.to_thread(_stop_sync, thread_key)
+    return await _stop_async(thread_key)
 
 
 async def get_status(thread_key: str) -> dict[str, Any]:
-    return await asyncio.to_thread(_get_status_sync, thread_key)
-
-
-async def recover_sessions() -> dict[str, Any]:
-    return await asyncio.to_thread(_recover_sync)
+    return await _get_status_async(thread_key)

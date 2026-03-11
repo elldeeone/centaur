@@ -3,9 +3,32 @@
 from __future__ import annotations
 
 import abc
+import queue
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass
+class RuntimeState:
+    """Process-local ephemeral state for a running sandbox.
+
+    Keyed by sandbox_id in agent._runtime. Contains socket handles, reader
+    threads, turn queues, and other objects that cannot survive a process
+    restart.
+    """
+
+    turn_counter: int = 0
+    active_turn_id: int = 0
+    turn_lock: threading.Lock = field(default_factory=threading.Lock)
+    active_queue: queue.SimpleQueue[str | None] | None = None
+    system_prompt: str = ""
+    config_sent: bool = False
+    reader_thread: threading.Thread | None = None
+    reader_gen: int = 0
+    stdin_sock: Any = None
+    stdout_sock: Any = None
 
 
 @dataclass
@@ -18,7 +41,7 @@ class SandboxSession:
     engine: str
     started_at: float = 0.0
     backend_name: str = ""  # "docker", "iron", etc.
-    metadata: dict[str, Any] = field(default_factory=dict)
+    db_state: str = ""
 
 
 class SandboxBackend(abc.ABC):

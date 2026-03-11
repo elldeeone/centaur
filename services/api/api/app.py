@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from api.agent import recover_sessions
+from api.db import ensure_sandbox_schema
 from api.routers import admin, health, internal
 from api.routers import agent as agent_router_mod
 from api.warm_pool import start_replenish_loop, stop_replenish_loop
@@ -123,10 +123,9 @@ async def _push_injection_map() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db_pool = await create_pool(settings.database_url)
+    await ensure_sandbox_schema(app.state.db_pool)
     _warm_tool_caches()
     await _push_injection_map()
-    result = await recover_sessions()
-    log.info("pipe_sessions_recovered", **result)
     watcher_task = asyncio.create_task(_watch_tools(tool_manager))
     await start_replenish_loop()
     try:

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import structlog
 
-from api.agent import _init_session_metadata
+from api.agent import _get_runtime
 from api.deps import mint_sandbox_token
 from api.sandbox.base import SandboxSession
 from api.sandbox.registry import get_backend
@@ -163,7 +163,7 @@ def claim_container(thread_key: str, harness: str = "amp") -> SandboxSession | N
         started_at=time.time(),
         backend_name=backend.name,
     )
-    _init_session_metadata(session)
+    _get_runtime(session.sandbox_id)
 
     log.info(
         "warm_container_claimed",

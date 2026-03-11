@@ -19,6 +19,13 @@ from api.sandbox.base import SandboxBackend, SandboxSession
 log = structlog.get_logger()
 
 
+# Lazy import to avoid circular dependency — agent.py imports from docker.py
+def _get_rt(session: SandboxSession):
+    from api.agent import _get_runtime
+
+    return _get_runtime(session.sandbox_id)
+
+
 # ── Helpers (module-level, not backend methods) ──────────────────────────────
 
 
@@ -240,32 +247,31 @@ class DockerSandboxBackend(SandboxBackend):
         return session
 
     def attach(self, session: SandboxSession, *, logs: bool = False) -> None:
-        if session.metadata.get("_stdin_sock") and session.metadata.get("_stdout_sock"):
+        rt = _get_rt(session)
+        if rt.stdin_sock and rt.stdout_sock:
             return
         client = self._get_client()
         api = client.api
 
         stdin_attach = api.attach_socket(session.sandbox_id, params={"stdin": True, "stream": True})
-        session.metadata["_stdin_sock"] = stdin_attach._sock
+        rt.stdin_sock = stdin_attach._sock
 
         container = client.containers.get(session.sandbox_id)
-        session.metadata["_stdout_sock"] = container.attach(
-            stdout=True, stderr=False, stream=True, logs=logs
-        )
+        rt.stdout_sock = container.attach(stdout=True, stderr=False, stream=True, logs=logs)
 
     def write_stdin(self, session: SandboxSession, obj: dict) -> None:
-        sock = session.metadata.get("_stdin_sock")
-        if sock is None:
+        rt = _get_rt(session)
+        if rt.stdin_sock is None:
             raise RuntimeError("stdin not attached")
         payload = json.dumps(obj, separators=(",", ":")) + "\n"
-        sock.sendall(payload.encode())
+        rt.stdin_sock.sendall(payload.encode())
 
     def stream_stdout(self, session: SandboxSession) -> Iterator[str]:
-        stdout_sock = session.metadata.get("_stdout_sock")
-        if stdout_sock is None:
+        rt = _get_rt(session)
+        if rt.stdout_sock is None:
             raise RuntimeError("stdout not attached")
         buf = ""
-        for chunk in stdout_sock:
+        for chunk in rt.stdout_sock:
             buf += chunk.decode("utf-8", errors="replace")
             while "\n" in buf:
                 line, buf = buf.split("\n", 1)
@@ -291,12 +297,24 @@ class DockerSandboxBackend(SandboxBackend):
         )
 
     def status(self, session: SandboxSession) -> str:
+        return self.status_by_id(session.sandbox_id)
+
+    def status_by_id(self, sandbox_id: str) -> str:
+        """Check container status by ID (no session needed)."""
         client = self._get_client()
         try:
-            container = client.containers.get(session.sandbox_id)
+            container = client.containers.get(sandbox_id)
             return container.status
         except NotFound:
             return "gone"
+
+    def stop_by_id(self, sandbox_id: str) -> None:
+        """Stop and remove a container by ID (no session needed)."""
+        client = self._get_client()
+        with contextlib.suppress(Exception):
+            container = client.containers.get(sandbox_id)
+            container.stop(timeout=5)
+            container.remove()
 
     def recover(self) -> list[SandboxSession]:
         client = self._get_client()
@@ -330,14 +348,15 @@ class DockerSandboxBackend(SandboxBackend):
         return sessions
 
     def close_streams(self, session: SandboxSession) -> None:
-        sock = session.metadata.pop("_stdin_sock", None)
-        if sock is not None:
+        rt = _get_rt(session)
+        if rt.stdin_sock is not None:
             with contextlib.suppress(Exception):
-                sock.close()
-        stdout = session.metadata.pop("_stdout_sock", None)
-        if stdout is not None and hasattr(stdout, "close"):
+                rt.stdin_sock.close()
+            rt.stdin_sock = None
+        if rt.stdout_sock is not None and hasattr(rt.stdout_sock, "close"):
             with contextlib.suppress(Exception):
-                stdout.close()
+                rt.stdout_sock.close()
+            rt.stdout_sock = None
 
     def recent_logs(self, session: SandboxSession, tail: int = 40) -> str:
         client = self._get_client()
