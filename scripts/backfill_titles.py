@@ -8,7 +8,7 @@ import asyncpg
 from openai import OpenAI
 
 try:
-    from shared.tool_sdk import _sm_read
+    from centaur_sdk.tool_sdk import _sm_read
 except ImportError:
     _sm_read = None  # type: ignore[assignment]
 

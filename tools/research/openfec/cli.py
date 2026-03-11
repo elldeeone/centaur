@@ -8,7 +8,7 @@ load_dotenv()
 
 import typer
 from rich.console import Console
-from shared.cli_tables import Table
+from centaur_sdk.cli_tables import Table
 
 app = typer.Typer(name="openfec", help="OpenFEC CLI for federal election data")
 console = Console()

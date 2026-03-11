@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from shared.tool_sdk import secret
+from centaur_sdk.tool_sdk import secret
 
 BASE_URL = "https://hist.databento.com/v0"
 

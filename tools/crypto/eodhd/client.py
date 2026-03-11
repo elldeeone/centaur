@@ -71,6 +71,6 @@ class EodhdClient:
 
 
 def _client() -> EodhdClient:
-    from shared.tool_sdk import secret
+    from centaur_sdk.tool_sdk import secret
 
     return EodhdClient(api_key=secret("EODHD_API_KEY"))
