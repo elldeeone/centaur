@@ -46,7 +46,7 @@ jobs:
       # --- Deploy ---
 
       - name: Build sandbox image
-        run: docker build -t agent2:latest sandbox/
+        run: docker build -t agent2:latest services/sandbox/
 
       - name: Build all images
         run: docker compose build
