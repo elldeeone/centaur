@@ -27,7 +27,6 @@ _EXCLUDED_KEYS = frozenset(
         "PWD",
         "SECRET_ENV_PREFIX",
         "SECRET_MANAGER_BACKEND",
-        "SECRET_MANAGER_TOKEN",
         "SECRET_REFRESH_RETRY_SECONDS",
         "SECRET_REFRESH_SECONDS",
         "SHELL",

@@ -56,7 +56,6 @@ services:
     environment:
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       OP_VAULT: Paradigm AI Secrets & API Keys
-      SECRET_MANAGER_TOKEN: ${SECRET_MANAGER_TOKEN:-}
     networks:
       - secrets_net
       - secrets_egress
@@ -75,7 +74,6 @@ services:
       dockerfile: services/firewall/Dockerfile
     environment:
       SECRET_MANAGER_URL: http://secrets:8100
-      SECRET_MANAGER_TOKEN: ${SECRET_MANAGER_TOKEN:-}
 
     networks:
       - default
@@ -137,16 +135,7 @@ services:
       FIREWALL_HOST: firewall
       AGENT_NETWORK: ai_v2_agent_net
       FIREWALL_CERTS_VOLUME: ai_v2_firewall-certs
-      # paradigmdb: connect to Shift Postgres via host-side SSH tunnel on :54321
-      RESHIFT_DB_DSN: ${RESHIFT_DB_DSN:-}
-      GOOGLE_APPLICATION_CREDENTIALS: /gcloud/adc.json
-      NGINX_TRUSTED_CIDRS: "172.16.0.0/12"
       DOCKER_HOST: tcp://docker-socket-proxy:2375
-      HTTPS_PROXY: http://firewall:8080
-      HTTP_PROXY: http://firewall:8080
-      REQUESTS_CA_BUNDLE: /firewall-certs/ca-cert.pem
-      SSL_CERT_FILE: /firewall-certs/ca-cert.pem
-      NO_PROXY: localhost,127.0.0.1,postgres,pgbouncer,slackbot,api,auth,nginx,docker-socket-proxy,secrets,firewall,grafana,prometheus,victorialogs,promtail
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -157,8 +146,6 @@ services:
     volumes:
       - ./tools:/app/tools
       - ./tools-paradigm:/app/tools-paradigm
-      - firewall-certs:/firewall-certs:ro
-      - ${HOME}/.config/gcloud/application_default_credentials.json:/gcloud/adc.json:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health/ready"]
       interval: 10s
@@ -190,7 +177,6 @@ services:
     networks:
       - default
       - backend_net
-      - agent_net
     depends_on:
       api:
         condition: service_healthy

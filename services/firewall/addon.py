@@ -40,7 +40,6 @@ from centaur_sdk.logging import configure_json_logging
 log = configure_json_logging("firewall")
 
 SECRET_MANAGER_URL = os.environ.get("SECRET_MANAGER_URL", "http://secrets:8100")
-SECRET_MANAGER_TOKEN = os.environ.get("SECRET_MANAGER_TOKEN", "")
 CACHE_TTL = int(os.environ.get("FIREWALL_CACHE_TTL", "30"))
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8081"))
 KEYS_REFRESH_INTERVAL = int(os.environ.get("KEYS_REFRESH_INTERVAL", "60"))
@@ -383,11 +382,9 @@ class CredentialInjector:
         threading.Thread(target=loop, daemon=True).start()
 
     def _sm_request(self, path: str, timeout: int = 5) -> bytes:
-        """Make an authenticated request to the secret manager."""
+        """Make a request to the secret manager."""
         url = f"{SECRET_MANAGER_URL}{path}"
         req = urllib.request.Request(url)
-        if SECRET_MANAGER_TOKEN:
-            req.add_header("Authorization", f"Bearer {SECRET_MANAGER_TOKEN}")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
 

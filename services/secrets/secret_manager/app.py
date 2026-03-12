@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import secrets as _secrets_mod
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 
 from centaur_sdk.logging import configure_json_logging
 from secret_manager.backend import SecretManagerBackend
@@ -38,10 +37,6 @@ _last_refresh_error: str | None = None
 
 # Active backend — set during lifespan
 _backend: SecretManagerBackend | None = None
-
-# Optional Bearer token for authenticating requests to sensitive endpoints.
-_SECRET_MANAGER_TOKEN = os.environ.get("SECRET_MANAGER_TOKEN", "")
-
 
 # ---------------------------------------------------------------------------
 # Backend factory
@@ -156,22 +151,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Secret Manager", version="0.1.0", lifespan=lifespan)
 
 
-async def verify_internal_token(
-    authorization: str | None = Header(None),
-) -> None:
-    """Require a valid Bearer token on sensitive endpoints.
-
-    If SECRET_MANAGER_TOKEN is not set, auth is skipped (backwards compatible).
-    """
-    if not _SECRET_MANAGER_TOKEN:
-        return
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    token = authorization[7:]
-    if not _secrets_mod.compare_digest(token, _SECRET_MANAGER_TOKEN):
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
 @app.get("/health")
 def health() -> dict:
     return {
@@ -181,20 +160,20 @@ def health() -> dict:
     }
 
 
-@app.get("/keys", dependencies=[Depends(verify_internal_token)])
+@app.get("/keys")
 def list_keys() -> dict:
     """List all cached key names (values are never exposed)."""
     return {"keys": sorted(_cache.keys()), "count": len(_cache)}
 
 
-@app.post("/reload", dependencies=[Depends(verify_internal_token)])
+@app.post("/reload")
 async def reload_secrets() -> dict:
     """Force an immediate refresh from the active backend."""
     count = await _load_all()
     return {"status": "ok", "cached_keys": count}
 
 
-@app.get("/secrets/{key}", dependencies=[Depends(verify_internal_token)])
+@app.get("/secrets/{key}")
 async def get_secret(key: str) -> dict:
     value = _cache.get(key)
     if value is None:
