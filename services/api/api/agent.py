@@ -379,20 +379,28 @@ async def stream_exec(
         flushed = await _flush_pending(session.thread_key, last_delivered_id)
 
         # 3. Build harness-native input
-        if flushed:
+        #    Inline message always takes priority for the current turn.
+        #    Flushed DB messages (system context, buffered user msgs) are prepended.
+        inline_blocks: list[dict] | None = None
+        if isinstance(message, list) and message:
+            inline_blocks = message
+        elif isinstance(message, str) and message:
+            inline_blocks = [{"type": "text", "text": message}]
+
+        last_flushed_id = flushed[-1]["id"] if flushed else None
+
+        if flushed and inline_blocks:
+            msgs = _flushed_to_messages(flushed)
+            content_blocks = messages_to_content_blocks(msgs) + inline_blocks
+            turn_input = build_user_input(content_blocks)
+        elif flushed:
             msgs = _flushed_to_messages(flushed)
             content_blocks = messages_to_content_blocks(msgs)
             turn_input = build_user_input(content_blocks)
-            last_flushed_id = flushed[-1]["id"]
-        elif isinstance(message, list):
-            turn_input = build_user_input(message)
-            last_flushed_id = None
-        elif isinstance(message, str) and message:
-            turn_input = build_user_input([{"type": "text", "text": message}])
-            last_flushed_id = None
+        elif inline_blocks:
+            turn_input = build_user_input(inline_blocks)
         else:
             turn_input = None
-            last_flushed_id = None
 
         # 4. Attach and write to stdin
         backend = get_backend()
