@@ -1,7 +1,7 @@
 import { normalizeThreadKey, splitThreadKey } from "@centaur/harness-events";
 import { CentaurClient } from "@centaur/api-client";
 import type { InputContentBlock } from "@centaur/api-client";
-import { AxiosError } from "axios";
+
 import type { StreamChunk } from "chat";
 import { log } from "@/lib/logger";
 import { ProgressTracker } from "./progress-tracker";
@@ -214,8 +214,8 @@ export class SlackBot {
 }
 
 function formatError(err: unknown, context: string): string {
-  if (err instanceof AxiosError) {
-    const status = err.response?.status;
+  if (err instanceof Error && "response" in err) {
+    const status = (err as { response?: { status?: number } }).response?.status;
     if (!status) return `${context}: API is unreachable. Try again in ~30s.`;
     if (status >= 500) return `${context}: API returned ${status}. Try again shortly.`;
     return `${context}: ${err.message}`;
