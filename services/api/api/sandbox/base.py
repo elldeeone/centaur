@@ -67,6 +67,7 @@ class SandboxBackend(abc.ABC):
         persona: str | None = None,
         repo: str | None = None,
         warm: bool = False,
+        model: str | None = None,
     ) -> SandboxSession:
         """Create and start a new sandbox. Block until ready."""
 

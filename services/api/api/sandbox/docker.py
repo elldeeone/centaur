@@ -46,6 +46,29 @@ def _repo_host_dir() -> str:
 _HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY")
 
 
+def _build_harness_cmd(engine: str, model: str | None = None) -> list[str]:
+    """Build the container CMD for a given harness engine."""
+    if engine == "amp":
+        cmd = [
+            "amp", "--no-ide", "--no-notifications", "--dangerously-allow-all",
+            "--execute", "--stream-json", "--stream-json-input",
+        ]
+        if model:
+            cmd.extend(["--model", model])
+        return cmd
+    if engine == "claude-code":
+        cmd = [
+            "claude", "--dangerously-skip-permissions",
+            "--output-format", "stream-json", "--input-format", "stream-json",
+            "--verbose",
+        ]
+        if model:
+            cmd.extend(["--model", model])
+        return cmd
+    # codex/pi-mono: container idles, API uses docker exec per turn
+    return ["sleep", "infinity"]
+
+
 def _container_env(thread_key: str, container_name: str) -> list[str]:
     """Build env vars for sandbox containers."""
     local_dev = os.getenv("AGENT_LOCAL_DEV", "").lower() in ("1", "true")
@@ -156,6 +179,7 @@ class DockerSandboxBackend(SandboxBackend):
         persona: str | None = None,
         repo: str | None = None,
         warm: bool = False,
+        model: str | None = None,
     ) -> SandboxSession:
         client = self._get_client()
         repos_dir = os.path.abspath(_repos_host_dir())
@@ -207,8 +231,10 @@ class DockerSandboxBackend(SandboxBackend):
                     "mode": "ro",
                 }
 
+        cmd = _build_harness_cmd(engine, model)
         container = client.containers.run(
             _image(),
+            command=cmd,
             detach=True,
             stdin_open=True,
             tty=False,
@@ -276,10 +302,11 @@ class DockerSandboxBackend(SandboxBackend):
                     yield stripped
 
     def stop(self, session: SandboxSession) -> None:
-        with contextlib.suppress(Exception):
-            self.write_stdin(session, {"type": "interrupt"})
-        self.close_streams(session)
         client = self._get_client()
+        with contextlib.suppress(Exception):
+            container = client.containers.get(session.sandbox_id)
+            container.kill(signal="SIGINT")
+        self.close_streams(session)
         with contextlib.suppress(Exception):
             container = client.containers.get(session.sandbox_id)
             container.stop(timeout=5)
