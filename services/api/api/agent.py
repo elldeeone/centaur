@@ -13,6 +13,7 @@ Streaming architecture (2 layers, 0 queues, 0 threads):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
@@ -29,6 +30,7 @@ from api.sandbox.harness_protocol import (
     is_turn_done,
     messages_to_content_blocks,
 )
+from api.sandbox.normalize import normalize_harness_event
 from api.sandbox.registry import get_backend
 
 log = structlog.get_logger()
@@ -362,15 +364,19 @@ async def stream_exec(
     Pipeline (2 layers):
       aiodocker stdout async iterator → this generator → EventSourceResponse
     """
-    await _db_update_state(session.thread_key, "running")
     started_at = time.monotonic()
     try:
-        # 1. Insert platform-specific system message (idempotent)
+        # 1. DB setup — run independent queries concurrently
+        coros: list = [
+            _db_update_state(session.thread_key, "running"),
+            _get_last_delivered_id(session.thread_key),
+        ]
         if platform:
-            await _insert_system_message(session.thread_key, platform)
+            coros.append(_insert_system_message(session.thread_key, platform))
+        results = await asyncio.gather(*coros)
+        last_delivered_id: str | None = results[1]
 
-        # 2. Flush pending messages from chat_messages
-        last_delivered_id = await _get_last_delivered_id(session.thread_key)
+        # 2. Flush pending messages (depends on last_delivered_id)
         flushed = await _flush_pending(session.thread_key, last_delivered_id)
 
         # 3. Build harness-native input
@@ -422,7 +428,7 @@ async def stream_exec(
                 await backend.attach(session)
                 await backend.write_stdin(session, turn_input)
 
-        # 5. Stream stdout lines, detect turn boundaries
+        # 5. Stream stdout lines, normalize to canonical events, detect turn boundaries
         result_text = ""
         stream_failed = False
         agent_thread_id: str | None = None
@@ -440,50 +446,54 @@ async def stream_exec(
                     elapsed_s=round(time.monotonic() - t0, 2),
                 )
 
-            yield {"data": line}
-
             try:
                 evt = json.loads(line)
-                # Track agent thread ID
-                tid = extract_thread_id(session.engine, evt)
-                if tid:
-                    agent_thread_id = tid
-                # Track result text
-                r = extract_result(session.engine, evt)
-                if r is not None:
-                    result_text = r
-                if evt.get("type") == "error":
-                    stream_failed = True
-                    result_text = ""
-                # Detect turn completion
-                if is_turn_done(session.engine, evt):
-                    rt.busy = False
-                    rt.last_result = result_text
-                    yield {"data": json.dumps({
-                        "type": "turn.done",
-                        "turn_id": turn_id,
-                        "result": result_text or "",
-                        "agent_thread_id": agent_thread_id or "",
-                    })}
-                    log.info(
-                        "turn_done",
-                        thread_key=session.thread_key,
-                        sandbox=session.sandbox_id[:12],
-                        harness=session.harness,
-                        turn_id=turn_id,
-                        duration_s=round(time.monotonic() - t0, 2),
-                        reason="completed",
-                    )
-                    break
             except (json.JSONDecodeError, TypeError):
-                pass
+                continue
+
+            # Track agent thread ID
+            tid = extract_thread_id(session.engine, evt)
+            if tid:
+                agent_thread_id = tid
+            # Track result text
+            r = extract_result(session.engine, evt)
+            if r is not None:
+                result_text = r
+            if evt.get("type") == "error":
+                stream_failed = True
+                result_text = ""
+
+            # Normalize raw harness event → canonical events and yield each
+            for canonical in normalize_harness_event(session.engine, evt):
+                yield {"data": json.dumps(canonical, separators=(",", ":"))}
+
+            # Detect turn completion
+            if is_turn_done(session.engine, evt):
+                rt.busy = False
+                rt.last_result = result_text
+                yield {"data": json.dumps({
+                    "type": "turn.done",
+                    "turn_id": turn_id,
+                    "result": result_text or "",
+                    "agent_thread_id": agent_thread_id or "",
+                })}
+                log.info(
+                    "turn_done",
+                    thread_key=session.thread_key,
+                    sandbox=session.sandbox_id[:12],
+                    harness=session.harness,
+                    turn_id=turn_id,
+                    duration_s=round(time.monotonic() - t0, 2),
+                    reason="completed",
+                )
+                break
         else:
             # EOF without turn.done — container exited unexpectedly
             rt.busy = False
             if turn_input:
                 yield {"data": json.dumps({
                     "type": "error",
-                    "message": "Sandbox container exited unexpectedly before completing the turn.",
+                    "error": "Sandbox container exited unexpectedly before completing the turn.",
                 })}
                 stream_failed = True
             log.info(
@@ -496,12 +506,15 @@ async def stream_exec(
                 reason="eof",
             )
 
-        # 6. DB cleanup
+        # 6. DB cleanup — run independent writes concurrently
+        final_state = "error" if stream_failed else "idle"
+        cleanup: list = [
+            _persist_turn_messages(session.thread_key, "", result_text, session.harness),
+            _db_update_state(session.thread_key, final_state),
+        ]
         if last_flushed_id and not stream_failed:
-            await _advance_cursor(session.thread_key, last_flushed_id)
-
-        await _persist_turn_messages(session.thread_key, "", result_text, session.harness)
-        await _db_update_state(session.thread_key, "error" if stream_failed else "idle")
+            cleanup.append(_advance_cursor(session.thread_key, last_flushed_id))
+        await asyncio.gather(*cleanup)
         record_agent_execution(
             harness=session.harness,
             status="error" if stream_failed else "completed",
@@ -546,30 +559,34 @@ async def stream_reconnect(
     last_result: str | None = None
 
     async for line in backend.stream_stdout(session):
-        yield {"data": line}
         try:
             evt = json.loads(line)
-            tid = extract_thread_id(session.engine, evt)
-            if tid:
-                agent_thread_id = tid
-            r = extract_result(session.engine, evt)
-            if r is not None:
-                last_result = r
-            if is_turn_done(session.engine, evt):
-                done_seen += 1
-                if done_seen <= skip_done_count:
-                    continue
-                rt.busy = False
-                rt.last_result = last_result
-                yield {"data": json.dumps({
-                    "type": "turn.done",
-                    "turn_id": rt.turn_counter,
-                    "result": last_result or "",
-                    "agent_thread_id": agent_thread_id or "",
-                })}
-                break
         except (json.JSONDecodeError, TypeError):
-            pass
+            continue
+
+        tid = extract_thread_id(session.engine, evt)
+        if tid:
+            agent_thread_id = tid
+        r = extract_result(session.engine, evt)
+        if r is not None:
+            last_result = r
+
+        for canonical in normalize_harness_event(session.engine, evt):
+            yield {"data": json.dumps(canonical, separators=(",", ":"))}
+
+        if is_turn_done(session.engine, evt):
+            done_seen += 1
+            if done_seen <= skip_done_count:
+                continue
+            rt.busy = False
+            rt.last_result = last_result
+            yield {"data": json.dumps({
+                "type": "turn.done",
+                "turn_id": rt.turn_counter,
+                "result": last_result or "",
+                "agent_thread_id": agent_thread_id or "",
+            })}
+            break
 
     yield {"data": "[DONE]"}
 

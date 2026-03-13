@@ -1,15 +1,12 @@
 import { log } from "@/lib/logger";
 import { resilientFetch, isNetworkError, ApiError, API_URL } from "./api-client";
-import { getPool } from "@/lib/db";
-import { normalizeHarnessEvent, normalizeThreadKey, type CanonicalEvent } from "@centaur/harness-events";
+import { normalizeThreadKey, type CanonicalEvent } from "@centaur/harness-events";
 import { sleep } from "@/lib/utils";
 
 export type Harness = string;  // Dynamic — personas discovered at runtime
-export type BudgetMode = "simple" | "auto" | "complex";
 
 type RunOptions = {
   harness: Harness;
-  budgetMode: BudgetMode | null;
   cleanedText: string;
   harnessExplicit: boolean;
 };
@@ -17,7 +14,6 @@ type RunOptions = {
 export function extractRunOptions(text: string): RunOptions {
   let cleaned = text;
   let harness: Harness = "amp";
-  let budgetMode: BudgetMode | null = null;
   let harnessExplicit = false;
 
   // harness=<value> key-value (accepts any value — API validates)
@@ -50,44 +46,14 @@ export function extractRunOptions(text: string): RunOptions {
     }
   }
 
-  // Strip --model/--engine/--opus/--sonnet/--haiku flags (no longer used, but
-  // don't let them leak into the prompt if someone types them out of habit).
+  // Strip legacy --model/--engine/--opus/--sonnet/--haiku flags.
   cleaned = cleaned.replace(/(^|\s)--(engine|model)\s+[A-Za-z0-9._-]+(?=\s|$)/gi, " ");
   cleaned = cleaned.replace(/(^|\s)--(opus|sonnet|haiku)(?=\s|$)/gi, " ");
   cleaned = cleaned.replace(/\bmodel\s*=\s*[A-Za-z0-9._-]+\b/gi, "");
 
-  // Budget mode
-  const modeEqMatch = cleaned.match(/\bmode\s*=\s*(simple|auto|complex)\b/i);
-  if (modeEqMatch) {
-    budgetMode = modeEqMatch[1].toLowerCase() as BudgetMode;
-    cleaned = (
-      cleaned.slice(0, modeEqMatch.index) + cleaned.slice(modeEqMatch.index! + modeEqMatch[0].length)
-    ).trim();
-  }
-
-  const budgetFlags: Array<{ regex: RegExp; value: BudgetMode }> = [
-    { regex: /(^|\s)--simple(?=\s|$)/gi, value: "simple" },
-    { regex: /(^|\s)--fast(?=\s|$)/gi, value: "simple" },
-    { regex: /(^|\s)--auto(?=\s|$)/gi, value: "auto" },
-    { regex: /(^|\s)--balanced(?=\s|$)/gi, value: "auto" },
-    { regex: /(^|\s)--complex(?=\s|$)/gi, value: "complex" },
-    { regex: /(^|\s)--deep(?=\s|$)/gi, value: "complex" },
-  ];
-  for (const { regex, value } of budgetFlags) {
-    const matched = regex.test(cleaned);
-    regex.lastIndex = 0;
-    if (matched) {
-      budgetMode = value;
-      cleaned = cleaned.replace(regex, " ");
-      regex.lastIndex = 0;
-    }
-  }
-
   // Generic --<flag> catch-all: any remaining --<word> flags are treated as persona names.
-  // Known engine/budget/model flags were already consumed above.
   const knownFlags = new Set([
     "amp", "claude", "claude-code", "codex", "pi", "pi-mono",
-    "simple", "fast", "auto", "balanced", "complex", "deep",
     "opus", "sonnet", "haiku", "engine", "model",
   ]);
   const genericFlagRegex = /(^|\s)--([a-z][a-z0-9-]*)(?=\s|$)/gi;
@@ -101,7 +67,7 @@ export function extractRunOptions(text: string): RunOptions {
   cleaned = cleaned.replace(genericFlagRegex, " ");
 
   cleaned = cleaned.replace(/\s+/g, " ").trim();
-  return { harness, budgetMode, cleanedText: cleaned, harnessExplicit };
+  return { harness, cleanedText: cleaned, harnessExplicit };
 }
 
 function isBusyRunError(message: string): boolean {
@@ -170,7 +136,7 @@ async function* reconnectLoop(opts: {
     }
 
     try {
-      const inner = readSSEStream(res, harnessName);
+      const inner = readSSEStream(res);
       let replayCount = 0;
       while (true) {
         const { done, value } = await inner.next();
@@ -197,7 +163,6 @@ async function* reconnectLoop(opts: {
 
 async function* readSSEStream(
   res: Response,
-  harnessName: string,
 ): AsyncGenerator<
   CanonicalEvent,
   { lastAssistantText: string; resultText: string; sawDone: boolean },
@@ -234,22 +199,20 @@ async function* readSSEStream(
       }
 
       try {
-        const evt = JSON.parse(payload);
-        const canonical = normalizeHarnessEvent(String(harnessName), evt);
-        for (const ce of canonical) {
-          if (ce.type === "result" && "text" in ce) {
-            resultText = ce.text;
-          } else if (ce.type === "assistant" && ce.message?.content) {
-            for (const block of ce.message.content) {
-              if (block.type === "text" && block.text) {
-                lastAssistantText = block.text;
-              }
+        // Events arrive pre-normalized from the API — just parse and yield.
+        const ce = JSON.parse(payload) as CanonicalEvent;
+        if (ce.type === "result" && "text" in ce) {
+          resultText = ce.text;
+        } else if (ce.type === "assistant" && ce.message?.content) {
+          for (const block of ce.message.content) {
+            if (block.type === "text" && block.text) {
+              lastAssistantText = block.text;
             }
           }
-          yield ce;
         }
+        yield ce;
       } catch {
-        if (payload.trim()) lastAssistantText = payload.trim();
+        // skip unparseable lines
       }
     }
     if (sawDone) break;
@@ -307,7 +270,7 @@ export async function* executeStreaming(
   let firstEvent = false;
 
   try {
-    const inner = readSSEStream(res, harnessName);
+    const inner = readSSEStream(res);
     while (true) {
       const { done, value } = await inner.next();
       if (done) {
@@ -378,13 +341,18 @@ export async function* reconnectStreaming(
 }
 
 export async function fetchThreadHarness(threadKey: string): Promise<Harness | null> {
-  const normalizedThreadKey = normalizeThreadKey(threadKey);
-  const pool = getPool();
-  const { rows } = await pool.query(
-    `SELECT harness FROM sandbox_sessions WHERE thread_key = $1`,
-    [normalizedThreadKey],
-  );
-  return rows[0]?.harness || null;
+  const normalizedKey = normalizeThreadKey(threadKey);
+  try {
+    const res = await resilientFetch(
+      `${API_URL}/agent/status?key=${encodeURIComponent(normalizedKey)}`,
+      { timeoutMs: 5_000, maxAttempts: 1 },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as Record<string, unknown>;
+    return (data.harness as string) || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function* executeStreamingWithBusyRetries(
@@ -442,35 +410,19 @@ export async function postThreadContextMessage(
     attachments?: Array<{ url: string; name: string; mimeType?: string }>;
   },
 ): Promise<{ status: string }> {
-  const normalizedThreadKey = normalizeThreadKey(threadKey);
-  const pool = getPool();
-  const msgId = options?.messageId || `ctx-${normalizedThreadKey}-${Date.now()}`;
   const metadata: Record<string, unknown> = {};
   if (options?.source) metadata.source = options.source;
   if (options?.userId) metadata.user_id = options.userId;
   if (options?.attachments?.length) metadata.attachments = options.attachments;
+  if (options?.messageId) metadata.message_id = options.messageId;
+  if (options?.slackTs) metadata.slack_ts = options.slackTs;
 
-  // Derive created_at from the Slack message timestamp so messages sort in
-  // the order they were actually posted, not when the webhook was processed.
-  const ts = options?.slackTs || options?.messageId || "";
-  const epoch = parseFloat(ts);
-  const createdAt = epoch > 1_000_000_000 ? new Date(epoch * 1000).toISOString() : null;
-
-  if (createdAt) {
-    await pool.query(
-      `INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at)
-       VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb, $5::timestamptz)
-       ON CONFLICT (id) DO NOTHING`,
-      [msgId, normalizedThreadKey, JSON.stringify([{ type: "text", text }]), JSON.stringify(metadata), createdAt],
-    );
-  } else {
-    await pool.query(
-      `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
-       VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb)
-       ON CONFLICT (id) DO NOTHING`,
-      [msgId, normalizedThreadKey, JSON.stringify([{ type: "text", text }]), JSON.stringify(metadata)],
-    );
-  }
+  await postMessages(normalizeThreadKey(threadKey), [{
+    role: "user",
+    parts: [{ type: "text", text }],
+    user_id: options?.userId,
+    metadata,
+  }]);
   return { status: "accepted" };
 }
 

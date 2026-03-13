@@ -217,7 +217,6 @@ describe("extractRunOptions", () => {
     expect(r.harness).toBe("amp");
     expect(r.cleanedText).toBe("build me a dashboard");
     expect(r.harnessExplicit).toBe(false);
-    expect(r.budgetMode).toBeNull();
   });
 
   it("parses --claude flag", () => {
@@ -238,31 +237,6 @@ describe("extractRunOptions", () => {
     expect(r.harness).toBe("claude-code");
     expect(r.harnessExplicit).toBe(true);
     expect(r.cleanedText).toBe("do something");
-  });
-
-  it("parses --simple budget mode", () => {
-    const r = extractRunOptions("--simple quick question");
-    expect(r.budgetMode).toBe("simple");
-    expect(r.cleanedText).toBe("quick question");
-  });
-
-  it("parses --deep budget mode", () => {
-    const r = extractRunOptions("--deep investigate the crash");
-    expect(r.budgetMode).toBe("complex");
-    expect(r.cleanedText).toBe("investigate the crash");
-  });
-
-  it("parses mode=auto key-value", () => {
-    const r = extractRunOptions("mode=auto do it");
-    expect(r.budgetMode).toBe("auto");
-    expect(r.cleanedText).toBe("do it");
-  });
-
-  it("combines harness and budget flags", () => {
-    const r = extractRunOptions("--claude --complex run a deep analysis");
-    expect(r.harness).toBe("claude-code");
-    expect(r.budgetMode).toBe("complex");
-    expect(r.cleanedText).toBe("run a deep analysis");
   });
 
   it("strips legacy --opus/--sonnet/--haiku flags", () => {

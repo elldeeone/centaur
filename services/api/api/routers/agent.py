@@ -260,6 +260,22 @@ async def stop(req: StopRequest):
     return {"ok": ok}
 
 
+class TitleRequest(BaseModel):
+    thread_key: str
+    title: str
+
+
+@router.post("/title", dependencies=[Depends(require_scope("agent:execute"))])
+async def set_title(req: TitleRequest, request: Request):
+    pool = request.app.state.db_pool
+    await pool.execute(
+        "UPDATE sandbox_sessions SET thread_name = $1, updated_at = NOW() WHERE thread_key = $2",
+        req.title,
+        req.thread_key,
+    )
+    return {"ok": True}
+
+
 @router.get("/status", dependencies=[Depends(require_scope("agent:status"))])
 async def status(request: Request, key: str):
     result = await get_status(key)

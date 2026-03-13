@@ -271,26 +271,65 @@ function createBot() {
     return { streamReturn, yieldedCount, handoff };
   }
 
-  async function* streamProgress(
-    threadKey: string,
-    message: string | ContentBlock[],
-    harness: Harness,
-    tracker: ProgressTracker,
-    executionStartedAt: number,
-    options?: { platform?: string; userId?: string },
-  ): AsyncGenerator<StreamChunk> {
+  async function* streamProgress(opts: {
+    threadKey: string;
+    thread: Parameters<Parameters<typeof bot.onNewMention>[0]>[0];
+    instruction: string;
+    harness: Harness;
+    isFirstMessage: boolean;
+    attachments: Array<{ url?: string; name?: string; mimeType?: string; fetchData?: () => Promise<Buffer> }>;
+    tracker: ProgressTracker;
+    executionStartedAt: number;
+    userId?: string;
+    slackTs?: string;
+  }): AsyncGenerator<StreamChunk> {
+    const {
+      threadKey, thread, instruction, harness,
+      isFirstMessage, attachments, tracker, executionStartedAt,
+      userId, slackTs,
+    } = opts;
     let totalYieldedCount = 0;
 
-    // Yield the thread viewer link immediately so it's clickable from the start.
+    // Yield immediately — user sees this within milliseconds of mentioning the bot.
     if (THREAD_VIEWER_URL) {
       const viewerUrl = `${THREAD_VIEWER_URL}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
       yield { type: "markdown_text", text: `[Thread Viewer](${viewerUrl})` };
     }
     yield { type: "task_update", id: "init", title: "Starting…", status: "in_progress" };
 
+    // All prep runs AFTER the stream is open — history + attachments in parallel.
+    const [threadHistory, contentBlocks] = await Promise.all([
+      isFirstMessage
+        ? fetchThreadHistory(thread, slackTs, resolveAttachmentBlocks)
+        : Promise.resolve(""),
+      resolveAttachmentBlocks(attachments),
+    ]);
+
+    const textMessage = isFirstMessage ? threadHistory + instruction : instruction;
+
+    const message: string | ContentBlock[] = contentBlocks.length > 0
+      ? [{ type: "text" as const, text: textMessage }, ...contentBlocks]
+      : textMessage;
+
+    // Fire-and-forget: persist user message for thread viewer. Non-blocking.
+    postMessages(threadKey, [{
+      role: "user",
+      parts: [
+        { type: "text", text: textMessage } as { type: string; text?: string; source?: { type: string; media_type: string; data: string } },
+        ...(contentBlocks as Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>),
+      ],
+      user_id: userId,
+      metadata: { slack_ts: slackTs, source: "slack" },
+    }]).catch((err) => {
+      log.warn("message_buffer_failed", {
+        thread: threadKey,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
     // Phase 1: initial execute — sends turn.start to the container.
     const phase1 = drainStreamChunks(
-      executeStreamingWithBusyRetries(threadKey, message, harness, options),
+      executeStreamingWithBusyRetries(threadKey, message, harness, { platform: "slack", userId }),
       tracker, new HandoffDetector(),
     );
     let phase1Result: { streamReturn: string; yieldedCount: number; handoff: HandoffResult | null };
@@ -305,8 +344,6 @@ function createBot() {
     totalYieldedCount += phase1Result.yieldedCount;
 
     // Phase 2: follow handoff chain via reconnect (no turn.start).
-    // skip_done_count=1 tells the API to skip the old turn's turn.done during
-    // stdout replay so we keep streaming until the followed thread finishes.
     let lastHandoff = phase1Result.handoff;
     let handoffDepth = 0;
     while (lastHandoff) {
@@ -346,16 +383,10 @@ function createBot() {
       }
     }
 
-    // Ensure the "Starting…" init step is marked complete before the stream
-    // ends. If no canonical events arrived (e.g. empty response or error before
-    // first event), Slack would otherwise render the stuck in_progress step as
-    // failed (red).
     if (!tracker.initCompleted) {
       yield { type: "task_update", id: "init", title: "Started", status: "complete" };
     }
 
-    // Yield the final result as the last streamed chunk so everything
-    // appears in a single Slack message instead of a separate follow-up.
     const finalMessage = (tracker.resultText || tracker.lastAssistantText).trim();
     if (finalMessage && !isLowValueResult(finalMessage)) {
       const durationSeconds = Math.max(0, (Date.now() - executionStartedAt) / 1000);
@@ -429,7 +460,6 @@ function createBot() {
 
     const parsed = extractRunOptions(messageText);
     const harness: Harness = isFirstMessage ? parsed.harness : (activeHarness ?? parsed.harness);
-    const budgetMode = parsed.budgetMode;
 
     log.info("message_received", {
       thread_key: threadKey,
@@ -465,58 +495,19 @@ function createBot() {
       return;
     }
 
+    const tracker = new ProgressTracker();
+    const executionStartedAt = Date.now();
+
+    log.info("execute_start", { thread_key: threadKey, harness });
+
     try {
-      const instruction = parsed.cleanedText || "hey";
-      let threadHistory = "";
-      if (isFirstMessage) {
-        threadHistory = await fetchThreadHistory(thread, slackTs, resolveAttachmentBlocks);
-      }
-
-      let textMessage = isFirstMessage ? threadHistory + instruction : instruction;
-
-      if (budgetMode) {
-        textMessage = `[budget: ${budgetMode}]\n\n${textMessage}`;
-      }
-
-      // Resolve file attachments into Anthropic content blocks (base64-encoded).
-      // The Chat SDK's fetchData() handles Slack auth + redirects natively.
-      const contentBlocks = await resolveAttachmentBlocks(attachments || []);
-      const message: string | ContentBlock[] = contentBlocks.length > 0
-        ? [{ type: "text" as const, text: textMessage }, ...contentBlocks]
-        : textMessage;
-
-      // Buffer the message via POST /agent/messages
-      try {
-        const parts: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> = [
-          { type: "text", text: textMessage },
-        ];
-        for (const block of contentBlocks) {
-          parts.push(block as any);
-        }
-        await postMessages(threadKey, [{
-          role: "user",
-          parts,
-          user_id: userId,
-          metadata: { slack_ts: slackTs, source: "slack" },
-        }]);
-      } catch (err) {
-        log.warn("message_buffer_failed", {
-          thread: threadKey,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-
-      const tracker = new ProgressTracker();
-      const executionStartedAt = Date.now();
-
-      log.info("execute_start", { thread_key: threadKey, harness });
-
-      // Stream progress via SDK — uses Slack's native chat.startStream/appendStream/stopStream
-      // The final result + thread viewer link are yielded as the last chunk so
-      // everything appears in a single Slack message (no duplicate follow-up).
       let sentMessage: Awaited<ReturnType<typeof thread.post>> | null = null;
       try {
-        sentMessage = await thread.post(streamProgress(threadKey, message, harness, tracker, executionStartedAt, { platform: "slack", userId }));
+        sentMessage = await thread.post(streamProgress({
+          threadKey, thread, instruction: parsed.cleanedText || "hey",
+          harness, isFirstMessage, attachments: attachments || [],
+          tracker, executionStartedAt, userId, slackTs,
+        }));
       } catch (streamErr) {
         // Slack killed the streaming state before we called stop() (long-running turn).
         // Fall back to posting a plain message with whatever result we accumulated,
@@ -600,15 +591,15 @@ function createBot() {
         // Best-effort
       }
 
-      // Update thread_name in sandbox_sessions + set Slack assistant thread title
+      // Update thread_name via API + set Slack assistant thread title
       if (finalMessage) {
         const titleText = finalMessage.slice(0, 60);
         try {
-          const pool = getPool();
-          await pool.query(
-            `UPDATE sandbox_sessions SET thread_name = $1, updated_at = NOW() WHERE thread_key = $2`,
-            [titleText, threadKey],
-          );
+          await resilientFetch(`${API_URL}/agent/title`, {
+            method: "POST",
+            body: JSON.stringify({ thread_key: threadKey, title: titleText }),
+            maxAttempts: 1,
+          });
         } catch {
           // Best-effort
         }
@@ -625,7 +616,12 @@ function createBot() {
         thread_key: threadKey,
         error: error instanceof Error ? error.message : String(error),
       });
-      await thread.post(formatErrorForSlack(error, "Agent request failed"));
+      // Post a visible error with the init step marked as failed so the user
+      // doesn't just see "Starting…" spin forever.
+      await thread.post(async function* () {
+        yield { type: "task_update" as const, id: "init", title: "Failed", status: "error" as const };
+        yield { type: "markdown_text" as const, text: formatErrorForSlack(error, "Agent request failed") };
+      }());
     }
   }
 
