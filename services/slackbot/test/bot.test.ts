@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ProgressTracker } from "../src/lib/bot/progress-tracker";
-import { extractRunOptions } from "../src/lib/bot/harness";
+import { extractRunOptions } from "../src/lib/bot/bot";
 import { normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
 
 // ─────────────────────────────────────────────────────────────────────────────
