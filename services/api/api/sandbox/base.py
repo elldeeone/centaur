@@ -17,7 +17,6 @@ class RuntimeState:
     """
 
     turn_counter: int = 0
-    active_turn_id: int = 0
     stream: Any = None  # aiodocker Stream (read_out / write_in)
     busy: bool = False
     last_result: str | None = None

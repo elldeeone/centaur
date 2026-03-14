@@ -23,10 +23,6 @@ export interface ExecuteOptions {
   signal?: AbortSignal;
 }
 
-const BUSY_MAX_RETRIES = 4;
-const BUSY_INITIAL_DELAY_MS = 300;
-const BUSY_MAX_DELAY_MS = 2500;
-
 /**
  * Centaur API client. Two-step protocol:
  *
@@ -65,53 +61,44 @@ export class CentaurClient {
   async *execute(opts: ExecuteOptions): AsyncGenerator<CanonicalEvent, void, undefined> {
     const { threadKey, message, harness, platform, userId, signal } = opts;
 
-    for (let attempt = 1; attempt <= BUSY_MAX_RETRIES; attempt++) {
-      this.log?.info("sse_connect", { thread_key: threadKey, harness });
+    this.log?.info("sse_connect", { thread_key: threadKey, harness });
 
-      const body: Record<string, unknown> = { thread_key: threadKey, message };
-      if (harness) body.harness = harness;
-      if (platform) body.platform = platform;
-      if (userId) body.user_id = userId;
+    const body: Record<string, unknown> = { thread_key: threadKey, message };
+    if (harness) body.harness = harness;
+    if (platform) body.platform = platform;
+    if (userId) body.user_id = userId;
 
-      const res = await fetch(`${this.http.defaults.baseURL}/agent/execute`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: (this.http.defaults.headers["Authorization"] ?? this.http.defaults.headers.common?.["Authorization"]) as string,
-          "X-Trace-Id": threadKey,
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
+    const res = await fetch(`${this.http.defaults.baseURL}/agent/execute`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: (this.http.defaults.headers["Authorization"] ?? this.http.defaults.headers.common?.["Authorization"]) as string,
+        "X-Trace-Id": threadKey,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
 
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        let parsed: Record<string, unknown> | undefined;
-        try { parsed = JSON.parse(text); } catch {}
-        const code = parsed?.code as string | undefined;
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      let parsed: Record<string, unknown> | undefined;
+      try { parsed = JSON.parse(text); } catch {}
+      const code = parsed?.code as string | undefined;
+      throw new Error(
+        code
+          ? `${code}: ${(parsed?.detail as string) ?? text.slice(0, 300)}`
+          : `/agent/execute failed (${res.status}): ${text.slice(0, 300)}`,
+      );
+    }
 
-        if (code === "THREAD_BUSY" && attempt < BUSY_MAX_RETRIES) {
-          const delay = Math.min(BUSY_INITIAL_DELAY_MS * 2 ** (attempt - 1), BUSY_MAX_DELAY_MS);
-          await new Promise((r) => setTimeout(r, delay));
-          continue;
-        }
-        throw new Error(
-          code
-            ? `${code}: ${(parsed?.detail as string) ?? text.slice(0, 300)}`
-            : `/agent/execute failed (${res.status}): ${text.slice(0, 300)}`,
-        );
-      }
-
-      this.log?.info("sse_streaming", { thread_key: threadKey });
-      if (!res.body) return;
-      const stream = (res.body as ReadableStream<Uint8Array>)
-        .pipeThrough(new TextDecoderStream() as unknown as TransformStream<Uint8Array, string>)
-        .pipeThrough(new EventSourceParserStream());
-      for await (const event of stream as unknown as AsyncIterable<EventSourceMessage>) {
-        if (event.data === "[DONE]") return;
-        try { yield JSON.parse(event.data) as CanonicalEvent; } catch {}
-      }
-      return;
+    this.log?.info("sse_streaming", { thread_key: threadKey });
+    if (!res.body) return;
+    const stream = (res.body as ReadableStream<Uint8Array>)
+      .pipeThrough(new TextDecoderStream() as unknown as TransformStream<Uint8Array, string>)
+      .pipeThrough(new EventSourceParserStream());
+    for await (const event of stream as unknown as AsyncIterable<EventSourceMessage>) {
+      if (event.data === "[DONE]") return;
+      try { yield JSON.parse(event.data) as CanonicalEvent; } catch {}
     }
   }
 

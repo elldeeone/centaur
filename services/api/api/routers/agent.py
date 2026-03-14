@@ -18,7 +18,6 @@ from pydantic import BaseModel
 
 from api.agent import (
     _db_get_session,
-    _runtime,
     claim_for_delivery,
     get_or_spawn,
     get_status,
@@ -171,15 +170,6 @@ async def execute(request: Request):
                 "requested_harness": requested,
             },
         )
-
-    # ── Check thread busy ────────────────────────────────────────────────
-    if existing_session:
-        rt = _runtime.get(existing_session.sandbox_id)
-        if rt and rt.busy:
-            return JSONResponse(
-                status_code=409,
-                content={"code": "THREAD_BUSY"},
-            )
 
     # ── Validate message is non-empty after stripping flags ──────────────
     msg_empty = False
