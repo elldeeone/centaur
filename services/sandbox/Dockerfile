@@ -55,7 +55,13 @@ RUN curl -L https://foundry.paradigm.xyz | bash \
 RUN curl -fsSL https://ampcode.com/install.sh | bash
 
 # ── agent-browser (Chromium + system deps — heavy, keep isolated) ────────────
-RUN agent-browser install --with-deps
+# Chrome for Testing doesn't provide Linux ARM64 builds; fall back to system chromium
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+      agent-browser install --with-deps; \
+    else \
+      apt-get update && apt-get install -y --no-install-recommends chromium-browser || true \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # ── Agent skills + workspace setup (rarely changes) ─────────────────────────
 RUN npx -y skills add vercel-labs/agent-browser

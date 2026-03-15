@@ -225,6 +225,11 @@ class DockerSandboxBackend(SandboxBackend):
         # Point sandbox Docker CLI at the sidecar
         env.append(f"DOCKER_HOST=tcp://{dind_name}:2375")
 
+        # Ensure Docker CLI traffic to the DinD sidecar bypasses the HTTP proxy
+        for i, v in enumerate(env):
+            if v.startswith(("NO_PROXY=", "no_proxy=")):
+                env[i] = v + f",{dind_name}"
+
         labels = {
             "centaur-agent": "true",
             "ai2.pipe": "true",
@@ -407,10 +412,18 @@ class DockerSandboxBackend(SandboxBackend):
             rt.stream = None
 
     async def rename_by_id(self, sandbox_id: str, new_name: str) -> None:
-        """Rename a container by ID (no session needed)."""
+        """Rename a sandbox and its DinD sidecar by ID."""
         client = self._get_client()
         with contextlib.suppress(Exception):
             container = await client.containers.get(sandbox_id)
+            info = await container.show()
+            old_name = info.get("Name", "").lstrip("/")
+            if old_name:
+                old_dind = _dind_name(old_name)
+                new_dind = _dind_name(new_name)
+                with contextlib.suppress(Exception):
+                    dind = await client.containers.get(old_dind)
+                    await dind.rename(new_dind)
             await container.rename(new_name)
 
     async def refresh_token_by_id(self, sandbox_id: str, new_token: str) -> None:
