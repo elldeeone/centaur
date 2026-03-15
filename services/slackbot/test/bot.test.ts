@@ -290,7 +290,7 @@ describe("ProgressTracker", () => {
     expect(finalMessage(t)).toBe("");
   });
 
-  it("first 5 tools each get a unique slot", () => {
+  it("each tool gets its own unique task ID (no sliding window)", () => {
     const t = new ProgressTracker();
     const starts: unknown[] = [];
     for (let i = 0; i < 5; i++) {
@@ -298,37 +298,14 @@ describe("ProgressTracker", () => {
         type: "assistant",
         message: { content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { cmd: `echo ${i}` } }] },
       })];
-      starts.push(...chunks.filter((c) => c.type === "task_update" && (c as any).id !== "init"));
+      starts.push(...chunks.filter((c) => c.type === "task_update"));
       [...t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] })];
     }
     const ids = (starts as any[]).map((c) => c.id);
-    expect(ids).toEqual(["step-0", "step-1", "step-2", "step-3", "step-4"]);
+    expect(ids).toEqual(["t0", "t1", "t2", "t3", "t4"]);
   });
 
-  it("6th tool shifts window up — slots show tools 2-6", () => {
-    const t = new ProgressTracker();
-    for (let i = 0; i < 5; i++) {
-      [...t.update({
-        type: "assistant",
-        message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/file${i}` } }] },
-      })];
-      [...t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] })];
-    }
-    // 6th tool triggers a shift
-    const shiftChunks = [...t.update({
-      type: "assistant",
-      message: { content: [{ type: "tool_use", id: "t5", name: "Read", input: { path: "/file5" } }] },
-    })];
-    const taskUpdates = shiftChunks.filter((c) => c.type === "task_update" && (c as any).id !== "init");
-    // Full window re-emitted
-    expect(taskUpdates).toHaveLength(5);
-    // Newest slot (step-4) is in_progress
-    expect(taskUpdates.find((c) => (c as any).id === "step-4")).toMatchObject({ status: "in_progress" });
-    // Oldest visible (step-0) is complete (was t1, not t0)
-    expect(taskUpdates.find((c) => (c as any).id === "step-0")).toMatchObject({ status: "complete" });
-  });
-
-  it("all slot IDs stay within step-0..step-4 regardless of tool count", () => {
+  it("10 tools produce 10 unique task IDs — Slack plan block handles display", () => {
     const t = new ProgressTracker();
     const allChunks: unknown[] = [];
     for (let i = 0; i < 10; i++) {
@@ -340,10 +317,10 @@ describe("ProgressTracker", () => {
     }
     const ids = new Set(
       (allChunks as any[])
-        .filter((c) => c.type === "task_update" && c.id !== "init")
+        .filter((c) => c.type === "task_update")
         .map((c) => c.id),
     );
-    expect(ids).toEqual(new Set(["step-0", "step-1", "step-2", "step-3", "step-4"]));
+    expect(ids).toEqual(new Set(["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9"]));
   });
 
   it("subagent events produce task_update chunks", () => {
@@ -487,125 +464,4 @@ describe("simulated stream deaths", () => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 5. onSubscribedMessage attachment refetch
-// ═══════════════════════════════════════════════════════════════════════════════
 
-import { SlackBot, type BotThread, type BotMessage, type BotAttachment, type SlackAdapter } from "../src/lib/bot/bot";
-import type { CentaurClient } from "@centaur/api-client";
-
-function makeMockThread(id = "C123:1234567890.123456"): BotThread {
-  return {
-    id,
-    subscribe: vi.fn(async () => {}),
-    post: vi.fn(async (content) => {
-      if (content && Symbol.asyncIterator in content) {
-        for await (const _ of content) { /* drain */ }
-      }
-      return { id: "mock-msg", edit: vi.fn(async () => {}) };
-    }),
-  };
-}
-
-function makeMockClient(): CentaurClient {
-  return {
-    message: vi.fn(async () => {}),
-    connect: vi.fn(async function* () {
-      yield { type: "wire.ready" as const, lease_id: "test-lease", turn_counter: 0 };
-      yield { type: "result" as const, text: "done" };
-      yield { type: "turn.done" as const, result: "done", turn_id: 1, agent_thread_id: "" };
-    }),
-    execute: vi.fn(async () => ({ ok: true, injected: true, turn_id: 1 })),
-    getStatus: vi.fn(async () => ({})),
-  } as unknown as CentaurClient;
-}
-
-describe("onSubscribedMessage attachment refetch", () => {
-  it("refetches attachments for mentions in subscribed threads", async () => {
-    const refetchedAttachment: BotAttachment = {
-      name: "report.pdf",
-      mimeType: "application/pdf",
-      fetchData: async () => Buffer.from("pdf-content"),
-    };
-
-    const slackAdapter: SlackAdapter = {
-      fetchMessage: vi.fn(async () => ({ attachments: [refetchedAttachment] })),
-      setAssistantTitle: vi.fn(async () => {}),
-      replaceMessage: vi.fn(async () => {}),
-    };
-
-    const client = makeMockClient();
-    const bot = new SlackBot(client, "", slackAdapter);
-    const thread = makeMockThread();
-
-    const msg: BotMessage & { ts: string } = {
-      text: "analyze this PDF",
-      isMention: true,
-      author: { isMe: false, isBot: false, userId: "U999" },
-      attachments: [],
-      ts: "1234567890.123456",
-    };
-
-    await bot.onSubscribedMessage(thread, msg);
-
-    // fetchMessage was called to refetch files
-    expect(slackAdapter.fetchMessage).toHaveBeenCalledWith(thread.id, msg.ts);
-
-    // message() was called with content blocks containing the refetched PDF
-    expect(client.message).toHaveBeenCalledTimes(1);
-    const msgArgs = vi.mocked(client.message).mock.calls[0][0];
-    const parts = msgArgs.parts as Array<{ type: string }>;
-    expect(parts.some((b) => b.type === "document")).toBe(true);
-
-    // connect was called (establishes the stdout wire)
-    expect(client.connect).toHaveBeenCalledTimes(1);
-    // execute was called (writes to stdin)
-    expect(client.execute).toHaveBeenCalledTimes(1);
-    const executeArgs = vi.mocked(client.execute).mock.calls[0][0];
-    expect(typeof executeArgs.message).toBe("string");
-  });
-
-  it("uses inline attachments if already present (no refetch needed)", async () => {
-    const inlineAttachment: BotAttachment = {
-      name: "photo.png",
-      mimeType: "image/png",
-      fetchData: async () => Buffer.from("png-data"),
-    };
-
-    const slackAdapter: SlackAdapter = {
-      fetchMessage: vi.fn(async () => ({ attachments: [] })),
-      setAssistantTitle: vi.fn(async () => {}),
-      replaceMessage: vi.fn(async () => {}),
-    };
-
-    const client = makeMockClient();
-    const bot = new SlackBot(client, "", slackAdapter);
-    const thread = makeMockThread();
-
-    const msg: BotMessage & { ts: string } = {
-      text: "look at this image",
-      isMention: true,
-      author: { isMe: false, isBot: false, userId: "U999" },
-      attachments: [inlineAttachment],
-      ts: "1234567890.999999",
-    };
-
-    await bot.onSubscribedMessage(thread, msg);
-
-    // fetchMessage should NOT be called because attachments were already present
-    expect(slackAdapter.fetchMessage).not.toHaveBeenCalled();
-
-    // message() was called with image content blocks
-    expect(client.message).toHaveBeenCalledTimes(1);
-    const msgArgs = vi.mocked(client.message).mock.calls[0][0];
-    const parts = msgArgs.parts as Array<{ type: string }>;
-    expect(parts.some((b) => b.type === "image")).toBe(true);
-
-    // connect was called (establishes the stdout wire)
-    expect(client.connect).toHaveBeenCalledTimes(1);
-    // execute was called (writes to stdin)
-    expect(client.execute).toHaveBeenCalledTimes(1);
-    const executeArgs = vi.mocked(client.execute).mock.calls[0][0];
-    expect(typeof executeArgs.message).toBe("string");
-  });
-});

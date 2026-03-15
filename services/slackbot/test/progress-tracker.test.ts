@@ -1,16 +1,15 @@
 /**
  * Tests for ProgressTracker — Slack streaming progress via task_card + plan blocks.
  *
- * Run:  pnpm vitest run src/lib/bot/progress-tracker.test.ts
+ * Run:  pnpm vitest run test/progress-tracker.test.ts
  *
- * These are the CanonicalEvent shapes (post-normalization) that the tracker
- * consumes — NOT the raw SSE payloads.  Each test simulates a realistic Amp
- * turn by feeding events in the order Amp actually emits them.
+ * Uses real task IDs (tool call IDs, subagent IDs, etc.) — Slack's plan block
+ * handles collapsing/scrolling natively. No sliding window.
  */
 
 import { describe, it, expect } from "vitest";
 
-// ── Minimal type stubs (avoid workspace dep resolution issues in test) ──
+// ── Minimal type stubs ──────────────────────────────────────────────────
 
 type ContentBlock =
   | { type: "text"; text: string }
@@ -35,11 +34,9 @@ type StreamChunk =
   | { type: "plan_update"; title: string }
   | { type: "markdown_text"; text: string };
 
-// ── Inline ProgressTracker (snapshot of the algorithm under test) ──────
+// ── Inline ProgressTracker (mirrors real implementation) ────────────────
 
-const MAX_VISIBLE_STEPS = 5;
-
-type HistoryEntry = { toolId: string; title: string; status: "pending" | "in_progress" | "complete" | "error" };
+type TaskStatus = "pending" | "in_progress" | "complete" | "error";
 type ActiveTool = { name: string; input: Record<string, unknown> };
 
 class ProgressTracker {
@@ -47,7 +44,7 @@ class ProgressTracker {
   resultText = "";
   agentThreadId = "";
   private activeTools = new Map<string, ActiveTool>();
-  private stepHistory: HistoryEntry[] = [];
+  private tasks = new Map<string, { title: string; status: TaskStatus }>();
   private planTitle = "";
 
   *update(event: CanonicalEvent): Generator<StreamChunk> {
@@ -77,10 +74,10 @@ class ProgressTracker {
   }
 
   *finalize(): Generator<StreamChunk> {
-    for (let i = 0; i < this.stepHistory.length; i++) {
-      if (this.stepHistory[i].status === "in_progress" || this.stepHistory[i].status === "pending") {
-        this.stepHistory[i].status = "complete";
-        yield* this.emitSlot(i);
+    for (const [id, task] of this.tasks) {
+      if (task.status === "in_progress" || task.status === "pending") {
+        task.status = "complete";
+        yield { type: "task_update", id, title: task.title, status: "complete" };
       }
     }
     yield { type: "plan_update", title: "Completed" };
@@ -90,7 +87,10 @@ class ProgressTracker {
     this.activeTools.clear();
     this.lastAssistantText = "";
     this.resultText = "";
-    yield* this.addStep(`handoff-${Date.now()}`, `Handed off → ${goal}`, "complete");
+    const id = `handoff-${Date.now()}`;
+    const title = `Handed off → ${goal}`;
+    this.tasks.set(id, { title, status: "complete" });
+    yield { type: "task_update", id, title, status: "complete" };
   }
 
   private *onAssistant(event: { type: "assistant"; message: { content: ContentBlock[] } }): Generator<StreamChunk> {
@@ -101,7 +101,8 @@ class ProgressTracker {
         this.lastAssistantText = "";
         this.activeTools.set(block.id, { name: block.name, input: block.input });
         const title = block.name;
-        yield* this.addStep(block.id, title, "in_progress");
+        this.tasks.set(block.id, { title, status: "in_progress" });
+        yield { type: "task_update", id: block.id, title, status: "in_progress" };
         yield* this.emitPlanTitle(title);
       } else if (block.type === "text" && block.text) {
         textInThisEvent = block.text;
@@ -118,22 +119,33 @@ class ProgressTracker {
       const active = this.activeTools.get(block.tool_use_id);
       if (!active) continue;
       this.activeTools.delete(block.tool_use_id);
-      const status: "complete" | "error" = block.is_error ? "error" : "complete";
-      yield* this.updateStep(block.tool_use_id, active.name, status);
+      const status: TaskStatus = block.is_error ? "error" : "complete";
+      const task = this.tasks.get(block.tool_use_id);
+      if (task) { task.title = active.name; task.status = status; }
+      yield { type: "task_update", id: block.tool_use_id, title: active.name, status };
     }
   }
 
   private *onSubagent(event: { status: string; subagent_id: string; name?: string; activity?: string; activities?: SubagentActivity[] }): Generator<StreamChunk> {
     const label = event.name || "Subagent";
+    const id = event.subagent_id;
     if (event.status === "started") {
-      yield* this.addStep(event.subagent_id, `Subagent: ${label}`, "in_progress");
-      yield* this.emitPlanTitle(`Subagent: ${label}`);
+      const title = `Subagent: ${label}`;
+      this.tasks.set(id, { title, status: "in_progress" });
+      yield { type: "task_update", id, title, status: "in_progress" };
+      yield* this.emitPlanTitle(title);
     } else if (event.status === "working") {
       const activity = event.activity || event.activities?.[0]?.description || "";
       const title = activity ? `Subagent: ${label} — ${activity.slice(0, 60)}` : `Subagent: ${label}`;
-      yield* this.updateStep(event.subagent_id, title, "in_progress");
+      const task = this.tasks.get(id);
+      if (task) { task.title = title; }
+      yield { type: "task_update", id, title, status: "in_progress" };
     } else if (event.status === "completed" || event.status === "failed") {
-      yield* this.updateStep(event.subagent_id, `Subagent: ${label}`, event.status === "completed" ? "complete" : "error");
+      const status: TaskStatus = event.status === "completed" ? "complete" : "error";
+      const title = `Subagent: ${label}`;
+      const task = this.tasks.get(id);
+      if (task) { task.title = title; task.status = status; }
+      yield { type: "task_update", id, title, status };
     }
   }
 
@@ -141,40 +153,10 @@ class ProgressTracker {
     const cmd = event.command.slice(0, 60);
     const id = `cmd-${simpleHash(event.command)}`;
     const isError = event.exit_code !== undefined && event.exit_code !== 0;
-    const status: "complete" | "error" = isError ? "error" : "complete";
-    yield* this.addStep(id, `${isError ? "Failed" : "Ran"} — ${cmd}`, status);
-  }
-
-  private *addStep(toolId: string, title: string, status: "pending" | "in_progress" | "complete" | "error"): Generator<StreamChunk> {
-    this.stepHistory.push({ toolId, title, status });
-    if (this.stepHistory.length > MAX_VISIBLE_STEPS) {
-      yield* this.emitVisibleWindow();
-    } else {
-      yield* this.emitSlot(this.stepHistory.length - 1);
-    }
-  }
-
-  private *updateStep(toolId: string, title: string, status: "pending" | "in_progress" | "complete" | "error"): Generator<StreamChunk> {
-    const idx = findLastIndex(this.stepHistory, (e) => e.toolId === toolId);
-    if (idx === -1) return;
-    this.stepHistory[idx].title = title;
-    this.stepHistory[idx].status = status;
-    yield* this.emitSlot(idx);
-  }
-
-  private *emitSlot(historyIndex: number): Generator<StreamChunk> {
-    const windowStart = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
-    const slotIndex = historyIndex - windowStart;
-    if (slotIndex < 0 || slotIndex >= MAX_VISIBLE_STEPS) return;
-    const entry = this.stepHistory[historyIndex];
-    yield { type: "task_update", id: `step-${slotIndex}`, title: entry.title, status: entry.status };
-  }
-
-  private *emitVisibleWindow(): Generator<StreamChunk> {
-    const start = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
-    for (let i = start; i < this.stepHistory.length; i++) {
-      yield { type: "task_update", id: `step-${i - start}`, title: this.stepHistory[i].title, status: this.stepHistory[i].status };
-    }
+    const status: TaskStatus = isError ? "error" : "complete";
+    const title = `${isError ? "Failed" : "Ran"} — ${cmd}`;
+    this.tasks.set(id, { title, status });
+    yield { type: "task_update", id, title, status };
   }
 
   private *emitPlanTitle(activityTitle: string): Generator<StreamChunk> {
@@ -190,11 +172,6 @@ function simpleHash(s: string): string {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   return (h >>> 0).toString(36);
-}
-
-function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
-  for (let i = arr.length - 1; i >= 0; i--) { if (predicate(arr[i])) return i; }
-  return -1;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -275,27 +252,35 @@ describe("ProgressTracker", () => {
       expect(finalMessage(t)).toBe("The auth module works like this...");
     });
 
-    it("emits task_update for tool_use start and completion", () => {
+    it("emits task_update with real tool ID for start and completion", () => {
       const t = new ProgressTracker();
-      const startChunks = collect(t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "/x" } }] } }));
-      expect(startChunks.some((c) => c.type === "task_update" && (c as any).status === "in_progress")).toBe(true);
+      const startChunks = collect(t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-abc", name: "Read", input: { path: "/x" } }] } }));
+      const startTask = startChunks.find((c) => c.type === "task_update") as any;
+      expect(startTask.id).toBe("tool-abc");
+      expect(startTask.status).toBe("in_progress");
 
-      const doneChunks = collect(t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "ok", is_error: false }] }));
-      expect(doneChunks.some((c) => c.type === "task_update" && (c as any).status === "complete")).toBe(true);
+      const doneChunks = collect(t.update({ type: "tool", content: [{ tool_use_id: "tool-abc", content: "ok", is_error: false }] }));
+      const doneTask = doneChunks.find((c) => c.type === "task_update") as any;
+      expect(doneTask.id).toBe("tool-abc");
+      expect(doneTask.status).toBe("complete");
     });
   });
 
   // ── Subagent events ───────────────────────────────────────────────
 
   describe("subagent events", () => {
-    it("produces task_update chunks without affecting lastAssistantText", () => {
+    it("uses real subagent_id and doesn't affect lastAssistantText", () => {
       const t = new ProgressTracker();
       const chunks = collect(t.update({ type: "subagent", status: "started", subagent_id: "sa-1", name: "Research task" }));
-      expect(chunks.some((c) => c.type === "task_update" && (c as any).status === "in_progress")).toBe(true);
+      const task = chunks.find((c) => c.type === "task_update") as any;
+      expect(task.id).toBe("sa-1");
+      expect(task.status).toBe("in_progress");
       expect(t.lastAssistantText).toBe("");
 
       const chunks2 = collect(t.update({ type: "subagent", status: "completed", subagent_id: "sa-1", name: "Research task", summary: "Found 5 results" }));
-      expect(chunks2.some((c) => c.type === "task_update" && (c as any).status === "complete")).toBe(true);
+      const task2 = chunks2.find((c) => c.type === "task_update") as any;
+      expect(task2.id).toBe("sa-1");
+      expect(task2.status).toBe("complete");
       expect(t.lastAssistantText).toBe("");
     });
   });
@@ -366,7 +351,9 @@ describe("ProgressTracker", () => {
       const t = new ProgressTracker();
       collect(t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] } }));
       const chunks = collect(t.finalize());
-      expect(chunks.some((c) => c.type === "task_update" && (c as any).status === "complete")).toBe(true);
+      const task = chunks.find((c) => c.type === "task_update") as any;
+      expect(task.id).toBe("t1");
+      expect(task.status).toBe("complete");
       expect(chunks.some((c) => c.type === "plan_update" && (c as any).title === "Completed")).toBe(true);
     });
   });
@@ -384,42 +371,27 @@ describe("ProgressTracker", () => {
     });
   });
 
-  // ── Sliding window ───────────────────────────────────────────────
+  // ── Real task IDs (no sliding window) ─────────────────────────────
 
-  describe("sliding window", () => {
-    it("first 5 tools each get a unique slot", () => {
+  describe("real task IDs", () => {
+    it("each tool gets its own unique task ID", () => {
       const t = new ProgressTracker();
-      const starts: StreamChunk[] = [];
-      for (let i = 0; i < 5; i++) {
-        starts.push(...collect(t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { cmd: `echo ${i}` } }] } })));
-        collect(t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] }));
-      }
-      const ids = taskUpdates(starts).map((c) => (c as any).id);
-      expect(ids).toEqual(["step-0", "step-1", "step-2", "step-3", "step-4"]);
-    });
-
-    it("6th tool shifts window — slots show tools 2-6", () => {
-      const t = new ProgressTracker();
-      for (let i = 0; i < 5; i++) {
-        collect(t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/file${i}` } }] } }));
-        collect(t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] }));
-      }
-      const shiftChunks = collect(t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t5", name: "Read", input: { path: "/file5" } }] } }));
-      const tasks = taskUpdates(shiftChunks);
-      expect(tasks.length).toBe(5);
-      expect(tasks.find((c) => (c as any).id === "step-4")?.status).toBe("in_progress");
-      expect(tasks.find((c) => (c as any).id === "step-0")?.status).toBe("complete");
-    });
-
-    it("all slot IDs stay within step-0 to step-4", () => {
-      const t = new ProgressTracker();
-      const allChunks: StreamChunk[] = [];
       for (let i = 0; i < 10; i++) {
-        allChunks.push(...collect(t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/f${i}` } }] } })));
-        allChunks.push(...collect(t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] })));
+        const chunks = collect(t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `tool-${i}`, name: "Read", input: { path: `/f${i}` } }] } }));
+        const task = chunks.find((c) => c.type === "task_update") as any;
+        expect(task.id).toBe(`tool-${i}`);
+        expect(task.status).toBe("in_progress");
+        collect(t.update({ type: "tool", content: [{ tool_use_id: `tool-${i}`, content: "ok", is_error: false }] }));
       }
-      const ids = new Set(taskUpdates(allChunks).map((c) => (c as any).id));
-      expect(ids).toEqual(new Set(["step-0", "step-1", "step-2", "step-3", "step-4"]));
+    });
+
+    it("tool completion updates the same task ID", () => {
+      const t = new ProgressTracker();
+      collect(t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "my-tool", name: "Bash", input: { cmd: "ls" } }] } }));
+      const doneChunks = collect(t.update({ type: "tool", content: [{ tool_use_id: "my-tool", content: "ok", is_error: false }] }));
+      const task = doneChunks.find((c) => c.type === "task_update") as any;
+      expect(task.id).toBe("my-tool");
+      expect(task.status).toBe("complete");
     });
   });
 

@@ -11,21 +11,11 @@ import type { StreamChunk } from "chat";
  *
  * The plan block wraps task cards into a collapsible group. Each task card
  * has an id, title, status (pending/in_progress/complete/error), optional
- * details, and optional output.
- *
- * Task IDs use a fixed sliding window of MAX_VISIBLE_STEPS slots (step-0
- * through step-4). When a new task exceeds the window, the entire window
- * shifts up — old tasks scroll off the top, keeping the display compact.
+ * details, and optional output. Slack handles the display natively —
+ * we emit real task IDs and let the plan block manage scrolling/collapsing.
  */
 
-const MAX_VISIBLE_STEPS = 5;
-
-type HistoryEntry = {
-  toolId: string;
-  title: string;
-  status: "pending" | "in_progress" | "complete" | "error";
-};
-
+type TaskStatus = "pending" | "in_progress" | "complete" | "error";
 type ActiveTool = { name: string; input: Record<string, unknown> };
 
 export class ProgressTracker {
@@ -37,7 +27,7 @@ export class ProgressTracker {
   agentThreadId = "";
 
   private activeTools = new Map<string, ActiveTool>();
-  private stepHistory: HistoryEntry[] = [];
+  private tasks = new Map<string, { title: string; status: TaskStatus }>();
 
   // ── Public API ───────────────────────────────────────────────────────────
 
@@ -73,10 +63,10 @@ export class ProgressTracker {
 
   /** Finalize all in-progress tasks and set the plan title to "Completed". */
   *finalize(): Generator<StreamChunk> {
-    for (let i = 0; i < this.stepHistory.length; i++) {
-      if (this.stepHistory[i].status === "in_progress" || this.stepHistory[i].status === "pending") {
-        this.stepHistory[i].status = "complete";
-        yield* this.emitSlot(i);
+    for (const [id, task] of this.tasks) {
+      if (task.status === "in_progress" || task.status === "pending") {
+        task.status = "complete";
+        yield { type: "task_update", id, title: task.title, status: "complete" };
       }
     }
     yield { type: "plan_update", title: "Completed" };
@@ -87,7 +77,10 @@ export class ProgressTracker {
     this.activeTools.clear();
     this.lastAssistantText = "";
     this.resultText = "";
-    yield* this.addStep(`handoff-${Date.now()}`, `Handed off → ${goal}`, "complete");
+    const id = `handoff-${Date.now()}`;
+    const title = `Handed off → ${goal}`;
+    this.tasks.set(id, { title, status: "complete" });
+    yield { type: "task_update", id, title, status: "complete" };
   }
 
   // ── Event handlers ─────────────────────────────────────────────────────
@@ -100,7 +93,8 @@ export class ProgressTracker {
         this.lastAssistantText = "";
         this.activeTools.set(block.id, { name: block.name, input: block.input });
         const title = friendlyToolLabel(block.name, block.input);
-        yield* this.addStep(block.id, title, "in_progress");
+        this.tasks.set(block.id, { title, status: "in_progress" });
+        yield { type: "task_update", id: block.id, title, status: "in_progress" };
         yield* this.emitPlanTitle(title);
       } else if (block.type === "text" && block.text) {
         textInThisEvent = block.text;
@@ -117,26 +111,35 @@ export class ProgressTracker {
       const active = this.activeTools.get(block.tool_use_id);
       if (!active) continue;
       this.activeTools.delete(block.tool_use_id);
-      const status = block.is_error ? "error" : "complete";
+      const status: TaskStatus = block.is_error ? "error" : "complete";
       const title = friendlyToolLabel(active.name, active.input, !block.is_error);
-      yield* this.updateStep(block.tool_use_id, title, status);
+      const task = this.tasks.get(block.tool_use_id);
+      if (task) { task.title = title; task.status = status; }
+      yield { type: "task_update", id: block.tool_use_id, title, status };
     }
   }
 
   private *onSubagent(event: Extract<CanonicalEvent, { type: "subagent" }>): Generator<StreamChunk> {
     const label = event.name || "Subagent";
+    const id = event.subagent_id;
     if (event.status === "started") {
       const title = `Subagent: ${label}`;
-      yield* this.addStep(event.subagent_id, title, "in_progress");
+      this.tasks.set(id, { title, status: "in_progress" });
+      yield { type: "task_update", id, title, status: "in_progress" };
       yield* this.emitPlanTitle(title);
     } else if (event.status === "working") {
       const activity = event.activity || event.activities?.[0]?.description || "";
       const title = activity ? `Subagent: ${label} — ${truncate(activity, 60)}` : `Subagent: ${label}`;
-      yield* this.updateStep(event.subagent_id, title, "in_progress");
+      const task = this.tasks.get(id);
+      if (task) { task.title = title; }
+      yield { type: "task_update", id, title, status: "in_progress" };
       yield* this.emitPlanTitle(title);
     } else if (event.status === "completed" || event.status === "failed") {
-      const status = event.status === "completed" ? "complete" : "error";
-      yield* this.updateStep(event.subagent_id, `Subagent: ${label}`, status);
+      const status: TaskStatus = event.status === "completed" ? "complete" : "error";
+      const title = `Subagent: ${label}`;
+      const task = this.tasks.get(id);
+      if (task) { task.title = title; task.status = status; }
+      yield { type: "task_update", id, title, status };
     }
   }
 
@@ -144,53 +147,13 @@ export class ProgressTracker {
     const cmd = truncate(event.command, 60);
     const id = `cmd-${simpleHash(event.command)}`;
     const isError = event.exit_code !== undefined && event.exit_code !== 0;
-    const status = isError ? "error" : "complete";
+    const status: TaskStatus = isError ? "error" : "complete";
     const title = `${isError ? "Failed" : "Ran"} — ${cmd}`;
-    yield* this.addStep(id, title, status);
+    this.tasks.set(id, { title, status });
+    yield { type: "task_update", id, title, status };
   }
 
-  // ── Sliding window ─────────────────────────────────────────────────────
-
-  private *addStep(
-    toolId: string,
-    title: string,
-    status: "pending" | "in_progress" | "complete" | "error",
-  ): Generator<StreamChunk> {
-    this.stepHistory.push({ toolId, title, status });
-    if (this.stepHistory.length > MAX_VISIBLE_STEPS) {
-      yield* this.emitVisibleWindow();
-    } else {
-      yield* this.emitSlot(this.stepHistory.length - 1);
-    }
-  }
-
-  private *updateStep(
-    toolId: string,
-    title: string,
-    status: "pending" | "in_progress" | "complete" | "error",
-  ): Generator<StreamChunk> {
-    const idx = findLastIndex(this.stepHistory, (e) => e.toolId === toolId);
-    if (idx === -1) return;
-    this.stepHistory[idx].title = title;
-    this.stepHistory[idx].status = status;
-    yield* this.emitSlot(idx);
-  }
-
-  private *emitSlot(historyIndex: number): Generator<StreamChunk> {
-    const windowStart = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
-    const slotIndex = historyIndex - windowStart;
-    if (slotIndex < 0 || slotIndex >= MAX_VISIBLE_STEPS) return;
-    const entry = this.stepHistory[historyIndex];
-    yield { type: "task_update", id: `step-${slotIndex}`, title: entry.title, status: entry.status };
-  }
-
-  private *emitVisibleWindow(): Generator<StreamChunk> {
-    const start = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
-    for (let i = start; i < this.stepHistory.length; i++) {
-      const entry = this.stepHistory[i];
-      yield { type: "task_update", id: `step-${i - start}`, title: entry.title, status: entry.status };
-    }
-  }
+  // ── Plan title ─────────────────────────────────────────────────────────
 
   private planTitle = "";
 
@@ -292,11 +255,4 @@ function simpleHash(s: string): string {
     h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   }
   return (h >>> 0).toString(36);
-}
-
-function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
-  for (let i = arr.length - 1; i >= 0; i--) {
-    if (predicate(arr[i])) return i;
-  }
-  return -1;
 }
