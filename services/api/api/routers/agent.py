@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from api.agent import (
     _db_get_session,
+    _resolve_harness_profile,
     claim_for_delivery,
     get_or_spawn,
     get_status,
@@ -163,14 +164,19 @@ async def execute(request: Request):
     # ── Validate harness against existing session ────────────────────────
     requested = explicit_harness or (parsed_harness if parsed_explicit else None)
     if existing_harness and requested and requested != existing_harness:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "code": "HARNESS_MISMATCH",
-                "expected_harness": existing_harness,
-                "requested_harness": requested,
-            },
-        )
+        # Personas (e.g. --invest, --legal) resolve to a base engine (amp).
+        # Only reject if the resolved engine actually differs from the existing session.
+        requested_engine, _, _ = _resolve_harness_profile(requested)
+        existing_engine, _, _ = _resolve_harness_profile(existing_harness)
+        if requested_engine != existing_engine:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "HARNESS_MISMATCH",
+                    "expected_harness": existing_harness,
+                    "requested_harness": requested,
+                },
+            )
 
     # ── Validate message is non-empty after stripping flags ──────────────
     msg_empty = False
