@@ -44,6 +44,8 @@ export class ProgressTracker {
   agentThreadId = "";
   /** Overflow chunks when the final text exceeds Slack's message limit. */
   overflowChunks: string[] = [];
+  /** Full markdown of the streamed message (used for post-stream table reformatting). */
+  streamedMarkdown = "";
 
   private activeTools = new Map<string, ActiveTool>();
   private tasks = new Map<string, { title: string; status: TaskStatus }>();
@@ -167,14 +169,13 @@ export class ProgressTracker {
   }
 
   private *onCommand(event: Extract<CanonicalEvent, { type: "command_execution" }>): Generator<StreamChunk> {
-    const cmd = truncate(event.command, 60);
     const id = `cmd-${simpleHash(event.command)}`;
     const isError = event.exit_code !== undefined && event.exit_code !== 0;
     const status: TaskStatus = isError ? "error" : "complete";
-    const title = `${isError ? "Failed" : "Ran"} — ${cmd}`;
+    const friendly = friendlyCommand(event.command, isError);
     const output = event.aggregated_output ? truncate(event.aggregated_output, 200) : undefined;
-    this.tasks.set(id, { title, status });
-    yield taskChunk(id, title, status, { output });
+    this.tasks.set(id, { title: friendly.title, status });
+    yield taskChunk(id, friendly.title, status, { details: friendly.details, output });
   }
 
   // ── Plan title ─────────────────────────────────────────────────────────
@@ -318,9 +319,80 @@ function friendlyToolContext(name: string, input: Record<string, unknown>): stri
 function friendlyBashContext(cmd: string): string {
   if (!cmd) return "";
   const trimmed = cmd.trim();
-  const callMatch = trimmed.match(/^call\s+(\S+)\s+(\S+)/);
-  if (callMatch) return `${callMatch[1]}.${callMatch[2]}`;
+  const parsed = parseCallCommand(trimmed);
+  if (parsed) return `${parsed.tool}.${parsed.method}`;
   return truncate(trimmed, 60);
+}
+
+/** Parse a `call <tool> <method> '<json>'` command into structured parts. */
+function parseCallCommand(cmd: string): { tool: string; method: string; args?: Record<string, unknown> } | null {
+  const match = cmd.match(/^call\s+(\S+)\s+(\S+)(?:\s+'(.+)')?$/s);
+  if (!match) return null;
+  const [, tool, method, jsonStr] = match;
+  if (!jsonStr) return { tool, method };
+  try {
+    const args = JSON.parse(jsonStr);
+    return { tool, method, args };
+  } catch {
+    return { tool, method };
+  }
+}
+
+/** Human-readable title + details for a command_execution event. */
+function friendlyCommand(cmd: string, isError: boolean): { title: string; details?: string } {
+  const verb = isError ? "Failed" : "Ran";
+  const trimmed = cmd.trim();
+  const parsed = parseCallCommand(trimmed);
+
+  if (parsed) {
+    const label = `${parsed.tool}.${parsed.method}`;
+    const title = `${verb} — ${label}`;
+
+    // Extract a human-readable summary from the JSON args
+    if (parsed.args && typeof parsed.args === "object") {
+      const summary = humanizeToolArgs(parsed.tool, parsed.method, parsed.args);
+      if (summary) return { title, details: summary };
+    }
+    return { title };
+  }
+
+  return { title: `${verb} — ${truncate(trimmed, 60)}` };
+}
+
+const TOOL_FRIENDLY_NAMES: Record<string, string> = {
+  slack: "Slack",
+  notion: "Notion",
+  websearch: "Web",
+  linear: "Linear",
+  figma: "Figma",
+  google_news: "Google News",
+  telegram: "Telegram",
+  twitter: "Twitter",
+  alchemy: "Alchemy",
+  allium: "Allium",
+  dune: "Dune",
+  etherscan: "Etherscan",
+  nansen: "Nansen",
+  posthog: "PostHog",
+  crunchbase: "Crunchbase",
+};
+
+/** Turn tool args into a readable one-liner: "paradigm office email SF NYC" */
+function humanizeToolArgs(tool: string, _method: string, args: Record<string, unknown>): string | undefined {
+  // Pull out the most meaningful string value from the args
+  const meaningful = args.query ?? args.search ?? args.prompt ?? args.message ?? args.q;
+  if (typeof meaningful === "string" && meaningful.length > 0) {
+    const friendly = TOOL_FRIENDLY_NAMES[tool] || tool;
+    return `${friendly}: ${truncate(meaningful, 120)}`;
+  }
+  // Fallback: show all string values
+  const parts: string[] = [];
+  for (const [key, val] of Object.entries(args)) {
+    if (typeof val === "string" && val.length > 0) {
+      parts.push(`${key}: ${truncate(val, 60)}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
 function shortPath(p: string): string {

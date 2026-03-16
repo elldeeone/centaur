@@ -3,8 +3,8 @@ import type { CanonicalEvent } from "@centaur/harness-events";
 import { CentaurClient } from "@centaur/api-client";
 import type { InputContentBlock } from "@centaur/api-client";
 
-import { stringifyMarkdown, type StreamChunk } from "chat";
-import type { Root } from "chat";
+import { stringifyMarkdown, parseMarkdown, isTableNode, type StreamChunk } from "chat";
+import type { Root, Content } from "chat";
 import { log } from "@/lib/logger";
 import { ProgressTracker } from "./progress-tracker";
 import { convertDashboardBlocks } from "./dashboard-to-slack";
@@ -47,6 +47,12 @@ export function splitSlackMessage(text: string, limit = SLACK_MSG_MAX_CHARS): st
   }
   if (remaining) chunks.push(remaining);
   return chunks;
+}
+
+/** Check if markdown text contains a pipe-delimited table. */
+function containsMarkdownTable(md: string): boolean {
+  const ast = parseMarkdown(md);
+  return ast.children.some((node) => isTableNode(node as Content));
 }
 
 /** Extract harness/persona flag (e.g. --invest, --legal) from message text. */
@@ -219,8 +225,9 @@ export class SlackBot {
     const t0 = Date.now();
     log.info("execute_start", { thread_key: threadKey, user_id: userId });
 
+    let sentMessage: Awaited<ReturnType<typeof thread.post>> | undefined;
     try {
-      await thread.post(this.stream(threadKey, text, tracker, userId, t0, ac.signal), { taskDisplayMode: "plan" });
+      sentMessage = await thread.post(this.stream(threadKey, text, tracker, userId, t0, ac.signal), { taskDisplayMode: "plan" });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
 
@@ -259,6 +266,18 @@ export class SlackBot {
 
     // Clean up abort controller if we're still the active one
     if (this.streamAbort.get(threadKey) === ac) this.streamAbort.delete(threadKey);
+
+    // If the response contains markdown tables, edit the streamed message to
+    // use native Slack table blocks (the streaming path renders tables as plain
+    // code blocks; editMessage triggers the Chat SDK's renderWithTableBlocks).
+    if (sentMessage && tracker.streamedMarkdown && containsMarkdownTable(tracker.streamedMarkdown)) {
+      try {
+        await sentMessage.edit({ markdown: tracker.streamedMarkdown });
+        log.info("table_reformat", { thread_key: threadKey });
+      } catch (err) {
+        log.warn("table_reformat_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
 
     // Post any overflow chunks that didn't fit in the streaming message
     for (const chunk of tracker.overflowChunks) {
@@ -342,6 +361,7 @@ export class SlackBot {
       const prefix = `_${[process.env.APP_NAME || "Centaur", harness, durStr].join(" · ")}_\n\n`;
       const suffix = this.viewerUrl ? `\n\n[Thread Viewer](${this.viewerUrl}/${encodeURIComponent(threadKey)})` : "";
       const fullMd = `${prefix}${finalText}${suffix}`;
+      tracker.streamedMarkdown = fullMd;
       const chunks = splitSlackMessage(fullMd);
       yield { type: "markdown_text", text: chunks[0] };
       tracker.overflowChunks = chunks.slice(1);
