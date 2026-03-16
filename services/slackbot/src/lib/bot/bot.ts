@@ -7,6 +7,7 @@ import { stringifyMarkdown, type StreamChunk } from "chat";
 import type { Root } from "chat";
 import { log } from "@/lib/logger";
 import { ProgressTracker } from "./progress-tracker";
+import { convertDashboardBlocks } from "./dashboard-to-slack";
 
 const KEEPALIVE_MS = 120_000; // 2 min — Slack expires streaming state after ~5 min
 const STREAM_EXPIRED_POLL_INTERVAL_MS = 3_000;
@@ -228,10 +229,10 @@ export class SlackBot {
       // or poll the API for the final result if we don't have one yet.
       if (errMsg.includes("message_not_in_streaming_state")) {
         log.warn("slack_stream_expired", { thread_key: threadKey, error: errMsg });
-        let fallback = (tracker.resultText || tracker.lastAssistantText).trim();
+        let fallback = convertDashboardBlocks((tracker.resultText || tracker.lastAssistantText).trim());
 
         if (!fallback) {
-          fallback = await this.pollForResult(normalizeThreadKey(threadKey));
+          fallback = convertDashboardBlocks(await this.pollForResult(normalizeThreadKey(threadKey)));
         }
 
         if (fallback) {
@@ -330,7 +331,8 @@ export class SlackBot {
     // Emit the final response as markdown_text so Slack's streaming API includes it.
     // If the text exceeds Slack's 4k char limit, yield only the first chunk here
     // and stash overflow for the caller to post as separate messages.
-    const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
+    // Convert ```dashboard blocks to markdown tables so they render as Slack Block Kit.
+    const finalText = convertDashboardBlocks((tracker.resultText || tracker.lastAssistantText).trim());
     if (finalText) {
       const dur = (Date.now() - t0) / 1000;
       const durStr = dur < 10 ? `${dur.toFixed(1)}s` : `${Math.round(dur)}s`;
