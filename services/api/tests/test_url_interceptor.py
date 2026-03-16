@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
-from api.routers.agent import _DOCSEND_RE, _GDOC_RE, _GDRIVE_RE
+from api.routers.agent import _DOCSEND_RE, _GDOC_RE, _GDRIVE_RE, _GDRIVE_FOLDER_RE
 
 
 # ---------------------------------------------------------------------------

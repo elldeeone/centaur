@@ -140,6 +140,11 @@
 |       curl -sL -H "Authorization: Bearer $SLACK_BOT_TOKEN" "<url_private>" -o /home/agent/uploads/<filename>
 |Do NOT waste time checking env vars, searching for tokens, or trying curl for the token — use the slack tool for metadata, then curl for the actual file bytes.
 |For files in other Slack messages, use the same get_message_files → download_file/curl flow.
+|
+|DocSend and Google Docs/Sheets/Drive links shared in the thread are automatically downloaded
+|and stored as attachments by the API. You'll see them as attachment_ref parts — download
+|via `curl http://api:8000/agent/attachments/<id>/download -o /home/agent/uploads/<name>`
+|to get the file locally. No need to manually scrape or export these URLs.
 
 [Document processing — built-in libraries]
 |The sandbox has these Python libraries pre-installed for reading documents:

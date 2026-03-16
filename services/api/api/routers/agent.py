@@ -267,11 +267,14 @@ async def _extract_attachments(
 
 
 # URL patterns for auto-archiving
-_DOCSEND_RE = re.compile(r"https?://(?:www\.)?docsend\.com/view/([a-zA-Z0-9]+)")
+_DOCSEND_RE = re.compile(r"https?://(?:www\.)?docsend\.com/view/(?:s/)?([a-zA-Z0-9]+)")
 _GDOC_RE = re.compile(
     r"https?://docs\.google\.com/(document|spreadsheets|presentation)/d/([a-zA-Z0-9_-]+)"
 )
 _GDRIVE_RE = re.compile(r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)")
+_GDRIVE_FOLDER_RE = re.compile(
+    r"https?://drive\.google\.com/drive/(?:u/\d+/)?folders/([a-zA-Z0-9_-]+)"
+)
 
 _GDOC_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
     "document": ("pdf", "application/pdf"),
@@ -325,6 +328,8 @@ async def _resolve_urls(
             urls.append(("gdoc", m.group(0), {"doc_type": m.group(1), "file_id": m.group(2)}))
         for m in _GDRIVE_RE.finditer(text):
             urls.append(("gdrive", m.group(0), {"file_id": m.group(1)}))
+        for m in _GDRIVE_FOLDER_RE.finditer(text):
+            urls.append(("gdrive_folder", m.group(0), {"folder_id": m.group(1)}))
 
     if not urls:
         return parts
@@ -393,6 +398,80 @@ async def _resolve_urls(
                     name = file_id
                 ext = _MIME_EXT.get(mime_type, mime_type.split("/")[-1] if "/" in mime_type else "bin")
                 filename = f"{name}.{ext}" if "." not in name else name
+
+            elif kind == "gdrive_folder":
+                folder_id = extra["folder_id"]
+                files = await tm.call_tool_raw(
+                    "gsuite", "drive_list", {"folder_id": folder_id, "max_results": 50},
+                )
+                if isinstance(files, dict) and files.get("error"):
+                    log.warning("url_resolve_failed", url=url, reason=files["error"])
+                    continue
+                if not isinstance(files, list) or not files:
+                    log.warning("url_resolve_failed", url=url, reason="empty folder or listing failed")
+                    continue
+                for f in files:
+                    f_id = f.get("id", "")
+                    f_mime = f.get("mime_type", "application/octet-stream")
+                    f_name = f.get("name", f_id)
+                    # Skip sub-folders
+                    if f_mime == "application/vnd.google-apps.folder":
+                        continue
+                    try:
+                        # Google-native docs need export; binary files use download
+                        if f_mime.startswith("application/vnd.google-apps."):
+                            gtype = f_mime.rsplit(".", 1)[-1]  # document, spreadsheet, etc.
+                            fmt_key = {
+                                "document": "document",
+                                "spreadsheet": "spreadsheets",
+                                "presentation": "presentation",
+                            }.get(gtype)
+                            if not fmt_key:
+                                continue
+                            fmt, m_type = _GDOC_EXPORT_FORMATS.get(fmt_key, ("pdf", "application/pdf"))
+                            r = await tm.call_tool_raw(
+                                "gsuite", "drive_export",
+                                {"file_id": f_id, "export_format": fmt},
+                            )
+                            if isinstance(r, dict) and r.get("error"):
+                                log.warning("url_resolve_failed", url=url, file=f_name, reason=r["error"])
+                                continue
+                            f_bytes = await _read_and_cleanup(str(r))
+                            f_ext = "xlsx" if fmt == "xlsx" else "pdf"
+                            f_filename = f"{f_name}.{f_ext}"
+                        else:
+                            import tempfile as _tf
+
+                            tmp = _tf.mktemp(prefix=f"gdrive_{f_id}_")
+                            r = await tm.call_tool_raw(
+                                "gsuite", "drive_download",
+                                {"file_id": f_id, "output_path": tmp},
+                            )
+                            if isinstance(r, dict) and r.get("error"):
+                                log.warning("url_resolve_failed", url=url, file=f_name, reason=r["error"])
+                                continue
+                            f_bytes = await _read_and_cleanup(str(r))
+                            m_type = f_mime
+                            f_ext = _MIME_EXT.get(f_mime, f_mime.split("/")[-1] if "/" in f_mime else "bin")
+                            f_filename = f"{f_name}.{f_ext}" if "." not in f_name else f_name
+
+                        a_id = f"att-{uuid.uuid4().hex[:16]}"
+                        await pool.execute(
+                            "INSERT INTO attachments (id, thread_key, message_id, name, mime_type, data) "
+                            "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
+                            a_id, thread_key, message_id, f_filename, m_type, f_bytes,
+                        )
+                        new_refs.append({
+                            "type": "attachment_ref",
+                            "id": a_id,
+                            "name": f_filename,
+                            "mime_type": m_type,
+                            "source_url": url,
+                        })
+                        log.info("url_resolved", url=url, kind="gdrive_folder_file", att_id=a_id, size=len(f_bytes))
+                    except Exception:
+                        log.warning("url_resolve_failed", url=url, file=f_name, kind="gdrive_folder_file", exc_info=True)
+                continue
 
             else:
                 continue

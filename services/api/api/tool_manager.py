@@ -608,6 +608,62 @@ class ToolManager:
             "methods": method_schemas,
         }
 
+    async def call_tool_raw(self, tool_name: str, method_name: str, args: dict[str, Any]) -> Any:
+        """Call a tool method by name and return the raw Python result.
+
+        Like ``call_tool`` but skips TOON/JSON serialization so the caller gets
+        the native return value (e.g. a dict with binary data).
+        """
+        lt = self.tools.get(tool_name)
+        if not lt:
+            return {"error": f"Tool '{tool_name}' not found", "available": sorted(self.tools.keys())}
+
+        method = next((m for m in lt.methods if m.method_name == method_name), None)
+        if not method:
+            return {
+                "error": f"Method '{method_name}' not found in tool '{tool_name}'",
+                "available_methods": sorted(m.method_name for m in lt.methods),
+            }
+
+        t0 = time.monotonic()
+        log.info("tool_call_started", tool_name=tool_name, tool_method=method_name)
+
+        ctx = lt.ctx
+        if lt.secrets_keys:
+            resolved = await _resolve_secrets(lt.secrets_keys)
+            if resolved:
+                ctx = ToolContext(name=lt.name, secrets={**lt.ctx.secrets, **resolved})
+
+        token = set_tool_context(ctx)
+        try:
+            if inspect.iscoroutinefunction(method.fn):
+                result = await method.fn(**args)
+            else:
+                result = await asyncio.to_thread(method.fn, **args)
+            duration_ms = round((time.monotonic() - t0) * 1000)
+            log.info(
+                "tool_call_completed",
+                tool_name=tool_name,
+                tool_method=method_name,
+                duration_ms=duration_ms,
+                success=True,
+            )
+            return result
+        except (SystemExit, Exception) as e:
+            duration_ms = round((time.monotonic() - t0) * 1000)
+            error_msg = f"sys.exit({e.code})" if isinstance(e, SystemExit) else str(e)
+            log.warning(
+                "tool_call_completed",
+                tool_name=tool_name,
+                tool_method=method_name,
+                duration_ms=duration_ms,
+                success=False,
+                error=error_msg,
+            )
+            return {"error": error_msg, "tool": tool_name, "method": method_name}
+        finally:
+            reset_tool_context(token)
+
     async def call_tool(self, tool_name: str, method_name: str, args: dict[str, Any]) -> str:
         """Call a tool method by name and return the result as a TOON string."""
         lt = self.tools.get(tool_name)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import uuid
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
@@ -36,6 +39,63 @@ async def list_attachments(request: Request, thread_key: str):
         }
         for row in rows
     ]
+
+
+@router.post("/upload")
+async def upload_attachment(request: Request):
+    """Upload a file directly to the attachments table.
+
+    Body (JSON):
+        thread_key: str (required)
+        name: str (required) — filename
+        mime_type: str (required)
+        data: str (required) — base64-encoded file content
+        message_id: str (optional) — associated chat_message id
+        source_url: str (optional) — original URL the file was downloaded from
+    """
+    body = await request.json()
+
+    thread_key = body.get("thread_key")
+    name = body.get("name")
+    mime_type = body.get("mime_type")
+    data_b64 = body.get("data")
+
+    if not all([thread_key, name, mime_type, data_b64]):
+        raise HTTPException(
+            status_code=422,
+            detail="thread_key, name, mime_type, and data are required",
+        )
+
+    try:
+        raw_bytes = base64.b64decode(data_b64)
+    except Exception:
+        raise HTTPException(status_code=422, detail="data is not valid base64")
+
+    att_id = f"att-{uuid.uuid4().hex[:16]}"
+    message_id = body.get("message_id")
+    source_url = body.get("source_url")
+
+    pool = request.app.state.db_pool
+    await pool.execute(
+        "INSERT INTO attachments (id, thread_key, message_id, name, mime_type, data) "
+        "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
+        att_id, thread_key, message_id, name, mime_type, raw_bytes,
+    )
+    log.info(
+        "attachment_uploaded",
+        id=att_id,
+        thread_key=thread_key,
+        name=name,
+        mime_type=mime_type,
+        size=len(raw_bytes),
+        source_url=source_url,
+    )
+    return {
+        "id": att_id,
+        "name": name,
+        "mime_type": mime_type,
+        "download_url": f"/agent/attachments/{att_id}/download",
+    }
 
 
 @router.get("/{attachment_id}/download")
