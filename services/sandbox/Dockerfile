@@ -18,7 +18,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     pip3 install --break-system-packages \
     python-docx lxml docx-revisions \
-    matplotlib numpy pandas
+    matplotlib numpy pandas \
+    python-pptx openpyxl PyMuPDF mammoth
 
 # ── GitHub CLI + Node.js 22 + Docker CLI (single layer, cached) ─────────────
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

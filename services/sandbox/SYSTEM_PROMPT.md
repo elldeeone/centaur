@@ -132,9 +132,32 @@
 |If the file is NOT there (download failed), immediately fall back:
 |  1. Extract channel_id and message_ts from the thread context
 |  2. `call slack get_message_files '{"channel_id":"...","message_ts":"..."}'`
-|  3. `call slack download_file '{"url":"<url_private>","output_path":"/home/agent/uploads/<filename>"}'`
-|Do NOT waste time checking env vars, searching for tokens, or trying curl — use the slack tool.
-|For files in other Slack messages, use the same get_message_files → download_file flow.
+|  3. `call slack download_file '{"url":"<url_private>","output_path":"<filename>"}'`
+|     ⚠ download_file runs on the API server, NOT in this sandbox. Use a plain filename
+|     (e.g. "report.pdf"), NOT an absolute path. The tool returns the filename on success;
+|     the file content is NOT transferred to the sandbox. To get the file locally, prefer
+|     downloading via curl inside this sandbox instead:
+|       curl -sL -H "Authorization: Bearer $SLACK_BOT_TOKEN" "<url_private>" -o /home/agent/uploads/<filename>
+|Do NOT waste time checking env vars, searching for tokens, or trying curl for the token — use the slack tool for metadata, then curl for the actual file bytes.
+|For files in other Slack messages, use the same get_message_files → download_file/curl flow.
+
+[Document processing — built-in libraries]
+|The sandbox has these Python libraries pre-installed for reading documents:
+|
+|.docx files (python-docx):
+|  python3 -c "from docx import Document; doc=Document('file.docx'); print('\n'.join(p.text for p in doc.paragraphs))"
+|
+|.xlsx files (openpyxl):
+|  python3 -c "from openpyxl import load_workbook; wb=load_workbook('file.xlsx'); ws=wb.active; [print(row) for row in ws.iter_rows(values_only=True)]"
+|
+|.pptx files (python-pptx):
+|  python3 -c "from pptx import Presentation; prs=Presentation('file.pptx'); [print(shape.text) for slide in prs.slides for shape in slide.shapes if shape.has_text_frame]"
+|
+|.pdf files (pymupdf):
+|  python3 -c "import fitz; doc=fitz.open('file.pdf'); [print(page.get_text()) for page in doc]"
+|
+|For longer scripts, create a .py file instead of one-liners.
+|ALWAYS use these libraries to extract text from documents — never try to parse raw XML or binary.
 
 [Handoff tool]
 |The `handoff` tool works in this sandbox. When you use `handoff` with `follow: true`,

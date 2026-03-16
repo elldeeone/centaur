@@ -41,6 +41,9 @@ else
     mkdir -p "$WORKSPACE_DIR"
 fi
 
+# ── Ensure uploads directory exists ──────────────────────────────────────────
+mkdir -p "$HOME_DIR/uploads"
+
 # ── Copy project skills into workspace (so `skill` tool discovers them) ──────
 CENTAUR_SKILLS="$HOME_DIR/github/paradigmxyz/centaur/.agents/skills"
 WS_SKILLS="$WORKSPACE_DIR/.agents/skills"

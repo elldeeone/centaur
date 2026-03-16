@@ -880,6 +880,7 @@ class SlackClient:
         if not self.token:
             raise RuntimeError("SLACK_BOT_TOKEN not set")
 
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.token}"})
         with urllib.request.urlopen(req) as response:
             with open(output_path, "wb") as f:
