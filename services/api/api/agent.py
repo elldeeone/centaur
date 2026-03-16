@@ -599,7 +599,7 @@ async def inject_stdin(
 
     try:
         await backend.write_stdin(session, turn_input)
-    except (BrokenPipeError, OSError, RuntimeError) as exc:
+    except (BrokenPipeError, OSError, RuntimeError, AssertionError) as exc:
         log.warning("stdin_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc))
         st = await backend.status(session)
         if st != "running":
