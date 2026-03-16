@@ -32,6 +32,16 @@ DB_HOST = "10.78.18.5"
 DB_PORT = 5432
 DB_NAME = "pmadmin"
 
+# Proxy env vars to strip when spawning gcloud — the firewall MITM proxy
+# breaks gcloud's TLS connections to GCP IAP endpoints.
+_PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+               "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE")
+
+
+def _clean_env() -> dict[str, str]:
+    """Return os.environ minus proxy/TLS override vars."""
+    return {k: v for k, v in os.environ.items() if k not in _PROXY_VARS}
+
 def _find_free_port() -> int:
     """Find a free local port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -84,6 +94,7 @@ class SSHTunnel:
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            env=_clean_env(),
         )
 
         # Wait for tunnel to be ready
@@ -138,6 +149,7 @@ def start_persistent_tunnel() -> int:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,  # Detach from parent
+        env=_clean_env(),
     )
 
     # Save PID

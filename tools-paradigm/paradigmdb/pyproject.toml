@@ -20,4 +20,4 @@ build-backend = "hatchling.build"
 [tool.ai-v2]
 module = "client.py"
 hosts = ["*.googleapis.com"]
-secrets = ["RESHIFT_DB_DSN"]
+secrets = ["RESHIFT_DB_DSN", "RESHIFT_DB_USER", "RESHIFT_DB_PASSWORD"]

@@ -36,6 +36,33 @@ print('\n'.join(sorted(deps)))
   fi
 fi
 
+# Bootstrap gcloud credentials for SSH tunneling (paradigmdb tool).
+_gcp_cred="$(_fetch_secret GCP_GCLOUD_CREDENTIAL 2>/dev/null || true)"
+if [[ -n "$_gcp_cred" ]]; then
+  _gcloud_dir="${HOME}/.config/gcloud"
+  mkdir -p "$_gcloud_dir"
+  echo "$_gcp_cred" > "$_gcloud_dir/application_default_credentials.json"
+  _gcp_account=$(echo "$_gcp_cred" | python3 -c "import sys,json; print(json.load(sys.stdin).get('account',''))" 2>/dev/null || true)
+  if [[ -n "$_gcp_account" ]]; then
+    python3 - "$_gcp_cred" "$_gcp_account" "$_gcloud_dir" <<'PYEOF'
+import sqlite3, json, sys
+cred_json, account, gcloud_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+cred = json.loads(cred_json)
+cred.pop("account", None)
+conn = sqlite3.connect(f"{gcloud_dir}/credentials.db")
+conn.execute("CREATE TABLE IF NOT EXISTS credentials (account_id TEXT PRIMARY KEY, value TEXT)")
+conn.execute("INSERT OR REPLACE INTO credentials VALUES (?, ?)", (account, json.dumps(cred)))
+conn.commit()
+conn.close()
+PYEOF
+    # Set active account + project
+    gcloud config set core/account "$_gcp_account" --quiet 2>/dev/null || true
+    gcloud config set core/project custody-dashboard --quiet 2>/dev/null || true
+    echo "gcloud credentials bootstrapped for $_gcp_account" >&2
+  fi
+  unset _gcp_cred _gcp_account _gcloud_dir
+fi
+
 # Canonical env aliases
 if [[ -z "${SLACK_BOT_TOKEN:-}" && -n "${SLACK_TOKEN:-}" ]]; then
   export SLACK_BOT_TOKEN="${SLACK_TOKEN}"
