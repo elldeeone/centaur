@@ -15,6 +15,9 @@ def is_turn_done(engine: str, event: dict) -> bool:
     top-level agent's end-of-turn matters.
     """
     t = event.get("type", "")
+    # Wrapper-emitted crash events terminate the turn for all engines
+    if t == "error":
+        return True
     if engine in ("amp", "claude-code"):
         if t == "result":
             return True

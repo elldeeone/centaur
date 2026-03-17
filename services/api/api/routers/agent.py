@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from api.agent import (
     _db_get_session,
+    _db_update_state,
     _resolve_harness_profile,
     claim_for_delivery,
     get_or_spawn,
@@ -643,7 +644,18 @@ async def reconnect(req: ReconnectRequest):
     Used by the slackbot to recover an in-progress stream after an API restart.
     Returns 404 if no running session exists for this thread.
     """
-    session = await get_or_spawn(req.thread_key, req.harness, engine=req.engine)
+    from api.sandbox.registry import get_backend
+
+    session = await _db_get_session(req.thread_key)
+    if not session:
+        raise HTTPException(status_code=404, detail="No session found for this thread")
+
+    backend = get_backend()
+    st = await backend.status(session)
+    if st != "running":
+        # Reconcile DB state so future lookups don't hit a stale row
+        await _db_update_state(req.thread_key, "gone")
+        raise HTTPException(status_code=404, detail=f"Container not running (status={st})")
 
     return EventSourceResponse(
         stream_reconnect(session, skip_done_count=req.skip_done_count),

@@ -64,10 +64,19 @@ def extract_handoff_tid(evt):
     return m.group(0) if m else None
 
 
+class RunResult:
+    __slots__ = ("code", "chain_tid", "session_id")
+
+    def __init__(self, code, chain_tid=None, session_id=None):
+        self.code = code
+        self.chain_tid = chain_tid
+        self.session_id = session_id
+
+
 def run(cmd, stdin_data=None):
     """Run amp, stream stdout, handle chaining triggers.
 
-    Returns (exit_code, next_thread_id | None).
+    Returns a RunResult with exit code, optional chain thread ID, and session ID.
     """
     kw = dict(stdout=subprocess.PIPE, stderr=sys.stderr, text=True, bufsize=1)
     if stdin_data:
@@ -105,7 +114,7 @@ def run(cmd, stdin_data=None):
             if needs_auto_chain:
                 p.kill()
                 p.wait()
-                return 0, session_id
+                return RunResult(0, chain_tid=session_id, session_id=session_id)
             continue
 
         # Track session id from init events
@@ -132,20 +141,43 @@ def run(cmd, stdin_data=None):
         emit(line)
 
     p.wait()
-    return (0, handoff_tid) if handoff_tid else (p.returncode or 0, None)
+    if handoff_tid:
+        return RunResult(0, chain_tid=handoff_tid, session_id=session_id)
+    return RunResult(p.returncode or 0, session_id=session_id)
 
 
 CONTINUE_MSG = json.dumps({"type": "user", "message": {"role": "user",
     "content": [{"type": "text", "text": "continue"}]}}) + "\n"
 
 
+MAX_CRASH_RESTARTS = 5
+
+
 def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
-    code, nxt = run(AMP)
-    while nxt:
-        code, nxt = run(AMP + ["threads", "continue", nxt], stdin_data=CONTINUE_MSG)
+    crashes = 0
+    code = 0
+    while True:
+        r = run(AMP)
+        while r.chain_tid:
+            crashes = 0
+            r = run(AMP + ["threads", "continue", r.chain_tid], stdin_data=CONTINUE_MSG)
+        if r.code == 0:
+            break
+        crashes += 1
+        if crashes > MAX_CRASH_RESTARTS:
+            emit(json.dumps({"type": "error", "error": {
+                "message": f"amp crashed {crashes} times, giving up"}}))
+            code = r.code
+            break
+        # Emit error event so the API normalizer can close the turn
+        emit(json.dumps({"type": "error", "error": {
+            "message": f"amp exited with code {r.code}, restarting ({crashes}/{MAX_CRASH_RESTARTS})"}}))
+
+        # Loop restarts run(AMP) which inherits sys.stdin — container
+        # stays alive and the next turn from the API starts a fresh thread.
     sys.exit(code)
 
 
