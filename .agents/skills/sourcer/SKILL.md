@@ -480,6 +480,17 @@ def compute_title_match(candidate_title: str, target_title: str) -> int:
 - Followed by multiple people at Paradigm or by Paradigm founders/fellows on X/Twitter (Strong signal)
 - Spend less than 1 year in each role over multiple companies (Yellow flag)
 
+## Experience Level & "Juice" Heuristic (Learned from Andromeda VPE search, March 2026)
+
+When sourcing for startup leadership roles (VP/Head of Eng at zero-to-one companies), calibrate for candidates who still have **builder energy**, not just seniority:
+
+- **Sweet spot: ~10–18 years of experience.** Director or early VP level. Senior enough to lead, junior enough to still be hands-on and hungry.
+- **Penalize "too senior":** SVPs, CTOs of large companies, or co-founders with 25+ year careers who have bounced across many companies are likely past the zero-to-one stage. They may lack the remaining juice for a startup run.
+- **Reward trajectory over tenure:** A director at 12 years experience who has built teams from scratch at 2–3 companies is stronger than a VP at 25 years who climbed ladders at big cos.
+- **Startup founding/building DNA matters:** Prior experience co-founding a startup, being a founding engineer, or scaling a team from zero at a high-growth company is a strong signal — even if the startup failed or was acqui-hired.
+- **Avoid career bouncers:** 25+ year careers with short stints across many companies suggest a lack of commitment or impact at any single place. Yellow flag.
+- **Never suggest duplicates across rounds.** Track previously suggested names and never re-suggest them, even if they were well-received.
+
 ## Sourcing Heuristics
 
 - Look for candidates who work at companies funded by the most prestigious VCs (Sequoia, Andreessen Horowitz, Founders Fund, Y Combinator, etc.)
