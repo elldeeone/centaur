@@ -443,6 +443,223 @@ The system should answer questions like:
 
 ---
 
+### 9. Regulatory Filing Analysis
+
+> **⚠️ ISOLATION NOTICE**: This workflow has its own style, format, and process rules. Do NOT import conventions from other Policy Gigabrain workflows (briefers, whip sheets, bill tracking). A policy brief is different from a regulatory analysis. Learn from each other, but keep them separate.
+
+Process new regulatory documents (rules, guidance, no-action letters, NPRMs/ANPRMs, etc.) into a concise index entry and Slack message for the I&R team. The agent works in a strict five-step feedback loop with the user. **Do not skip steps or rush to a final deliverable before receiving user feedback.**
+
+**Trigger Phrases** (from Stefan, Alex G., Madison, Justin, Katie, or Caitlin):
+- "Process this filing" / "New regulatory action"
+- "Ingest this rule/guidance/order"
+- A link to a PDF, uploaded document, or regulatory filing URL
+
+#### Step 1: Receive the Document
+
+The user provides a link, uploaded PDF, or document file. Before doing anything else:
+
+1. **Confirm access.** If you cannot open and parse the full document (scanned PDF without OCR, password-protected, login-walled URL), stop immediately and tell the user. Do not attempt workarounds. Do not proceed.
+2. **Identify and note:** issuing agency or agencies; document type (final rule, interpretive guidance, ANPRM, NPRM, no-action letter, etc.); date of issuance; docket/release number; effective date and comment deadline, if any.
+3. **Read the entire document, including all footnotes.** Important definitional language, limiting conditions, and novel holdings are frequently buried in footnotes. Never treat a footnote as a throwaway.
+4. **Check the Policy Explainer Index** for existing entries this document supersedes, modifies, or cross-references:
+   ```bash
+   call gsuite docs_read '{"doc_id":"1yiKL4NgJfT0cAXehqHvaYC1mMezKdDhxwnr8Gm8aa6c"}'
+   ```
+5. **Check portfolio relevance** — query for companies that may be affected:
+   ```bash
+   call paradigmdb db_query '{"query":"SELECT name, description FROM \"Organization\" WHERE relevance = 1 ORDER BY name;"}'
+   ```
+
+#### Step 2: Generate an Initial Summary (.docx)
+
+Before the user reads the document, produce a **2–3 page Word document (.docx)** summarizing the key issues. This summary helps the user read smarter — it is not a substitute for their reading. Generally follow the flow of the source document so the summary helps the reader read along; reorganize by topic only if there is a clear structural reason.
+
+**The summary must cover:**
+- What the document holds and what, if anything, changed from prior law or guidance
+- Any assets, transaction types, companies, parties, or individuals explicitly named (these are the most actionable items for the investment team)
+- Portfolio relevance: which portfolio companies or holdings appear most directly affected
+- Effective date and any comment deadline, called out prominently
+- Areas of legal uncertainty or apparent internal inconsistency in the source document (flag clearly, without alarmism)
+
+**Summary style:**
+- Plain English for a sophisticated non-lawyer reader
+- No Latin, no jargon without explanation
+- No condescending explanations of what things are — assume a sophisticated reader
+- TNR 12pt, justified, single-spaced, 6pt/12pt paragraph spacing, 1-inch margins, black text only
+
+**After delivering the .docx, say exactly:**
+> "I have summarized the document above. Please read the source with this summary as context, then tell me: (1) what you think is most important or most relevant to the portfolio, and (2) anything you want added, removed, or reframed in the index entry. I will draft the entry once I have your feedback."
+
+#### Step 3: Wait
+
+**Wait for the user's feedback.** Do not draft the index entry yet. Do not ask follow-up questions unless the user's feedback is genuinely ambiguous.
+
+The user has read the document and generally gets deference on what matters. That said, make suggestions and push back if you disagree — you may catch things the user missed, or the user may be wrong. Flag disagreements clearly, explain your reasoning, and let the user decide.
+
+#### Step 4: Receive Feedback
+
+- Take careful note of what the user identifies as most important, most relevant to the portfolio, or most worth highlighting. The user's feedback shapes emphasis and framing.
+- If the user flags something you missed, acknowledge and incorporate it without debate (don't debate importance, do debate accuracy).
+- If the user's feedback includes language you believe is legally imprecise or substantively incorrect, flag it clearly and respectfully, explain why, and let the user decide. Do not silently incorporate language you believe is wrong. Do not override the user's decision once made.
+- Calibrate emphasis based on feedback. If the user says a point is secondary, treat it as secondary even if you find it analytically interesting.
+- When the user returns a commented/edited document, treat it as a directive: apply the comments and re-upload immediately. No confirmation loop needed.
+
+#### Step 5: Write the Index Entry and Slack Message
+
+Produce two deliverables:
+1. **Index entry** as a .docx file (format below)
+2. **Slack message** in the chat (format below)
+
+---
+
+#### Index Entry Format
+
+The index entry has five structural components. The first three (Title, BLUF, Our View) are non-negotiable. The remaining components should follow this pattern but may be adapted where the document's structure gives good reason.
+
+**1. Title** (Heading 1)
+- Format: `Analysis: [Agency] [Short Title] ([Date])`
+- Example: `Analysis: SEC/CFTC Crypto Asset Securities Law Guidance (3/17/26)`
+- Reflects the full scope of the document. Should almost always fit on a single line.
+
+**2. BLUF** (Bold paragraph, labeled)
+- Begins with "BLUF:" followed by 2–4 sentences. Maximum 4 sentences, no exceptions.
+- What happened, why it matters, what changed.
+- The document name or a clear reference should be a hyperlink to the source.
+- Other contextual hyperlinks are permitted where they genuinely add value (e.g., a link to a superseded rule or comparable guidance from another agency).
+- Write as if the reader has 20 seconds.
+
+**3. Our View** (Bold paragraph, immediately after BLUF)
+- A standalone bold paragraph with Paradigm's strategic read on the regulatory action.
+- Covers impact on Paradigm or portfolio companies, with any input from the user.
+- This is a second bold paragraph directly after the BLUF — no separate heading. Matches the ANPRM example format.
+
+**4. Summary** (Bold label "Summary", plain body)
+- Explains the document's scope and structure: what topics it covers, enumerated.
+- Orients the reader to the Key Aspects that follow.
+
+**5. Connector Paragraph** (Plain text, no heading)
+- Procedural context: where the document comes from, what process led to it, effective date, whether it invites comments, what it supersedes.
+
+**6. Key Aspects** (Heading 3, standalone line, bulleted list)
+- "Key Aspects" as a standalone Heading 3 line (not inline label).
+- Adapt the heading when warranted (e.g., "Key Questions" for an ANPRM).
+- Each bullet has:
+  - An **underlined** sub-header (NOT bold+underline) followed by plain prose
+  - 2–3 sentences per bullet; substantive, not one-liners
+  - Nesting permitted in moderation where it genuinely aids clarity
+  - No hanging indents — first line and subsequent lines flush
+- Page number references throughout, citing source document pages.
+- Lead with substantive provisions in order of importance; close with procedural/effective-date matters.
+- Selectively quote the filing for emphasis, but never copy in large chunks. Summarize and identify key points.
+- When the source has a long list of unchanged items, condense to a brief summary (2–3 sentences) rather than copying verbatim.
+
+**Total entry length:** 2–3 pages maximum. Every sentence must earn its place.
+
+**File naming:** `[Agency] [Short Title] [MM.DD.YYYY].docx` — no underscores, date at end in MM.DD.YYYY format.
+
+**Formatting:**
+- TNR 12pt, justified, single-spaced, 1-inch margins, black text only
+- Bold/underline stops BEFORE the colon (e.g., "Summary:" where only "Summary" is bold)
+- Smart (curly) quotes throughout
+- No hanging indents on bullets
+
+---
+
+#### Slack Message Format
+
+3–5 sentences. No bullet points (exception: multiple companion documents in one message may use bullets). The audience is non-lawyers on the I&R team.
+
+Answer three questions: What happened? What changed? Why does it matter for the portfolio or the industry?
+
+Include the effective date or comment deadline if material to investment decisions.
+
+**Always close with:** "Our full index entry is [here]." (user will add the actual link) or "We'll have a full index entry later today." if the entry is not yet finalized.
+
+Do not editorialize beyond what the source document supports. Do not use legal citations.
+
+---
+
+#### Style Rules (Scoped to This Workflow)
+
+- **Plain English.** Write for a sophisticated investor, not a court. No Latin. No jargon without brief explanation. Active voice where possible.
+- **No condescending explanations.** Assume the reader is sophisticated. Do not explain what well-known institutions, legal concepts, or market structures are.
+- **Em dashes: absolute minimum.** Before using one, ask whether a comma, period, or parentheses would work instead. They almost always will.
+- **Pithiness.** Cut any sentence that repeats a point already made or provides background the reader already knows.
+- **Legal precision.** Use the precise legal characterization the source document uses. Never conflate terms: "final rule" ≠ "interpretive guidance"; "no-action letter" ≠ "safe harbor"; "proposed rule" ≠ "final rule."
+- **Named assets and parties.** If the document names specific assets, companies, or individuals, call them out. Verify portfolio company status against the Organization table before claiming relevance.
+- **Footnotes get proportionate treatment.** Read them all. Cite footnote numbers. Important definitions and exceptions often live in footnotes, but do not overstate their importance.
+- **Effective dates and comment deadlines.** Always include. Put in connector paragraph. If a meaningful comment deadline exists, consider giving it a dedicated Key Aspects bullet.
+- **Supersession.** If the document supersedes prior guidance, identify what is superseded with precision. Do not overstate scope.
+- **Page references.** Include page number citations from the source document throughout.
+- **Hyperlinks.** Link to the source filing, any superseded documents, and any directly referenced companion documents (e.g., no-action letters, related orders).
+
+---
+
+#### Pre-Delivery Checklist
+
+Before delivering the index entry, check for and address each of the following:
+
+- [ ] Internal inconsistency in your draft (e.g., characterizing the same holding differently in BLUF vs Key Aspects)
+- [ ] Legal imprecision in your own language (e.g., calling interpretive guidance a "rule")
+- [ ] Anything the user said that you incorporated but believe may be legally incorrect — flag it, explain why, let the user decide
+- [ ] Named assets, parties, or transaction types the investment team should know about that were not highlighted in user feedback
+- [ ] Anything that supersedes or modifies prior indexed guidance
+- [ ] Internal inconsistencies or drafting errors in the source document itself (note as observations, not conclusions)
+- [ ] Portfolio company references verified against Organization table (relevance=1, not ex-portfolio)
+
+---
+
+#### What to Never Do
+
+- Do not draft the index entry before receiving user feedback at Step 4
+- Do not write a BLUF longer than 4 sentences
+- Do not use bold within bullet bodies; underlined sub-header is the primary formatting element
+- Do not use em dashes liberally — default to commas, periods, or parentheses
+- Do not conflate legal terms of art — use the term the source document uses
+- Do not make the Slack message sound like a legal brief
+- Do not skip footnotes
+- Do not proceed if you cannot parse the full document
+- Do not include ex-portfolio companies as current portfolio references
+- Do not copy large chunks of source text verbatim — summarize and identify key points
+
+---
+
+#### Example Index Entry Structure (SEC/CFTC Crypto Taxonomy)
+
+```
+Analysis: SEC/CFTC Crypto Asset Securities Law Guidance (3/17/26)
+
+BLUF: [2-4 bold sentences — what happened, why it matters, what changed. Document name hyperlinked to source.]
+
+[Bold paragraph — Our View on impact to Paradigm/portfolio. No heading.]
+
+Summary: [Plain text — scope and structure of the document, enumerated topics.]
+
+[Connector paragraph — procedural context, effective date, comment period, supersession.]
+
+Key Aspects
+
+• Not Securities: [underlined sub-header, plain prose, 2-3 sentences, page refs]
+• Securities: [underlined sub-header, plain prose]
+• Sometimes Securities: [underlined sub-header, plain prose]
+  ...
+```
+
+#### Example Slack Messages
+
+**Single document (Phantom No-Action Letter):**
+> CFTC staff issued a no action letter to Phantom this morning, which says that CFTC will not take enforcement action against Phantom for providing access to Kalshi's prediction markets through their UI without registering as a derivatives broker. The letter highlights the fact that Phantom would not "hold, control, or take into custody" assets, and is merely "passively providing software" as the basis for the no-action decision. While not binding on the CFTC, the letter is consistent with other developer protections for neutral, non-custodial software providers, including those in the BRCA, and the fact that Agency staff have now taken this position in writing is a significant (and welcome) development. We'll have a full index entry later today.
+
+**Single document with link (SEC/CFTC Taxonomy):**
+> SEC and CFTC jointly issued final guidance for applying federal securities laws to crypto today. The release explicitly names more than fifteen tokens (including BTC, ETH, SOL, and XRP) that are *not* securities (and the list is not exhaustive), and confirms that mining, staking, wrapping, and retroactive airdrops do not constitute securities transactions. The guidance will be effective as soon as it is published (which will be soon), and supersedes prior, inconsistent staff guidance. Our full index entry is [here].
+
+**Multiple companion documents (CFTC Prediction Markets):**
+> As Alex mentioned above, CFTC issued two documents this morning related to prediction markets:
+> • **First**, CFTC staff issued a guidance document with a series of "reminders" about existing swaps regulations…
+> • **Second**, CFTC issued an Advanced Notice of Proposed Rulemaking. Our full index entry is [here]…
+
+---
+
 ## Future Integrations
 
 | Integration | Purpose | Priority |
