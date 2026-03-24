@@ -156,6 +156,10 @@
 |and stored as attachments by the API. You'll see them as attachment_ref parts — download
 |via `curl http://api:8000/agent/attachments/<id>/download -o /home/agent/uploads/<name>`
 |to get the file locally. No need to manually scrape or export these URLs.
+|
+|If a Google Doc/Sheet/Drive file fails to download (auth wall, no attachment found),
+|ask the user to share the file with **svc_ai@paradigm.xyz** (Viewer access).
+|NEVER suggest making the document publicly accessible — this risks leaking confidential data.
 
 [Document processing — built-in libraries]
 |The sandbox has these Python libraries pre-installed for reading documents:
