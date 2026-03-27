@@ -28,6 +28,7 @@ log = structlog.get_logger()
 
 EXECUTION_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_SILENCE_TIMEOUT_S", "600"))
 EXECUTION_HARD_TIMEOUT_S = int(os.getenv("EXECUTION_HARD_TIMEOUT_S", "3600"))
+EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "5.0"))
 EXECUTION_RECONCILE_INTERVAL_S = float(os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5"))
 
 _worker_task: asyncio.Task | None = None
@@ -990,6 +991,33 @@ async def _mark_execution_terminal(
     )
 
 
+async def _touch_execution_progress(pool, execution_id: str) -> dt.datetime:
+    row = await pool.fetchrow(
+        "UPDATE agent_execution_requests SET last_progress_at = NOW(), "
+        "silence_deadline_at = NOW() + make_interval(secs => $1::double precision), "
+        "updated_at = NOW() WHERE execution_id = $2 RETURNING silence_deadline_at",
+        float(EXECUTION_SILENCE_TIMEOUT_S),
+        execution_id,
+    )
+    if row and row["silence_deadline_at"]:
+        return row["silence_deadline_at"]
+    return dt.datetime.now(dt.timezone.utc) + dt.timedelta(
+        seconds=EXECUTION_SILENCE_TIMEOUT_S
+    )
+
+
+async def _stop_execution_session(thread_key: str, *, reason: str) -> None:
+    try:
+        await stop_session(thread_key)
+    except Exception:
+        log.warning(
+            "execution_session_stop_failed",
+            thread_key=thread_key,
+            reason=reason,
+            exc_info=True,
+        )
+
+
 async def _claim_next_execution(pool) -> dict[str, Any] | None:
     row = await pool.fetchrow(
         "WITH next_execution AS ("
@@ -1001,11 +1029,14 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
         ") "
         "UPDATE agent_execution_requests er "
         "SET status = 'running', claimed_at = NOW(), started_at = COALESCE(er.started_at, NOW()), "
-        "last_progress_at = NOW(), updated_at = NOW() "
+        "last_progress_at = NOW(), "
+        "silence_deadline_at = NOW() + make_interval(secs => $1::double precision), "
+        "updated_at = NOW() "
         "FROM next_execution ne "
         "WHERE er.execution_id = ne.execution_id "
         "RETURNING er.execution_id, er.thread_key, er.assignment_generation, er.execute_id, "
-        "er.delivery, er.metadata, er.hard_deadline_at",
+        "er.delivery, er.metadata, er.silence_deadline_at, er.hard_deadline_at",
+        float(EXECUTION_SILENCE_TIMEOUT_S),
     )
     return dict(row) if row else None
 
@@ -1047,6 +1078,11 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
         hard_deadline = dt.datetime.now(dt.timezone.utc) + dt.timedelta(
             seconds=EXECUTION_HARD_TIMEOUT_S
         )
+    silence_deadline = row.get("silence_deadline_at")
+    if not isinstance(silence_deadline, dt.datetime):
+        silence_deadline = dt.datetime.now(dt.timezone.utc) + dt.timedelta(
+            seconds=EXECUTION_SILENCE_TIMEOUT_S
+        )
 
     session = await get_or_spawn(
         thread_key,
@@ -1087,37 +1123,65 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
             thread_key,
             assignment_generation,
         )
+        silence_deadline = await _touch_execution_progress(pool, execution_id)
 
     backend = get_backend()
     rt = _get_runtime(session.sandbox_id)
-    timeout_s = max((hard_deadline - dt.datetime.now(dt.timezone.utc)).total_seconds(), 1)
 
     turn_done_event: dict[str, Any] | None = None
+    pending_event: asyncio.Task | None = None
+    stream = _stream_stdout(
+        session,
+        backend,
+        rt,
+        rt.turn_counter,
+        dt.datetime.now(dt.timezone.utc).timestamp(),
+    )
     try:
-        async with asyncio.timeout(timeout_s):
-            async for evt in _stream_stdout(
-                session,
-                backend,
-                rt,
-                rt.turn_counter,
-                dt.datetime.now(dt.timezone.utc).timestamp(),
-            ):
-                payload = decode_jsonb(evt.get("data"), {})
-                if not isinstance(payload, dict):
-                    continue
-                await append_execution_event(
+        stream_iter = stream.__aiter__()
+        while True:
+            now = dt.datetime.now(dt.timezone.utc)
+            if now >= hard_deadline:
+                await _mark_execution_terminal(
                     pool,
-                    thread_key=thread_key,
                     execution_id=execution_id,
-                    event_kind="amp_raw_event",
-                    event_json=payload,
+                    thread_key=thread_key,
+                    status="failed_permanent",
+                    terminal_reason="hard_deadline_exceeded",
+                    result_text="",
+                    error_text="execution exceeded hard deadline",
                 )
-                await pool.execute(
-                    "UPDATE agent_execution_requests SET last_progress_at = NOW(), updated_at = NOW() "
-                    "WHERE execution_id = $1",
-                    execution_id,
+                await _stop_execution_session(
+                    thread_key,
+                    reason="hard_deadline_exceeded",
                 )
+                return
+            if now >= silence_deadline:
+                await _mark_execution_terminal(
+                    pool,
+                    execution_id=execution_id,
+                    thread_key=thread_key,
+                    status="failed_permanent",
+                    terminal_reason="silence_deadline_exceeded",
+                    result_text="",
+                    error_text="execution made no progress before silence deadline",
+                )
+                await _stop_execution_session(
+                    thread_key,
+                    reason="silence_deadline_exceeded",
+                )
+                return
 
+            if pending_event is None:
+                pending_event = asyncio.create_task(stream_iter.__anext__())
+
+            wait_s = min(
+                max((hard_deadline - now).total_seconds(), 0.0),
+                max((silence_deadline - now).total_seconds(), 0.0),
+                EXECUTION_WATCHDOG_POLL_S,
+            )
+            done, _ = await asyncio.wait({pending_event}, timeout=wait_s)
+            if not done:
                 status_row = await pool.fetchrow(
                     "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
                     execution_id,
@@ -1133,21 +1197,46 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                         error_text="cancel_requested",
                     )
                     return
+                continue
 
-                if payload.get("type") == "turn.done":
-                    turn_done_event = payload
-                    break
-    except TimeoutError:
-        await _mark_execution_terminal(
-            pool,
-            execution_id=execution_id,
-            thread_key=thread_key,
-            status="failed_permanent",
-            terminal_reason="hard_deadline_exceeded",
-            result_text="",
-            error_text="execution exceeded hard deadline",
-        )
-        return
+            try:
+                evt = await pending_event
+            except StopAsyncIteration:
+                break
+            finally:
+                pending_event = None
+
+            payload = decode_jsonb(evt.get("data"), {})
+            if not isinstance(payload, dict):
+                continue
+            await append_execution_event(
+                pool,
+                thread_key=thread_key,
+                execution_id=execution_id,
+                event_kind="amp_raw_event",
+                event_json=payload,
+            )
+            silence_deadline = await _touch_execution_progress(pool, execution_id)
+
+            status_row = await pool.fetchrow(
+                "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
+                execution_id,
+            )
+            if status_row and status_row["status"] == "cancel_requested":
+                await _mark_execution_terminal(
+                    pool,
+                    execution_id=execution_id,
+                    thread_key=thread_key,
+                    status="cancelled",
+                    terminal_reason="cancel_requested",
+                    result_text="",
+                    error_text="cancel_requested",
+                )
+                return
+
+            if payload.get("type") == "turn.done":
+                turn_done_event = payload
+                break
     except Exception as exc:
         await _mark_execution_terminal(
             pool,
@@ -1159,6 +1248,13 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
             error_text=str(exc),
         )
         return
+    finally:
+        if pending_event is not None:
+            pending_event.cancel()
+            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
+                await pending_event
+        with contextlib.suppress(Exception):
+            await stream.aclose()
 
     if turn_done_event is None:
         await _mark_execution_terminal(
@@ -1169,6 +1265,10 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
             terminal_reason="stream_ended_without_turn_done",
             result_text="",
             error_text="stream ended before terminal turn.done",
+        )
+        await _stop_execution_session(
+            thread_key,
+            reason="stream_ended_without_turn_done",
         )
         return
 
@@ -1208,7 +1308,12 @@ async def _recover_stale_running(pool) -> None:
     await pool.execute(
         "UPDATE agent_execution_requests SET status = 'queued', updated_at = NOW() "
         "WHERE status = 'running' "
-        "AND last_progress_at < NOW() - INTERVAL '2 minutes'",
+        "AND COALESCE("
+        "  silence_deadline_at, "
+        "  last_progress_at + make_interval(secs => $1::double precision), "
+        "  created_at + make_interval(secs => $1::double precision)"
+        ") < NOW()",
+        float(EXECUTION_SILENCE_TIMEOUT_S),
     )
 
 

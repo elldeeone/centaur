@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import datetime as dt
 import hashlib
@@ -381,6 +382,87 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
     )
     assert assignment is not None
     assert assignment["runtime_id"] == resumed_runtime_id
+
+
+@pytest.mark.asyncio
+async def test_worker_marks_silence_deadline_exceeded_and_stops_session(db_pool):
+    from api.runtime_control import _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    prior_runtime_id = f"rt-old-{uuid.uuid4().hex[:8]}"
+    resumed_runtime_id = f"rt-new-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        prior_runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, hard_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-idem', 'hash', 'running', '{}'::jsonb, '{}'::jsonb, NOW() + INTERVAL '10 minutes')",
+        execution_id,
+        thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
+        execution_id,
+        thread_key,
+    )
+
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "delivery": {},
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+    }
+    session = SandboxSession(
+        sandbox_id=resumed_runtime_id,
+        thread_key=thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    async def _silent_stream(*_args, **_kwargs):
+        await asyncio.sleep(60)
+        if False:
+            yield {}
+
+    stop_session_mock = AsyncMock()
+    with (
+        patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
+        patch(
+            "api.runtime_control.inject_stdin",
+            new=AsyncMock(return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}),
+        ),
+        patch("api.runtime_control.get_backend", return_value=object()),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch("api.runtime_control._stream_stdout", _silent_stream),
+        patch("api.runtime_control.stop_session", stop_session_mock),
+        patch("api.runtime_control.EXECUTION_SILENCE_TIMEOUT_S", 0.05),
+        patch("api.runtime_control.EXECUTION_WATCHDOG_POLL_S", 0.01),
+    ):
+        await _process_execution(db_pool, row)
+
+    execution = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, error_text FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "failed_permanent"
+    assert execution["terminal_reason"] == "silence_deadline_exceeded"
+    assert "no progress" in (execution["error_text"] or "")
+    stop_session_mock.assert_awaited_once_with(thread_key)
 
 
 @pytest.mark.asyncio
