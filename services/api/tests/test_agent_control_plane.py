@@ -446,6 +446,33 @@ async def test_claim_next_execution_runs_different_threads_concurrently_but_seri
 
 
 @pytest.mark.asyncio
+async def test_recover_stale_running_requeues_expired_execution(db_pool):
+    from api.runtime_control import _recover_stale_running
+
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, last_progress_at, silence_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-stale', 'hash-stale', 'running', '{}'::jsonb, '{}'::jsonb, "
+        "NOW() - INTERVAL '20 minutes', NOW() - INTERVAL '1 minute')",
+        execution_id,
+        thread_key,
+    )
+
+    await _recover_stale_running(db_pool)
+
+    row = await db_pool.fetchrow(
+        "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert row is not None
+    assert row["status"] == "queued"
+
+
+@pytest.mark.asyncio
 async def test_worker_marks_silence_deadline_exceeded_and_stops_session(db_pool):
     from api.runtime_control import _process_execution
 

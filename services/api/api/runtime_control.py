@@ -30,6 +30,9 @@ EXECUTION_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_SILENCE_TIMEOUT_S", "600"
 EXECUTION_HARD_TIMEOUT_S = int(os.getenv("EXECUTION_HARD_TIMEOUT_S", "3600"))
 EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "5.0"))
 EXECUTION_RECONCILE_INTERVAL_S = float(os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5"))
+EXECUTION_STALE_RECOVERY_INTERVAL_S = float(
+    os.getenv("EXECUTION_STALE_RECOVERY_INTERVAL_S", "5.0")
+)
 EXECUTION_WORKER_CONCURRENCY = max(
     int(os.getenv("EXECUTION_WORKER_CONCURRENCY", "4")),
     1,
@@ -37,6 +40,8 @@ EXECUTION_WORKER_CONCURRENCY = max(
 
 _worker_tasks: list[asyncio.Task] = []
 _worker_wake = asyncio.Event()
+_recover_stale_running_lock = asyncio.Lock()
+_last_recover_stale_running_at = 0.0
 
 
 class ControlPlaneError(RuntimeError):
@@ -1352,10 +1357,23 @@ async def _recover_stale_running(pool) -> None:
     )
 
 
+async def _recover_stale_running_if_due(pool) -> None:
+    global _last_recover_stale_running_at
+    now = asyncio.get_running_loop().time()
+    if now - _last_recover_stale_running_at < EXECUTION_STALE_RECOVERY_INTERVAL_S:
+        return
+    async with _recover_stale_running_lock:
+        now = asyncio.get_running_loop().time()
+        if now - _last_recover_stale_running_at < EXECUTION_STALE_RECOVERY_INTERVAL_S:
+            return
+        await _recover_stale_running(pool)
+        _last_recover_stale_running_at = now
+
+
 async def _execution_worker_loop(pool) -> None:
-    await _recover_stale_running(pool)
     while True:
         try:
+            await _recover_stale_running_if_due(pool)
             row = await _claim_next_execution(pool)
             if row is None:
                 _worker_wake.clear()
@@ -1373,9 +1391,10 @@ async def _execution_worker_loop(pool) -> None:
 
 
 async def start_execution_worker(pool) -> None:
-    global _worker_tasks
+    global _last_recover_stale_running_at, _worker_tasks
     if any(not task.done() for task in _worker_tasks):
         return
+    _last_recover_stale_running_at = 0.0
     _worker_tasks = [
         asyncio.create_task(
             _execution_worker_loop(pool),
@@ -1386,11 +1405,12 @@ async def start_execution_worker(pool) -> None:
 
 
 async def stop_execution_worker() -> None:
-    global _worker_tasks
+    global _last_recover_stale_running_at, _worker_tasks
     if not _worker_tasks:
         return
     tasks = _worker_tasks
     _worker_tasks = []
+    _last_recover_stale_running_at = 0.0
     for task in tasks:
         task.cancel()
     for task in tasks:
