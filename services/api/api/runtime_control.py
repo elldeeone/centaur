@@ -30,8 +30,12 @@ EXECUTION_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_SILENCE_TIMEOUT_S", "600"
 EXECUTION_HARD_TIMEOUT_S = int(os.getenv("EXECUTION_HARD_TIMEOUT_S", "3600"))
 EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "5.0"))
 EXECUTION_RECONCILE_INTERVAL_S = float(os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5"))
+EXECUTION_WORKER_CONCURRENCY = max(
+    int(os.getenv("EXECUTION_WORKER_CONCURRENCY", "4")),
+    1,
+)
 
-_worker_task: asyncio.Task | None = None
+_worker_tasks: list[asyncio.Task] = []
 _worker_wake = asyncio.Event()
 
 
@@ -1019,26 +1023,57 @@ async def _stop_execution_session(thread_key: str, *, reason: str) -> None:
 
 
 async def _claim_next_execution(pool) -> dict[str, Any] | None:
-    row = await pool.fetchrow(
-        "WITH next_execution AS ("
-        "  SELECT execution_id FROM agent_execution_requests "
-        "  WHERE status = 'queued' "
-        "  ORDER BY created_at ASC "
-        "  LIMIT 1 "
-        "  FOR UPDATE SKIP LOCKED"
-        ") "
-        "UPDATE agent_execution_requests er "
-        "SET status = 'running', claimed_at = NOW(), started_at = COALESCE(er.started_at, NOW()), "
-        "last_progress_at = NOW(), "
-        "silence_deadline_at = NOW() + make_interval(secs => $1::double precision), "
-        "updated_at = NOW() "
-        "FROM next_execution ne "
-        "WHERE er.execution_id = ne.execution_id "
-        "RETURNING er.execution_id, er.thread_key, er.assignment_generation, er.execute_id, "
-        "er.delivery, er.metadata, er.silence_deadline_at, er.hard_deadline_at",
-        float(EXECUTION_SILENCE_TIMEOUT_S),
-    )
-    return dict(row) if row else None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            candidates = await conn.fetch(
+                "SELECT er.execution_id, er.thread_key "
+                "FROM agent_execution_requests er "
+                "WHERE er.status = 'queued' "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM agent_execution_requests active "
+                "  WHERE active.thread_key = er.thread_key "
+                "  AND active.status IN ('running', 'cancel_requested', 'retry_wait')"
+                ") "
+                "ORDER BY er.created_at ASC "
+                "LIMIT 32 "
+                "FOR UPDATE SKIP LOCKED"
+            )
+            for candidate in candidates:
+                thread_key = str(candidate["thread_key"])
+                lock_acquired = await conn.fetchval(
+                    "SELECT pg_try_advisory_xact_lock("
+                    "hashtext('agent_execution_thread'), hashtext($1)"
+                    ")",
+                    thread_key,
+                )
+                if not lock_acquired:
+                    continue
+                has_active = await conn.fetchval(
+                    "SELECT 1 FROM agent_execution_requests "
+                    "WHERE thread_key = $1 "
+                    "AND status IN ('running', 'cancel_requested', 'retry_wait') "
+                    "LIMIT 1",
+                    thread_key,
+                )
+                if has_active:
+                    continue
+                row = await conn.fetchrow(
+                    "UPDATE agent_execution_requests er "
+                    "SET status = 'running', claimed_at = NOW(), "
+                    "started_at = COALESCE(er.started_at, NOW()), "
+                    "last_progress_at = NOW(), "
+                    "silence_deadline_at = NOW() + make_interval(secs => $1::double precision), "
+                    "updated_at = NOW() "
+                    "WHERE er.execution_id = $2 AND er.status = 'queued' "
+                    "RETURNING er.execution_id, er.thread_key, er.assignment_generation, "
+                    "er.execute_id, er.delivery, er.metadata, er.silence_deadline_at, "
+                    "er.hard_deadline_at",
+                    float(EXECUTION_SILENCE_TIMEOUT_S),
+                    candidate["execution_id"],
+                )
+                if row:
+                    return dict(row)
+    return None
 
 
 async def _process_execution(pool, row: dict[str, Any]) -> None:
@@ -1338,20 +1373,29 @@ async def _execution_worker_loop(pool) -> None:
 
 
 async def start_execution_worker(pool) -> None:
-    global _worker_task
-    if _worker_task and not _worker_task.done():
+    global _worker_tasks
+    if any(not task.done() for task in _worker_tasks):
         return
-    _worker_task = asyncio.create_task(_execution_worker_loop(pool))
+    _worker_tasks = [
+        asyncio.create_task(
+            _execution_worker_loop(pool),
+            name=f"execution-worker-{index + 1}",
+        )
+        for index in range(EXECUTION_WORKER_CONCURRENCY)
+    ]
 
 
 async def stop_execution_worker() -> None:
-    global _worker_task
-    if _worker_task is None:
+    global _worker_tasks
+    if not _worker_tasks:
         return
-    _worker_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await _worker_task
-    _worker_task = None
+    tasks = _worker_tasks
+    _worker_tasks = []
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 def wake_execution_worker() -> None:

@@ -385,6 +385,67 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
 
 
 @pytest.mark.asyncio
+async def test_claim_next_execution_runs_different_threads_concurrently_but_serializes_each_thread(
+    db_pool,
+):
+    from api.runtime_control import _claim_next_execution
+
+    thread_a = f"slack:C-test:{uuid.uuid4().hex}:a"
+    thread_b = f"slack:C-test:{uuid.uuid4().hex}:b"
+    execution_a1 = f"exe-{uuid.uuid4().hex[:12]}"
+    execution_a2 = f"exe-{uuid.uuid4().hex[:12]}"
+    execution_b1 = f"exe-{uuid.uuid4().hex[:12]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, created_at"
+        ") VALUES ($1, $2, 1, 'exec-a1', 'hash-a1', 'queued', '{}'::jsonb, '{}'::jsonb, "
+        "NOW() - INTERVAL '3 seconds')",
+        execution_a1,
+        thread_a,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, created_at"
+        ") VALUES ($1, $2, 1, 'exec-a2', 'hash-a2', 'queued', '{}'::jsonb, '{}'::jsonb, "
+        "NOW() - INTERVAL '2 seconds')",
+        execution_a2,
+        thread_a,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, created_at"
+        ") VALUES ($1, $2, 1, 'exec-b1', 'hash-b1', 'queued', '{}'::jsonb, '{}'::jsonb, "
+        "NOW() - INTERVAL '1 second')",
+        execution_b1,
+        thread_b,
+    )
+
+    first_claim = await _claim_next_execution(db_pool)
+    second_claim = await _claim_next_execution(db_pool)
+
+    assert first_claim is not None
+    assert second_claim is not None
+    assert first_claim["execution_id"] == execution_a1
+    assert second_claim["execution_id"] == execution_b1
+
+    rows = await db_pool.fetch(
+        "SELECT execution_id, status FROM agent_execution_requests "
+        "WHERE execution_id = ANY($1::text[])",
+        [execution_a1, execution_a2, execution_b1],
+    )
+    statuses = {row["execution_id"]: row["status"] for row in rows}
+    assert statuses == {
+        execution_a1: "running",
+        execution_a2: "queued",
+        execution_b1: "running",
+    }
+
+
+@pytest.mark.asyncio
 async def test_worker_marks_silence_deadline_exceeded_and_stops_session(db_pool):
     from api.runtime_control import _process_execution
 
