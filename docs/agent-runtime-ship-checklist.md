@@ -10,7 +10,7 @@
 
 ## Remaining Gaps To Close
 
-1. Legacy `/agent/connect` and `/agent/reconnect` handlers still exist behind `LEGACY_AGENT_WIRE_API_ENABLED`; full code-path removal is still pending.
+1. Legacy `/agent/connect` and `/agent/reconnect` are removed from the runtime path; only explicit `410 LEGACY_ENDPOINT_REMOVED` stubs remain for deterministic client failure.
 2. Historical reconnect-timeout executions are corrected by migration `009`; production verification should confirm the migration has run everywhere.
 3. Amp execution quality in local compose still depends on real `AMP_API_KEY` availability through firewall/secrets; without it, runs deterministically fail with reconnect timeout.
 4. Durable worker currently reuses legacy inject/flush plumbing; this is valid but not yet fully isolated from legacy runtime module boundaries.
@@ -18,7 +18,7 @@
 
 ## One-Shot Task List
 
-1. Lock API surface by deprecating/removing legacy wire endpoints and keeping only control-plane APIs in public docs and typed clients.
+1. Keep legacy wire endpoints as explicit `410` stubs only, and keep public docs and typed clients on the durable control-plane APIs.
 2. Add migration/backfill to reclassify historical reconnect-timeout terminals from `completed` to `failed_permanent` where applicable.
 3. Enable `RUNTIME_CREDENTIAL_GUARD_ENABLED=1` in non-dev deployment environments and set `REQUIRED_RUNTIME_SECRET_KEYS` explicitly.
 4. Move remaining execution-path dependencies from legacy `api.agent` helpers into dedicated runtime-control abstractions.
@@ -32,7 +32,7 @@
 4. Repeatable full tool QA: `python3 scripts/qa-full-tools.py`.
 5. Repeatable combined runtime + tools QA: `scripts/qa-agent-runtime-and-tools.sh`.
 6. Compose e2e happy-path: `spawn -> message -> execute -> events -> final-delivery ack`.
-7. Compose e2e negative-path: no-spawn rejection, stale-generation rejection, terminal harness error classification (`failed_permanent`).
+7. Compose e2e negative-path: no-spawn rejection, stale-generation rejection, cancel-then-follow-up recovery, terminal harness error classification (`failed_permanent`).
 8. Compose e2e attachment-path: inline base64 content rewritten to `attachment_ref` and blob persisted in `attachments`.
 
 ## Ship Gate

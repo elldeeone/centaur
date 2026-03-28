@@ -467,3 +467,17 @@ class TestStatus:
         assert resp.status_code == 200
         data = resp.json()
         assert data["pending_messages"] >= 1
+
+
+class TestDeprecatedEndpoints:
+    @pytest.mark.asyncio
+    async def test_legacy_agent_connect_returns_gone(self, client):
+        resp = await client.post("/agent/connect")
+        assert resp.status_code == 410
+        assert resp.json()["code"] == "LEGACY_ENDPOINT_REMOVED"
+
+    @pytest.mark.asyncio
+    async def test_legacy_agent_reconnect_returns_gone(self, client):
+        resp = await client.post("/agent/reconnect")
+        assert resp.status_code == 410
+        assert resp.json()["code"] == "LEGACY_ENDPOINT_REMOVED"

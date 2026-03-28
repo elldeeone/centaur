@@ -408,10 +408,11 @@ class QARunner:
     def wait_for_terminal(self, execution_id: str) -> dict[str, Any]:
         deadline = time.time() + self.execution_timeout_s
         last_status: dict[str, Any] | None = None
+        non_terminal_statuses = {"queued", "running", "cancel_requested", "retry_wait"}
         while time.time() < deadline:
             status = self.get_json(f"/agent/executions/{execution_id}")
             last_status = status
-            if status.get("status") not in {"queued", "running"}:
+            if status.get("status") not in non_terminal_statuses:
                 return status
             time.sleep(self.poll_interval_s)
         self.fail(
@@ -444,6 +445,13 @@ class QARunner:
         )
         return delivered_events
 
+    def cancel_execution(self, execution_id: str) -> dict[str, Any]:
+        return self.post_json(
+            f"/agent/executions/{execution_id}/cancel",
+            {"reason": "qa_cancel"},
+            expected_status=200,
+        )
+
     def amp_payloads(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         payloads: list[dict[str, Any]] = []
         for event in events:
@@ -457,6 +465,22 @@ class QARunner:
     def find_turn_done(self, events: list[dict[str, Any]]) -> dict[str, Any] | None:
         for payload in self.amp_payloads(events):
             if payload.get("type") == "turn.done":
+                return payload
+        return None
+
+    def find_execution_state(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        status: str | None = None,
+    ) -> dict[str, Any] | None:
+        for event in events:
+            if event.get("event") != "execution_state":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if status is None or payload.get("status") == status:
                 return payload
         return None
 
@@ -522,6 +546,16 @@ class QARunner:
 
     def run_negative_checks(self) -> dict[str, Any]:
         key = self.thread_key("seal")
+        connect = self.external_request(
+            "POST",
+            "/agent/connect",
+            {"thread_key": key},
+        )
+        self.expect(connect.status == 410, f"legacy connect expected 410, got {connect.status}: {connect.body}")
+        self.expect(
+            isinstance(connect.body, dict) and connect.body.get("code") == "LEGACY_ENDPOINT_REMOVED",
+            f"unexpected connect body: {connect.body}",
+        )
         reconnect = self.external_request(
             "POST",
             "/agent/reconnect",
@@ -567,6 +601,7 @@ class QARunner:
             f"unexpected stale body: {stale.body}",
         )
         return {
+            "legacy_connect": {"status": connect.status, "code": connect.body["code"]},
             "legacy_reconnect": {"status": reconnect.status, "code": reconnect.body["code"]},
             "message_without_spawn": {"status": message.status, "code": message.body["code"]},
             "execute_stale_generation": {"status": stale.status, "code": stale.body["code"]},
@@ -674,6 +709,144 @@ class QARunner:
             "after_event_id": early_last_id,
             "early_event_kinds": [event.get("event") for event in early_events],
             "resumed_event_kinds": [event.get("event") for event in resumed_events],
+            "delivered_event_kinds": [event.get("event") for event in delivered_events],
+        }
+
+    def run_cancel_reconnect_flow(self) -> dict[str, Any]:
+        key = self.track_thread(self.thread_key("cancel-reconnect"))
+        spawn = self.post_json("/agent/spawn", {"thread_key": key, "harness": "amp"}, expected_status=200)
+        cancel_prompt = (
+            "Use the shell_command tool to run `sleep 15; printf SHOULD-NOT-HAPPEN`. "
+            "After it completes, reply with exactly SHOULD-NOT-HAPPEN and nothing else."
+        )
+        self.post_json(
+            "/agent/message",
+            {
+                "thread_key": key,
+                "assignment_generation": spawn["assignment_generation"],
+                "role": "user",
+                "parts": [{"type": "text", "text": cancel_prompt}],
+            },
+            expected_status=200,
+        )
+        execute = self.post_json(
+            "/agent/execute",
+            {
+                "thread_key": key,
+                "assignment_generation": spawn["assignment_generation"],
+                "execute_id": f"exec-cancel-reconnect-{uuid.uuid4().hex[:8]}",
+                "harness": "amp",
+                "delivery": {"platform": "qa"},
+            },
+            expected_status=202,
+        )
+        early_events = self.fetch_events(key, execute["execution_id"], after_event_id=0, max_time_s=5.0)
+        self.expect(early_events, "cancel/reconnect scenario produced no early events")
+        early_last_id = self.latest_event_id(early_events)
+        running_state = self.find_execution_state(early_events, status="running")
+        self.expect(
+            running_state is not None,
+            f"cancel/reconnect scenario never reached running state: {early_events}",
+        )
+        saw_amp_output = any(event.get("event") == "amp_raw_event" for event in early_events)
+        cancel_result = self.cancel_execution(execute["execution_id"])
+        self.expect(
+            cancel_result.get("status") == "cancel_requested",
+            f"cancel request returned unexpected body: {cancel_result}",
+        )
+        cancelled_events = self.fetch_events(
+            key,
+            execute["execution_id"],
+            after_event_id=early_last_id,
+            max_time_s=2.0,
+        )
+        cancel_requested_state = self.find_execution_state(cancelled_events, status="cancel_requested")
+        cancelled_state = self.find_execution_state(cancelled_events, status="cancelled")
+        self.expect(
+            cancel_requested_state is not None or cancelled_state is not None,
+            f"cancel/reconnect scenario missing cancel execution.state: {cancelled_events}",
+        )
+        cancelled_status = self.wait_for_terminal(execute["execution_id"])
+        self.expect(
+            cancelled_status.get("status") == "cancelled",
+            f"cancel/reconnect execution did not cancel: {cancelled_status}",
+        )
+        if cancelled_state is None:
+            late_cancelled_events = self.fetch_events(
+                key,
+                execute["execution_id"],
+                after_event_id=self.latest_event_id(cancelled_events),
+                max_time_s=1.5,
+            )
+            cancelled_events.extend(late_cancelled_events)
+            cancelled_state = self.find_execution_state(cancelled_events, status="cancelled")
+        self.expect(
+            cancelled_state is not None,
+            f"cancel/reconnect scenario never emitted terminal cancelled state: {cancelled_events}",
+        )
+
+        self.post_json(
+            "/agent/message",
+            {
+                "thread_key": key,
+                "assignment_generation": spawn["assignment_generation"],
+                "role": "user",
+                "parts": [
+                    {"type": "text", "text": "Reply with exactly POST-CANCEL-RECOVERED and nothing else."}
+                ],
+            },
+            expected_status=200,
+        )
+        follow_execute = self.post_json(
+            "/agent/execute",
+            {
+                "thread_key": key,
+                "assignment_generation": spawn["assignment_generation"],
+                "execute_id": f"exec-post-cancel-{uuid.uuid4().hex[:8]}",
+                "harness": "amp",
+                "delivery": {"platform": "qa"},
+            },
+            expected_status=202,
+        )
+        follow_status = self.wait_for_terminal(follow_execute["execution_id"])
+        self.expect(
+            follow_status.get("status") == "completed",
+            f"post-cancel follow-up did not complete: {follow_status}",
+        )
+        self.expect(
+            follow_status.get("result_text") == "POST-CANCEL-RECOVERED",
+            f"post-cancel follow-up returned stale output: {follow_status}",
+        )
+        follow_events = self.fetch_events(
+            key,
+            follow_execute["execution_id"],
+            after_event_id=0,
+            max_time_s=2.5,
+        )
+        self.expect(follow_events, "post-cancel follow-up produced no events")
+        follow_turn_done = self.find_turn_done(follow_events)
+        self.expect(follow_turn_done is not None, "post-cancel follow-up missing turn.done")
+        self.expect(
+            follow_turn_done.get("result") == "POST-CANCEL-RECOVERED",
+            f"post-cancel follow-up turn.done mismatch: {follow_turn_done}",
+        )
+        self.ensure_final_delivery_ready(follow_events, follow_execute["execution_id"])
+        delivered_events = self.mark_final_delivered(
+            key,
+            follow_execute["execution_id"],
+            self.latest_event_id(follow_events),
+        )
+        return {
+            "thread_key": key,
+            "cancelled_execution_id": execute["execution_id"],
+            "cancel_after_event_id": early_last_id,
+            "saw_amp_output_before_cancel": saw_amp_output,
+            "cancel_status": cancelled_status["status"],
+            "follow_execution_id": follow_execute["execution_id"],
+            "follow_status": follow_status["status"],
+            "follow_result_text": follow_status["result_text"],
+            "cancelled_event_kinds": [event.get("event") for event in cancelled_events],
+            "follow_event_kinds": [event.get("event") for event in follow_events],
             "delivered_event_kinds": [event.get("event") for event in delivered_events],
         }
 
@@ -942,6 +1115,7 @@ class QARunner:
             self.summary["scenarios"]["negative"] = self.run_negative_checks()
             self.summary["scenarios"]["normal_prompt"] = self.run_normal_prompt()
             self.summary["scenarios"]["reconnect"] = self.run_reconnect_flow()
+            self.summary["scenarios"]["cancel_reconnect"] = self.run_cancel_reconnect_flow()
             self.summary["scenarios"]["persona_legal"] = self.run_persona("legal")
             self.summary["scenarios"]["persona_events"] = self.run_persona("events")
             self.summary["scenarios"]["attachments"] = self.run_attachment_flow()

@@ -17,6 +17,19 @@ def _gone(endpoint: str, replacement: str) -> JSONResponse:
     )
 
 
+def _legacy_agent_wire_gone(endpoint: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=410,
+        content={
+            "code": "LEGACY_ENDPOINT_REMOVED",
+            "message": (
+                f"{endpoint} was removed. Use POST /agent/spawn, POST /agent/message, "
+                "POST /agent/execute, then GET /agent/threads/{thread_key}/events."
+            ),
+        },
+    )
+
+
 @router.post("/api/search")
 async def deprecated_search():
     return _gone(
@@ -42,3 +55,13 @@ async def deprecated_mcp():
         "/mcp",
         "Sandbox agents should call REST tool endpoints via /tools/<tool>/<method>; MCP is not exposed on this service path.",
     )
+
+
+@router.post("/agent/connect")
+async def deprecated_agent_connect():
+    return _legacy_agent_wire_gone("/agent/connect")
+
+
+@router.post("/agent/reconnect")
+async def deprecated_agent_reconnect():
+    return _legacy_agent_wire_gone("/agent/reconnect")
