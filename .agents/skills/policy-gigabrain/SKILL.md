@@ -170,7 +170,7 @@ Generate a policy briefing memo before Hill meetings.
 Write 1-2 short paragraphs that open with committee assignments and relevant subcommittees, then define the member's core policy identity, then explain where Paradigm's issues fit for that member.
 
 ## Biography
-Write 1-2 short paragraphs covering: key career milestones, prior offices, education, leadership roles, and any state or political identity that helps explain how they think.
+Write 1-2 short paragraphs in reverse chronological order, starting with the current or most recent role and ending with education/background. Cover: key career milestones, prior offices, education, leadership roles, and any state or political identity that helps explain how they think.
 
 ## Crypto Knowledge
 Use full-sentence bullets covering: familiarity with crypto and digital assets, notable public statements, legislative engagement, whether crypto is a core issue or a competitiveness issue for them, and any relevant staff sophistication.
