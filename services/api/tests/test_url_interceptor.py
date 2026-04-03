@@ -31,6 +31,16 @@ class TestDocsendRegex:
         assert m
         assert m.group(1) == "test456"
 
+    def test_custom_subdomain(self):
+        m = _DOCSEND_RE.search("https://morpho.docsend.com/view/nme3zyb6sukunvy5")
+        assert m
+        assert m.group(1) == "nme3zyb6sukunvy5"
+
+    def test_hyphenated_subdomain(self):
+        m = _DOCSEND_RE.search("https://anchorage-digital.docsend.com/view/test123")
+        assert m
+        assert m.group(1) == "test123"
+
     def test_no_match(self):
         assert _DOCSEND_RE.search("https://docsend.com/about") is None
 

@@ -358,7 +358,7 @@ async def _extract_attachments(
 
 
 # URL patterns for auto-archiving
-_DOCSEND_RE = re.compile(r"https?://(?:www\.)?docsend\.com/view/(?:s/)?([a-zA-Z0-9]+)")
+_DOCSEND_RE = re.compile(r"https?://(?:[\w-]+\.)?docsend\.com/view/(?:s/)?([a-zA-Z0-9]+)")
 _GDOC_RE = re.compile(
     r"https?://docs\.google\.com/(document|spreadsheets|presentation)/d/([a-zA-Z0-9_-]+)"
 )
