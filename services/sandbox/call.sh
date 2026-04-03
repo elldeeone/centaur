@@ -70,6 +70,93 @@ request() {
   return 1
 }
 
+agent_execute() {
+  local payload="$1"
+
+  if [ -z "$payload" ]; then
+    printf '%s\n' '{"error":"invalid_request","message":"call agent execute requires a JSON body"}'
+    return 1
+  fi
+
+  if ! printf '%s' "$payload" | jq -e . >/dev/null 2>&1; then
+    printf '{"error":"invalid_json","body":%s}\n' "$(printf '%s' "$payload" | jq -Rs .)"
+    return 1
+  fi
+
+  if printf '%s' "$payload" | jq -e 'has("assignment_generation")' >/dev/null 2>&1; then
+    request "POST" "$U/agent/execute" "$payload"
+    return $?
+  fi
+
+  if ! printf '%s' "$payload" | jq -e '(.message | type) == "string" and (.message | length) > 0' >/dev/null 2>&1; then
+    request "POST" "$U/agent/execute" "$payload"
+    return $?
+  fi
+
+  local nonce
+  nonce="call-agent-$(date +%s)-$RANDOM"
+
+  local spawn_payload
+  spawn_payload="$(printf '%s' "$payload" | jq -c --arg spawn_id "${nonce}:spawn" '
+    {
+      thread_key,
+      spawn_id: (.spawn_id // $spawn_id)
+    }
+    + (if .harness != null then {harness: .harness} else {} end)
+    + (if .engine != null then {engine: .engine} else {} end)
+    + (if .persona_id != null then {persona_id: .persona_id} else {} end)
+    + (if .agents_md_override != null then {agents_md_override: .agents_md_override} else {} end)
+  ')"
+
+  local spawn_response
+  spawn_response="$(request "POST" "$U/agent/spawn" "$spawn_payload")" || {
+    printf '%s\n' "$spawn_response"
+    return 1
+  }
+
+  local assignment_generation
+  assignment_generation="$(printf '%s' "$spawn_response" | jq -r '.assignment_generation // empty')"
+  if ! [[ "$assignment_generation" =~ ^[0-9]+$ ]] || [ "$assignment_generation" -le 0 ]; then
+    printf '{"error":"invalid_spawn_response","body":%s}\n' "$(printf '%s' "$spawn_response" | jq -Rs .)"
+    return 1
+  fi
+
+  local message_payload
+  message_payload="$(printf '%s' "$payload" | jq -c --argjson assignment_generation "$assignment_generation" --arg message_id "${nonce}:message" '
+    {
+      thread_key,
+      assignment_generation: $assignment_generation,
+      message_id: (.message_id // $message_id),
+      role: (.role // "user"),
+      parts: [{type: "text", text: .message}]
+    }
+    + (if .user_id != null then {user_id: .user_id} else {} end)
+    + (if .metadata != null then {metadata: .metadata} else {} end)
+  ')"
+
+  local message_response
+  message_response="$(request "POST" "$U/agent/message" "$message_payload")" || {
+    printf '%s\n' "$message_response"
+    return 1
+  }
+
+  local execute_payload
+  execute_payload="$(printf '%s' "$payload" | jq -c --argjson assignment_generation "$assignment_generation" --arg execute_id "${nonce}:execute" '
+    {
+      thread_key,
+      assignment_generation: $assignment_generation,
+      execute_id: (.execute_id // $execute_id)
+    }
+    + (if .harness != null then {harness: .harness} else {} end)
+    + (if .delivery != null then {delivery: .delivery} else {} end)
+    + (if .platform != null then {platform: .platform} else {} end)
+    + (if .user_id != null then {user_id: .user_id} else {} end)
+    + (if .metadata != null then {metadata: .metadata} else {} end)
+  ')"
+
+  request "POST" "$U/agent/execute" "$execute_payload"
+}
+
 case "$tool" in
   search)
     printf '%s\n' '{"error":"deprecated_command","command":"call search","replacement":"Use direct tool calls such as `call websearch search '\''{\"query\":\"...\"}'\''` or `call slack search_messages '\''{\"query\":\"...\"}'\''`."}'
@@ -87,10 +174,13 @@ case "$tool" in
     ;;
   agent)
     # Usage: call agent execute '{"thread_key":"...","message":"...","harness":"legal"}'
+    #        call agent execute '{"thread_key":"...","assignment_generation":1,...}'
     #        call agent stop '{"thread_key":"..."}'
     #        call agent status '?key=...'
     if [ "$method" = "status" ]; then
       request "GET" "$U/agent/status$body"
+    elif [ "$method" = "execute" ]; then
+      agent_execute "$body"
     else
       request "POST" "$U/agent/$method" "$body"
     fi
