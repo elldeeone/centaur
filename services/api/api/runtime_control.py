@@ -31,11 +31,15 @@ from api.observability import (
 )
 from api.vm_metrics import (
     record_agent_execution,
+    record_execution_by_user,
     record_execution_claimed,
     record_execution_enqueued,
     record_execution_terminal,
     record_execution_watchdog_timeout,
     record_message_observation,
+    record_oneshot,
+    record_tool_error_category,
+    record_ttft,
     record_usage_observation,
 )
 from api.sandbox.normalize import normalize_harness_event
@@ -1512,11 +1516,29 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
             )
             silence_deadline = await _touch_execution_progress(pool, execution_id)
 
+    execution_sequence = await pool.fetchval(
+        "SELECT COUNT(*) FROM agent_execution_requests "
+        "WHERE thread_key = $1 AND execution_id <> $2",
+        thread_key,
+        execution_id,
+    )
+    execution_sequence = int(execution_sequence or 0)
+
+    user_id_row = await pool.fetchval(
+        "SELECT metadata->>'user_id' FROM agent_message_requests "
+        "WHERE thread_key = $1 AND assignment_generation = $2 "
+        "ORDER BY created_at DESC LIMIT 1",
+        thread_key,
+        assignment_generation,
+    )
+    user_id: str | None = str(user_id_row) if user_id_row else None
+
     backend = get_backend()
     await backend.attach(session)
     rt = _get_runtime(session.sandbox_id)
     observations = ExecutionObservationAccumulator()
     started_at = claimed_at or row.get("created_at")
+    first_token_at: dt.datetime | None = None
 
     async def _finalize_execution(
         *,
@@ -1529,6 +1551,10 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
         completed_at = dt.datetime.now(dt.timezone.utc)
         if isinstance(started_at, dt.datetime):
             duration_s = max((completed_at - started_at).total_seconds(), 0.0)
+        ttft_ms: float | None = None
+        if first_token_at is not None and isinstance(started_at, dt.datetime):
+            ttft_ms = max((first_token_at - started_at).total_seconds() * 1000, 0.0)
+            record_ttft(harness, ttft_ms / 1000)
         summary_payload = observations.build_summary(
             execution_id=execution_id,
             thread_key=thread_key,
@@ -1541,6 +1567,9 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
             status=status,
             terminal_reason=terminal_reason,
             duration_s=duration_s,
+            ttft_ms=ttft_ms,
+            execution_sequence=execution_sequence,
+            user_id=user_id,
         )
         await append_execution_event(
             pool,
@@ -1550,6 +1579,10 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
             event_json=summary_payload,
         )
         log.info("execution_summary", **summary_payload)
+        if execution_sequence == 1:
+            record_oneshot(harness, status == "completed")
+        if user_id:
+            record_execution_by_user(user_id, harness, status)
         await _mark_execution_terminal(
             pool,
             execution_id=execution_id,
@@ -1573,6 +1606,8 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
         "runtime_id": session.sandbox_id,
         "queue_delay_s": round(queue_delay_s, 3),
         "delivery_platform": _delivery_platform(delivery),
+        "execution_sequence": execution_sequence,
+        "user_id": user_id,
     }
     await append_execution_event(
         pool,
@@ -1691,7 +1726,22 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                         event_json=observation_payload,
                     )
                     log.info(event_kind, **observation_payload)
+                    was_first_token = not observations.first_token_seen
                     observations.observe(event_kind, observation_payload)
+                    if was_first_token and observations.first_token_seen:
+                        first_token_at = dt.datetime.now(dt.timezone.utc)
+                    if event_kind in (
+                        "assistant_tool_use_observed",
+                        "tool_result_observed",
+                    ):
+                        tool_name = observation_payload.get("tool_name")
+                        error_category = observation_payload.get("error_category")
+                        if error_category and tool_name is None:
+                            tool_name = observations.tool_use_to_name.get(
+                                observation_payload.get("tool_use_id", "")
+                            )
+                        if error_category and tool_name:
+                            record_tool_error_category(tool_name, error_category)
                     if event_kind == "usage_observed":
                         usage_metrics = extract_usage_metrics(
                             {

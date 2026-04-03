@@ -353,6 +353,27 @@ USAGE_COST_USD_TOTAL = Counter(
     "Observed model cost in USD by harness and model.",
     ["harness", "model"],
 )
+TTFT_SECONDS = Histogram(
+    "agent_ttft_seconds",
+    "Time to first token in seconds.",
+    ["harness"],
+    buckets=[0.5, 1, 2, 5, 10, 20, 30, 60],
+)
+ONESHOT_TOTAL = Counter(
+    "agent_oneshot_total",
+    "Execution outcomes for first execution on a thread (1-shot tracking).",
+    ["harness", "success"],
+)
+TOOL_ERROR_CATEGORIES_TOTAL = Counter(
+    "agent_tool_error_categories_total",
+    "Tool errors by tool name and error category.",
+    ["tool_name", "category"],
+)
+EXECUTION_BY_USER_TOTAL = Counter(
+    "agent_execution_by_user_total",
+    "Executions by user, harness, and terminal status.",
+    ["user_id", "harness", "status"],
+)
 
 # ---------------------------------------------------------------------------
 # Helper functions (same public interface as the old metrics.py)
@@ -409,6 +430,22 @@ def record_message_observation(role: str, text_chars: int, attachment_count: int
     MESSAGE_TEXT_CHARS.labels(role=role).observe(max(text_chars, 0))
     if attachment_count > 0:
         MESSAGE_ATTACHMENTS_TOTAL.labels(role=role).inc(attachment_count)
+
+
+def record_ttft(harness: str, ttft_s: float) -> None:
+    TTFT_SECONDS.labels(harness=harness).observe(ttft_s)
+
+
+def record_oneshot(harness: str, success: bool) -> None:
+    ONESHOT_TOTAL.labels(harness=harness, success=str(success).lower()).inc()
+
+
+def record_tool_error_category(tool_name: str, category: str) -> None:
+    TOOL_ERROR_CATEGORIES_TOTAL.labels(tool_name=tool_name, category=category).inc()
+
+
+def record_execution_by_user(user_id: str, harness: str, status: str) -> None:
+    EXECUTION_BY_USER_TOTAL.labels(user_id=user_id, harness=harness, status=status).inc()
 
 
 def record_usage_observation(

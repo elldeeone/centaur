@@ -46,6 +46,38 @@ def _as_float(value: Any) -> float:
     return 0.0
 
 
+def classify_tool_error(content: Any) -> str:
+    text = ""
+    if isinstance(content, str):
+        text = content.lower()
+    elif isinstance(content, list):
+        text = " ".join(
+            _as_str(block.get("text") if isinstance(block, dict) else block).lower()
+            for block in content
+        )
+    elif isinstance(content, dict):
+        text = _as_str(content.get("text", "")).lower()
+
+    if not text:
+        return "unknown"
+
+    if any(kw in text for kw in ("timeout", "timed out", "deadline exceeded", "connect timeout")):
+        return "timeout"
+    if any(kw in text for kw in ("rate limit", "rate_limit", "429", "too many requests", "throttl")):
+        return "rate_limit"
+    if any(kw in text for kw in ("400", "bad request", "invalid", "validation", "malformed")):
+        return "invalid_input"
+    if any(kw in text for kw in ("401", "403", "unauthorized", "forbidden", "authentication")):
+        return "auth_error"
+    if any(kw in text for kw in ("404", "not found")):
+        return "not_found"
+    if any(kw in text for kw in ("4" + str(i) for i in range(10) if i not in (0, 1, 3, 4, 9))):
+        return "4xx"
+    if any(kw in text for kw in ("500", "502", "503", "504", "internal server error", "bad gateway", "service unavailable", "gateway timeout")):
+        return "5xx"
+    return "unknown"
+
+
 def payload_size_bytes(value: Any) -> int:
     try:
         return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8"))
@@ -178,18 +210,19 @@ def project_execution_observations(
     if event_type == "tool":
         for block in _as_list(event.get("content")):
             tool_result = _as_dict(block)
-            observations.append(
-                (
-                    "tool_result_observed",
-                    {
-                        **base,
-                        "type": "obs.tool_result",
-                        "tool_use_id": _as_str(tool_result.get("tool_use_id")),
-                        "is_error": bool(tool_result.get("is_error")),
-                        "content_size_bytes": payload_size_bytes(tool_result.get("content")),
-                    },
+            is_error = bool(tool_result.get("is_error"))
+            payload_entry: dict[str, Any] = {
+                **base,
+                "type": "obs.tool_result",
+                "tool_use_id": _as_str(tool_result.get("tool_use_id")),
+                "is_error": is_error,
+                "content_size_bytes": payload_size_bytes(tool_result.get("content")),
+            }
+            if is_error:
+                payload_entry["error_category"] = classify_tool_error(
+                    tool_result.get("content")
                 )
-            )
+            observations.append(("tool_result_observed", payload_entry))
         return observations
 
     if event_type == "usage":
@@ -343,27 +376,51 @@ class ExecutionObservationAccumulator:
     tools: Counter[str] = field(default_factory=Counter)
     tool_errors: Counter[str] = field(default_factory=Counter)
     tool_use_to_name: dict[str, str] = field(default_factory=dict)
+    tool_error_categories: Counter[str] = field(default_factory=Counter)
+    first_token_seen: bool = False
+    tool_sequence: list[str] = field(default_factory=list)
+    tool_retries: int = 0
+    _last_tool_name: str | None = field(default=None, repr=False)
+    _last_tool_was_error: bool = field(default=False, repr=False)
 
     def observe(self, event_kind: str, payload: dict[str, Any]) -> None:
         self.observation_event_count += 1
         if event_kind == "assistant_text_observed":
             self.assistant_text_events += 1
             self.assistant_text_chars += _as_int(payload.get("text_chars"))
+            if not self.first_token_seen:
+                self.first_token_seen = True
         elif event_kind == "assistant_tool_use_observed":
             self.assistant_tool_use_events += 1
+            if not self.first_token_seen:
+                self.first_token_seen = True
             tool_use_id = _as_str(payload.get("tool_use_id"))
             tool_name = _as_str(payload.get("tool_name"))
             if tool_name:
                 self.tools[tool_name] += 1
+                self.tool_sequence.append(tool_name)
+                if (
+                    self._last_tool_was_error
+                    and self._last_tool_name == tool_name
+                ):
+                    self.tool_retries += 1
+                self._last_tool_name = tool_name
+                self._last_tool_was_error = False
                 if tool_use_id:
                     self.tool_use_to_name[tool_use_id] = tool_name
         elif event_kind == "tool_result_observed":
             self.tool_result_events += 1
-            if payload.get("is_error"):
+            is_error = bool(payload.get("is_error"))
+            tool_name = self.tool_use_to_name.get(_as_str(payload.get("tool_use_id")))
+            if is_error:
                 self.tool_error_events += 1
-                tool_name = self.tool_use_to_name.get(_as_str(payload.get("tool_use_id")))
+                category = _as_str(payload.get("error_category")) or "unknown"
+                self.tool_error_categories[category] += 1
                 if tool_name:
                     self.tool_errors[tool_name] += 1
+                self._last_tool_was_error = True
+            else:
+                self._last_tool_was_error = False
         elif event_kind == "usage_observed":
             self.usage_events += 1
             self.input_tokens += _as_int(payload.get("input_tokens"))
@@ -406,6 +463,9 @@ class ExecutionObservationAccumulator:
         status: str,
         terminal_reason: str,
         duration_s: float | None = None,
+        ttft_ms: float | None = None,
+        execution_sequence: int | None = None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         total_tokens = (
             self.input_tokens
@@ -426,6 +486,9 @@ class ExecutionObservationAccumulator:
             "status": status,
             "terminal_reason": terminal_reason,
             "duration_s": round(duration_s, 3) if duration_s is not None else None,
+            "ttft_ms": round(ttft_ms, 1) if ttft_ms is not None else None,
+            "execution_sequence": execution_sequence,
+            "user_id": user_id,
             "raw_event_count": self.raw_event_count,
             "observation_event_count": self.observation_event_count,
             "assistant_text_events": self.assistant_text_events,
@@ -433,6 +496,8 @@ class ExecutionObservationAccumulator:
             "assistant_tool_use_events": self.assistant_tool_use_events,
             "tool_result_events": self.tool_result_events,
             "tool_error_events": self.tool_error_events,
+            "tool_retry_count": self.tool_retries,
+            "tool_error_categories": dict(self.tool_error_categories),
             "reasoning_events": self.reasoning_events,
             "command_events": self.command_events,
             "command_error_events": self.command_error_events,
