@@ -23,7 +23,7 @@ from PIL import Image
 
 from centaur_sdk import secret
 
-DEFAULT_EMAIL = "ricardo@paradigm.xyz"
+
 
 
 class DocsendClient:
@@ -40,7 +40,7 @@ class DocsendClient:
 
         Args:
             url: DocSend URL (e.g. https://docsend.com/view/abc123)
-            email: Email for email-gated documents. Falls back to a default.
+            email: Email for email-gated documents.
             passcode: Passcode for password-protected documents.
             verification_link: If DocSend requires email verification, the
                 user must open their email and copy the verification link.
@@ -142,17 +142,24 @@ class DocsendClient:
                             "for the passcode and retry with the passcode parameter.",
                             status="passcode_required",
                         )
-                    ok = await _enter_passcode(page, email or DEFAULT_EMAIL, passcode)
+                    ok = await _enter_passcode(page, email, passcode)
                     if not ok:
                         return _err("Passcode was rejected", status="passcode_required")
 
-                elif state == "email_required":
-                    await _enter_email(page, email or DEFAULT_EMAIL)
+                elif state == "email_required" and not verification_link:
+                    if not email:
+                        return _err(
+                            "This document requires an email address to access. "
+                            "Ask the user for their email and retry with the "
+                            "email parameter.",
+                            status="email_required",
+                        )
+                    await _enter_email(page, email)
                     await asyncio.sleep(1)
 
                     # Check for verification wall
                     if await _has_verification_wall(page):
-                        used = email or DEFAULT_EMAIL
+                        used = email
                         return _err(
                             f"DocSend sent a verification link to {used}. "
                             "Ask the user to check their email, copy the full "
