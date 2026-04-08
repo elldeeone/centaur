@@ -7,7 +7,6 @@ background asyncio task that periodically pushes to VictoriaMetrics.
 from __future__ import annotations
 
 import asyncio
-import math
 import os
 import threading
 from typing import Any
