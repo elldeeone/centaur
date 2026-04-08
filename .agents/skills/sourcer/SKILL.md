@@ -219,7 +219,57 @@ Try these methods in order:
 3. **Hunter.io** (via browser-use) - Domain email patterns
 4. **Apollo.io** (via browser-use) - Email enrichment
 
-### 6. Output to Google Sheet
+### 6. Outreach Drafting
+
+When the user asks for outreach copy, campaign copy, or company / role descriptions, use the template shape from this doc as the default reference:
+
+- `https://docs.google.com/document/d/1m-81T3wEKduN8BU1nZSa4qz7f7XEyXNazfTha3ahoPA/edit`
+
+Construction rules:
+
+- Keep communication brief and precise.
+- Use short paragraphs with blank lines between the greeting, intro, fact section, and close.
+- Put the factual company / role summary under `A few quick notes:` and format it as bullets, not prose paragraphs.
+- Keep each bullet to one crisp fact about the company, traction, founders, engineering team, or role scope.
+- Use links where appropriate.
+- Link `Dan McCarthy` to `https://www.linkedin.com/in/dmccarthy7/`.
+- Link the first mention of `Paradigm` to `https://www.paradigm.xyz/`.
+- Link the first mention of the company name to the official company website.
+- Default to a 2-email sequence unless the user asks for a different cadence.
+- Avoid hype, generic recruiter filler, and long descriptive paragraphs.
+
+Default shape:
+
+```markdown
+SUBJECT: <Company>
+
+Hi <FirstName>-
+
+My name's [Dan McCarthy](https://www.linkedin.com/in/dmccarthy7/) - I lead the talent function at [Paradigm](https://www.paradigm.xyz/); we're an investment and research firm. We recently invested <amount> in [<Company>](<company_website>), and we're helping them hire a <Role>.
+
+A few quick notes:
+- <company fact>
+- <company traction or market fact>
+- <role scope or team-size fact>
+
+I was impressed by your background and thought it was worth reaching out. Open to a quick conversation?
+
+-Dan
+```
+
+Follow-up shape:
+
+```markdown
+SUBJECT: <Company>
+
+Hi <FirstName>-
+
+One more try here - if this sounds potentially relevant, I'd be happy to share more.
+
+-Dan
+```
+
+### 7. Output to Google Sheet
 
 Create the sheet with `gsuite sheets create`:
 
@@ -253,7 +303,7 @@ gsuite -a svc_ai@paradigm.xyz sheets update \
   --values '[["Name","Title","Company","LinkedIn","Email","Location","Score","Notes"],["Jane Doe","Staff Engineer","Stripe","https://linkedin.com/in/janedoe","jane@stripe.com","SF","95","MIT CS, Stripe 2015, ex-Google Brain"]]'
 ```
 
-### 7. Example Full Workflow
+### 8. Example Full Workflow
 
 ```python
 import asyncio
