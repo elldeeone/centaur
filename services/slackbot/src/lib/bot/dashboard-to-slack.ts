@@ -2,10 +2,9 @@
  * Convert ```dashboard fenced blocks into Slack-friendly markdown.
  *
  * Dashboard blocks are a custom format used by the agent to emit rich
- * interactive tables, KPI cards, and charts. The web viewer renders these
- * as React components. For Slack, we convert them into plain markdown tables
- * and formatted text so that the Slack adapter's existing table→Block Kit
- * pipeline picks them up automatically.
+ * interactive tables, KPI cards, and charts. Structured Centaur clients can
+ * render these directly; Slack gets a plain markdown fallback so the existing
+ * table→Block Kit pipeline can pick them up automatically.
  */
 
 import { decode } from "@toon-format/toon";
@@ -50,7 +49,7 @@ interface DashboardSpec {
   components: DashboardComponent[];
 }
 
-// ── Parsing (mirrors services/web dashboard-parser.ts) ───────────────────
+// ── Parsing for dashboard fenced blocks ───────────────────────────────────
 
 function parseKeyValue(line: string): [string, string] | null {
   const idx = line.indexOf(":");

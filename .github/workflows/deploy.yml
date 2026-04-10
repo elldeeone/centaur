@@ -30,7 +30,7 @@ jobs:
       - name: Build & deploy
         run: |
           docker compose build sandbox
-          docker compose up -d --build
+          docker compose up -d --build --remove-orphans
 
       - name: Health check
         run: |

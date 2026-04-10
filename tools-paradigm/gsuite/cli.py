@@ -658,6 +658,28 @@ def drive_upload(
         raise typer.Exit(1)
 
 
+@drive_app.command("create-folder")
+def drive_create_folder_cmd(
+    name: str = typer.Argument(..., help="Folder name"),
+    parent: str = typer.Option(None, "--parent", "-p", help="Parent folder ID"),
+):
+    """Create a Google Drive folder.
+
+    Examples:
+        gsuite drive create-folder "True Anomaly - Series D Financing"
+        gsuite drive create-folder "Closing Docs" --parent "1abc123"
+    """
+    from .client import drive_create_folder
+
+    try:
+        result = drive_create_folder(name, parent_id=parent)
+        console.print(f"[green]✓ Created folder {result['name']}[/]")
+        console.print(f"[dim]{result['web_view_link']}[/]", soft_wrap=True)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+
 @drive_app.command("info")
 def drive_info(
     file_id: str = typer.Argument(..., help="File ID"),

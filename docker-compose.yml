@@ -182,7 +182,7 @@ services:
       SECRET_MANAGER_URL: http://firewall:8081
       HTTPS_PROXY: http://firewall:8080
       NODE_EXTRA_CA_CERTS: /firewall-certs/ca-cert.pem
-      NO_PROXY: localhost,127.0.0.1,postgres,pgbouncer,api,auth,nginx,firewall
+      NO_PROXY: localhost,127.0.0.1,postgres,pgbouncer,api,firewall
     volumes:
       - firewall-certs:/firewall-certs:ro
     networks:
@@ -191,37 +191,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
-      firewall:
-        condition: service_healthy
-    restart: unless-stopped
-
-  web:
-    profiles: ["web"]
-    build:
-      context: .
-      dockerfile: services/web/Dockerfile
-    environment:
-      CENTAUR_API_URL: http://api:8000
-      SECRET_MANAGER_URL: http://firewall:8081
-    networks:
-      - default
-      - backend_net
-    depends_on:
-      api:
-        condition: service_healthy
-      firewall:
-        condition: service_healthy
-    restart: unless-stopped
-
-  auth:
-    build:
-      context: .
-      dockerfile: services/auth/Dockerfile
-    environment:
-      SECRET_MANAGER_URL: http://firewall:8081
-    networks:
-      - default
-    depends_on:
       firewall:
         condition: service_healthy
     restart: unless-stopped

@@ -26,10 +26,6 @@ DATABASE_URL=postgresql://tempo:tempo_dev@pgbouncer:5432/centaur
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
 
-# Web UI auth gate
-UI_PASSWORD=pick-a-password
-AUTH_COOKIE_KEY=random-hmac-key       # openssl rand -hex 32
-
 # At least one LLM key (for the agent harness)
 ANTHROPIC_API_KEY=sk-ant-...
 ```
@@ -74,56 +70,53 @@ Or create a DB-backed key for external use (see [API Key Management](#api-key-ma
 ## Architecture
 
 ```
-                         ┌─────────────────────────────────────────────┐
-                         │              nginx (:8000)                  │
-                         │  Reverse proxy + auth gate (auth_request)   │
-                         │  /, /_next → slackbot | /grafana → grafana │
-                         │  /api/*, /agent/*, /tools/* → api          │
-                         └──────┬──────────┬──────────┬───────────────┘
-                                │          │          │
-                    ┌───────────┘          │          └───────────┐
-                    ▼                      ▼                      ▼
-             ┌────────────┐       ┌──────────────┐       ┌──────────────┐
-             │ auth (:4000)│       │  api (:8000)  │       │  slackbot    │
-             │ Starlette   │       │  FastAPI      │       │  Next.js     │
-             │ HMAC cookie │       │               │       │  (:3001)     │
-             └────────────┘       │  routers/     │       └──────────────┘
-                                  │  ├ agent.py    │
-                    ┌──── Slack ──│  ├ internal.py │
-                    │  webhooks   │  ├ admin.py    │
-                    │             │  └ health.py   │
-                    │             │                │
-                    │             │  agent.py ─── Docker lifecycle │
-                    │             └───────┬────────┘
-                    │                     │ Docker socket proxy
-                    │                     ▼
-                    │             ┌──────────────┐       ┌──────────────┐
-                    │             │  sandbox     │──────►│  firewall    │
-                    │             │  centaur-agent:latest│ HTTPS │  mitmproxy   │
-                    │             │  amp/claude/  │ proxy │  injects     │
-                    │             │  codex        │       │  real keys   │
-                    │             └──────┬────────┘       └──────┬───────┘
-                    │                    │ curl REST              │
-                    │                    └──► /tools/* /search    │
-                    │                         /query /agent       │
-                    │                                             │
-                    │             ┌──────────────┐
-                    │             │  secrets      │
-                    │             │  (:8100)      │
-                    │             │  1Password    │
-                    │             │  cache        │
-                    │             └──────────────┘
-                    │
-                    ▼
-               ┌──────────┐
-               │ Postgres  │    pgvector, raw_records JSONB
-               │           │    sandbox_sessions, chat_messages
-               └──────────┘
+                           Slack
+                             |
+                      events / webhooks
+                             v
+        ┌───────────────────────────────────────────────┐
+        │ slackbot (Next.js, :3001, host :8000)         │
+        │ health endpoint + Slack webhook surface       │
+        └───────────────────────┬───────────────────────┘
+                                │ spawn / message / execute
+                                v
+        ┌───────────────────────────────────────────────┐
+        │ api (FastAPI :8000)                           │
+        │ durable control plane + tools + admin         │
+        └───────────────┬───────────────┬───────────────┘
+                        │               │
+                        │ DB pool       │ Docker API
+                        v               v
+              ┌────────────────┐   ┌──────────────────────┐
+              │ pgbouncer      │   │ docker-socket-proxy  │
+              └──────┬─────────┘   └──────────┬───────────┘
+                     │                        │
+                     v                        v
+              ┌────────────────┐     ┌────────────────────┐
+              │ Postgres       │     │ sandbox            │
+              │ durable state  │<--->│ centaur-agent      │
+              └────────────────┘     └─────────┬──────────┘
+                                               │ tool calls + HTTPS proxy
+                                               v
+                                      ┌────────────────────┐
+                                      │ firewall           │
+                                      │ mitmproxy          │
+                                      └─────────┬──────────┘
+                                                │
+                         ┌──────────────────────┴──────────────────────┐
+                         v                                             v
+                ┌────────────────────┐                       external LLMs
+                │ secrets (:8100)    │                       + external APIs
+                │ 1Password / env    │
+                └────────────────────┘
+
+        Observability: api / slackbot / firewall / fluentbit ->
+                       VictoriaLogs + VictoriaMetrics -> Grafana
 ```
 
 ### End-to-End Request Flow
 
-1. User mentions bot in Slack → webhook → nginx → slackbot → api
+1. User mentions bot in Slack → webhook → slackbot → api
 2. API spawns/reuses Docker container (`centaur-agent:latest`) for that thread
 3. Executes harness (amp/claude-code/codex) via `docker exec`
 4. Harness calls tools via `curl` back to API at `http://api:8000` (REST, NOT MCP)
@@ -136,7 +129,7 @@ Centaur is a modular service architecture. Each service communicates through wel
 
 **Client → API** (durable control-plane protocol):
 
-Clients (slackbot, web app, CLI) should stay thin. They persist input with `spawn -> message -> execute`, stream or replay output from the durable events endpoint, and only fall back to durable terminal state when the live stream is gone. The API owns runtime assignment, execution serialization, cancellation, and final-delivery recovery; Postgres is the source of truth.
+Clients (slackbot, CLI, external integrations) should stay thin. They persist input with `spawn -> message -> execute`, stream or replay output from the durable events endpoint, and only fall back to durable terminal state when the live stream is gone. The API owns runtime assignment, execution serialization, cancellation, and final-delivery recovery; Postgres is the source of truth.
 
 **Step 1: Assign or reuse a runtime** (`POST /agent/spawn`)
 
@@ -263,10 +256,11 @@ Agents call tools via `curl http://api:8000/tools/<tool>/<method>` over the `age
 |---------|-------|----------|
 | `secrets_net` | internal | firewall → secrets |
 | `secrets_egress` | external | secrets → 1Password SDK |
+| `default` | internal | slackbot ↔ api ↔ monitoring-facing services |
 | `agent_net` | internal | sandbox containers ↔ firewall ↔ api |
-| `app_net` | internal | api ↔ slackbot ↔ auth |
+| `agent_egress` | external | sandbox direct egress for Amp DTW |
 | `control_net` | internal | api ↔ pgbouncer ↔ firewall |
-| `data_net` | internal | postgres, pgbouncer ↔ api |
+| `backend_net` | internal | postgres, pgbouncer, api, slackbot |
 | `obs_net` | internal | victoriametrics, victorialogs, fluentbit, grafana |
 
 ## Directory Structure
@@ -288,8 +282,6 @@ centaur/
 │   ├── firewall/         # mitmproxy addon — credential injection proxy
 │   ├── sandbox/          # Agent container image (Ubuntu 24.04 + uv + gh + node + amp)
 │   ├── slackbot/         # Next.js + Slack Bolt event listener (pnpm)
-│   ├── auth/             # Starlette password-session auth sidecar (:4000)
-│   ├── nginx/            # nginx reverse proxy config
 │   ├── pgbouncer/        # PgBouncer connection pooler
 │   ├── grafana/          # Grafana dashboards + provisioning
 │   ├── fluentbit/        # Fluent Bit log shipping config
@@ -433,7 +425,7 @@ The system prompt tells the agent:
 - **Tools**: three kinds — harness built-ins (Read, Bash, etc.), API tools via the `call` helper, and a headless browser
 - **`call` helper** (`/usr/local/bin/call`): a bash wrapper around `curl` that provides a concise syntax for API tool calls. `call slack get_channel_history '{"channel":"general"}'` instead of a full curl command. Returns TOON format for token efficiency.
 - **Slack messaging**: the agent's stdout IS the Slack reply — never call `send_message` on the active thread
-- **Dashboard blocks**: fenced code blocks with `dashboard` language tag render interactive tables, charts, and KPI cards in the thread viewer UI
+- **Dashboard blocks**: fenced code blocks with `dashboard` language tag render structured tables, charts, and KPI cards in compatible Centaur clients
 - **Rules**: never display secrets, show your work, lead with the answer
 
 The `call` helper (`services/sandbox/call.sh`) handles routing:
@@ -471,7 +463,7 @@ Sandbox containers never see real API keys. The firewall (`services/firewall/add
 ### Session Persistence
 
 - **`sandbox_sessions`** table: tracks sandbox ID, harness, engine, state, thread key, and thread title
-- **`chat_messages`** table: stores persisted user/assistant messages for the thread viewer and Slackbot surfaces
+- **`chat_messages`** table: stores persisted user/assistant messages for Slackbot delivery and durable transcript surfaces
 - On API restart, sandbox ownership is re-read from `sandbox_sessions`; process-local queues and sockets are rebuilt lazily per sandbox
 - Containers are still discoverable via Docker labels even if DB state needs reconciliation
 
@@ -480,7 +472,7 @@ Sandbox containers never see real API keys. The firewall (`services/firewall/add
 - **API auth**: All callers authenticate with DB-backed API keys (`aiv2_*` prefix, stored in `api_keys` table). Docker bridge IPs (localhost) bypass auth for container→API calls.
 - **Sandbox auth**: Sandbox containers get auto-issued HMAC-signed tokens (`sbx1.*` prefix) minted by the API. These are short-lived (2h TTL) and scoped to `agent` + `tools:*`.
 - **Slack**: HMAC-SHA256 signature verification on all webhooks
-- **UI**: Password-based HMAC session cookie; nginx `auth_request` gates all UI routes
+- **Public edge**: The default deployment exposes only `slackbot` on `127.0.0.1:8000`
 - **Sandbox isolation**: Containers get stub keys only; real keys injected by firewall proxy in-flight
 - **Filesystem**: Host repos mounted read-only by default; only working repo is read-write
 - **Docker socket**: Proxied via `tecnativa/docker-socket-proxy` — only container/network/exec ops allowed
@@ -511,13 +503,12 @@ ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -s -X DELETE http://lo
 
 | Type | Prefix | Issued by | Used by | Scopes |
 |------|--------|-----------|---------|--------|
-| DB keys | `aiv2_*` | Admin API | Slackbot, web app, CLI, external callers | Per-key (e.g. `["*"]`, `["agent:execute"]`) |
+| DB keys | `aiv2_*` | Admin API | Slackbot, CLI, external callers | Per-key (e.g. `["*"]`, `["agent:execute"]`) |
 | Sandbox tokens | `sbx1.*` | API (automatic) | Sandbox containers → API tool calls | `["agent", "tools:*"]` |
 
 ### How services get their keys
 
 - **Slackbot**: `SLACKBOT_API_KEY` env var, bootstrapped from secrets service (1Password item name: `SLACKBOT_API_KEY`)
-- **Web app**: `WEB_API_KEY` env var, same bootstrap
 - **Sandbox containers**: Auto-issued `sbx1.*` token injected as `CENTAUR_API_KEY` at container creation
 - **Local testing**: Use localhost bypass (no key needed from inside the API container), or create a key via admin API
 

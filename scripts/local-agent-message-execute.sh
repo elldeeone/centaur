@@ -12,7 +12,7 @@ if [[ -f "$REPO_ROOT/.env" ]]; then
 fi
 
 API_URL="${API_URL:-http://localhost:8000}"
-API_KEY="${API_KEY:-${LOCAL_DEV_API_KEY:-${WEB_API_KEY:-${SLACKBOT_API_KEY:-}}}}"
+API_KEY="${API_KEY:-${LOCAL_DEV_API_KEY:-${SLACKBOT_API_KEY:-}}}"
 PROMPT="${1:-Reply with exactly PONG and nothing else.}"
 THREAD_KEY="local-smoke:$(date +%s)-${RANDOM}"
 TMPDIR="$(mktemp -d)"
@@ -20,7 +20,7 @@ EXECUTION_ID=""
 
 if [[ -z "$API_KEY" ]]; then
   echo "No API key found." >&2
-  echo "Set API_KEY directly, or define LOCAL_DEV_API_KEY / WEB_API_KEY / SLACKBOT_API_KEY in .env." >&2
+  echo "Set API_KEY directly, or define LOCAL_DEV_API_KEY / SLACKBOT_API_KEY in .env." >&2
   exit 1
 fi
 

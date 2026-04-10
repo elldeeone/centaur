@@ -125,36 +125,34 @@
 |  max_iterations (default 288), deadline_seconds (default 86400, max 604800).
 |  Include `{"done": true}` in your response to signal the task is complete.
 |
-|**Custom workflows** — for anything more complex, write a Python workflow file:
+|**Custom workflows** — write a Python file in `workflows/`:
 |  1. `git-branch paradigmxyz/centaur` to get a writable clone
-|  2. Create a file in `workflows/` (e.g. `workflows/my_task.py`)
-|  3. The file must export WORKFLOW_NAME, an async handler(inp, ctx), and optionally an Input dataclass
-|  4. Push to a branch → auto-merge → hot-reload picks it up (no restart needed)
-|  5. Then `call workflow run '{"workflow_name":"my_task","input":{...}}'`
+|  2. Create `workflows/my_task.py`
+|  3. Push → auto-merge → hot-reload (no restart)
+|  4. `call workflow run '{"workflow_name":"my_task"}'`
 |
-|  Template:
+|  Simple (just constants, engine auto-generates the handler):
 |    ```python
-|    from __future__ import annotations
-|    from dataclasses import dataclass
-|    from typing import Any
-|    from api.workflow_engine import WorkflowContext
+|    WORKFLOW_NAME = "my_digest"
+|    CRON = "0 9 * * *"            # or INTERVAL = 300
+|    SLACK_CHANNEL = "my-channel"
+|    PROMPT = "Generate a daily summary of..."
+|    ```
 |
-|    WORKFLOW_NAME = "my_task"
-|
-|    @dataclass
-|    class Input:
-|        thread_key: str = ""
-|        # ... your fields
-|
-|    async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
-|        result = await ctx.step("step_1", lambda: {"status": "ok"})
-|        await ctx.sleep("wait", timedelta(minutes=5))
-|        # ctx.step(), ctx.sleep(), ctx.wait_for_event() — all checkpoint/replay safe
+|  Custom logic (write a handler):
+|    ```python
+|    WORKFLOW_NAME = "my_monitor"
+|    async def handler(inp, ctx):
+|        data = await ctx.call_tool("websearch", "search", {"query": "ETH price"})
+|        result = await ctx.agent_turn(f"Analyze this data: {data}")
+|        await ctx.post_to_slack("trading", result["result_text"])
+|        await ctx.sleep("wait", timedelta(hours=1))
 |        return result
 |    ```
 |
-|  Available primitives: ctx.step(name, fn), ctx.sleep(name, duration),
-|  ctx.wait_for_event(name, event_type, correlation_id), do_agent_turn(ctx, ...).
+|  ctx primitives: step(name, fn), sleep(name, duration), agent_turn(prompt),
+|  call_tool(tool, method, args), post_to_slack(channel, text),
+|  wait_for_event(name, event_type, correlation_id).
 |
 |Check status:  call workflow get <run_id>
 |Cancel:        call workflow cancel <run_id>
@@ -360,7 +358,7 @@
 |charts: label series clearly | stacked area:right-side labels | include today | BTC=#F7931A,ETH=#627EEA,SOL=#9945FF
 
 [Dashboard blocks — interactive UI in chat]
-|Emit ```dashboard fenced blocks to render tables, KPI cards, and charts inline in the thread viewer.
+|Emit ```dashboard fenced blocks to render tables, KPI cards, and charts in compatible Centaur clients.
 |Format: header section (title, layout) followed by --- separated component sections using TOON data.
 |Use `call paradigmdb emit_dashboard` or emit manually. Components: data-table, kpi-card, line-chart, bar-chart, pie-chart.
 |Layouts: single (1 col), grid-2 (2 col), grid-3 (3 col). KPI cards work best with grid-2 or grid-3.

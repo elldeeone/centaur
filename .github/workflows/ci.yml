@@ -38,25 +38,3 @@ jobs:
       - name: Compile
         working-directory: services/api
         run: uv run python -m compileall -q api/
-
-  web-contract:
-    name: Web TS contract checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install workspace dependencies
-        run: |
-          corepack enable
-          pnpm install --frozen-lockfile
-
-      - name: Type-check web stream contracts
-        run: pnpm --dir services/web exec tsc --noEmit

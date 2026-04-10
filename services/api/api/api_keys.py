@@ -46,11 +46,6 @@ _SERVICE_API_KEYS: tuple[ServiceAPIKeySpec, ...] = (
         scopes=("agent",),
     ),
     ServiceAPIKeySpec(
-        env_var="WEB_API_KEY",
-        name="service:web",
-        scopes=("agent", "tools:paradigmdb"),
-    ),
-    ServiceAPIKeySpec(
         env_var="LOCAL_DEV_API_KEY",
         name="service:local-dev",
         scopes=("admin", "agent", "threads", "tools:*"),

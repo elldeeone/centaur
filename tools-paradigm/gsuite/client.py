@@ -21,6 +21,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/calendar.events",
+    # Needed for creating folders and uploading into arbitrary Shared Drive parents.
+    "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/documents",
@@ -834,7 +836,12 @@ def drive_upload(
 
     result = (
         service.files()
-        .create(body=metadata, media_body=media, fields="id, name, webViewLink")
+        .create(
+            body=metadata,
+            media_body=media,
+            fields="id, name, webViewLink",
+            supportsAllDrives=True,
+        )
         .execute()
     )
 
@@ -842,6 +849,43 @@ def drive_upload(
         "id": result.get("id", ""),
         "name": result.get("name", ""),
         "web_view_link": result.get("webViewLink", ""),
+    }
+
+
+def drive_create_folder(name: str, parent_id: str | None = None) -> dict:
+    """Create a Google Drive folder.
+
+    Args:
+        name: Folder name
+        parent_id: Optional parent folder ID
+
+    Returns:
+        Dict with id, name, web_view_link, parent_ids
+    """
+    service = get_drive_service()
+
+    metadata = {
+        "name": name,
+        "mimeType": "application/vnd.google-apps.folder",
+    }
+    if parent_id:
+        metadata["parents"] = [parent_id]
+
+    result = (
+        service.files()
+        .create(
+            body=metadata,
+            fields="id, name, webViewLink, parents",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
+
+    return {
+        "id": result.get("id", ""),
+        "name": result.get("name", ""),
+        "web_view_link": result.get("webViewLink", ""),
+        "parent_ids": result.get("parents", []),
     }
 
 
@@ -2319,6 +2363,18 @@ class GSuiteClient:
             mime_type=mime_type,
             convert_to_sheets=convert_to_sheets,
         )
+
+    def drive_create_folder(self, name: str, parent_id: str | None = None) -> dict:
+        """Create a Google Drive folder.
+
+        Args:
+            name: Folder name
+            parent_id: Optional parent folder ID
+
+        Returns:
+            Dict with id, name, web_view_link, parent_ids
+        """
+        return drive_create_folder(name, parent_id=parent_id)
 
     def drive_list_permissions(self, file_id: str) -> list[dict]:
         """List permissions on a Google Drive file.

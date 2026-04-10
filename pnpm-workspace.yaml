@@ -1,4 +1,3 @@
 packages:
   - 'packages/*'
   - 'services/slackbot'
-  - 'services/web'

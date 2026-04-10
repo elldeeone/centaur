@@ -220,6 +220,7 @@ class WorkflowContext:
         checkpoints: dict[str, Any],
         lease_s: float,
         worker_id: str,
+        run_input: dict[str, Any] | None = None,
     ):
         self._pool = pool
         self.run_id = run_id
@@ -228,6 +229,7 @@ class WorkflowContext:
         self._in_replay = bool(checkpoints)
         self._lease_s = lease_s
         self._worker_id = worker_id
+        self.run_input: dict[str, Any] = run_input or {}
 
     # ── Internal ──────────────────────────────────────────────────────
 
@@ -743,6 +745,126 @@ class WorkflowContext:
             eager_start=eager_start,
         )
 
+    async def post_to_slack(
+        self,
+        channel: str,
+        text: str,
+        *,
+        thread_ts: str | None = None,
+    ) -> dict[str, Any]:
+        """Post a message to a Slack channel via the slack tool.
+
+        Accepts channel name (e.g. ``"paradigm-pulse"``) or ID.
+        Uses a checkpointed step so the message is sent exactly once,
+        even if the workflow replays.
+        """
+        from api.app import get_tool_manager
+
+        async def _post() -> dict[str, Any]:
+            tm = get_tool_manager()
+            args: dict[str, Any] = {
+                "channel": channel,
+                "text": text,
+                "no_attribution": True,
+            }
+            if thread_ts:
+                args["thread_ts"] = thread_ts
+            raw = await tm.call_tool("slack", "send_message", args)
+            import json as _json
+            try:
+                return _json.loads(raw) if isinstance(raw, str) else raw
+            except (ValueError, TypeError):
+                return {"raw": raw}
+
+        step_name = f"post_slack_{channel}"
+        return await self.step(step_name, _post, step_kind="slack_post")
+
+    @property
+    def tools(self) -> _ToolProxy:
+        """Dynamic tool proxy for ergonomic checkpointed tool calls.
+
+        Usage::
+
+            result = await ctx.tools.websearch.search(query="ETH price")
+        """
+        return _ToolProxy(self)
+
+    async def call_tool(
+        self,
+        tool: str,
+        method: str,
+        args: dict[str, Any] | None = None,
+    ) -> Any:
+        """Call an API tool with checkpointed exactly-once semantics.
+
+        Example::
+
+            data = await ctx.call_tool("websearch", "search", {"query": "ETH price"})
+        """
+        from api.app import get_tool_manager
+
+        async def _call() -> Any:
+            import json as _json
+            tm = get_tool_manager()
+            raw = await tm.call_tool(tool, method, args or {})
+            try:
+                return _json.loads(raw) if isinstance(raw, str) else raw
+            except (_json.JSONDecodeError, TypeError):
+                return {"raw": raw}
+
+        return await self.step(
+            f"tool_{tool}_{method}", _call, step_kind="tool_call",
+        )
+
+    async def agent_turn(
+        self,
+        prompt: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Run an agent turn and return the result.
+
+        Simplest usage::
+
+            result = await ctx.agent_turn("Generate a daily digest.")
+            text = result["result_text"]
+
+        The agent's ``thread_key`` and ``delivery`` are resolved from the
+        workflow run's input (set automatically by the schedule engine).
+        Pass explicit ``thread_key=``, ``delivery=``, etc. as kwargs to
+        override.
+        """
+        return await do_agent_turn(self, prompt=prompt, **kwargs)
+
+
+# ── Tool proxy (ergonomic checkpointed tool calls) ───────────────────
+
+
+class _ToolMethodProxy:
+    """Proxy for a single tool — attribute access returns an awaitable method call."""
+
+    __slots__ = ("_ctx", "_tool")
+
+    def __init__(self, ctx: WorkflowContext, tool: str):
+        self._ctx = ctx
+        self._tool = tool
+
+    def __getattr__(self, method: str) -> Callable[..., Awaitable[Any]]:
+        async def _call(**kwargs: Any) -> Any:
+            return await self._ctx.call_tool(self._tool, method, kwargs or None)
+        return _call
+
+
+class _ToolProxy:
+    """Proxy returned by ``ctx.tools`` — attribute access returns a tool proxy."""
+
+    __slots__ = ("_ctx",)
+
+    def __init__(self, ctx: WorkflowContext):
+        self._ctx = ctx
+
+    def __getattr__(self, tool: str) -> _ToolMethodProxy:
+        return _ToolMethodProxy(self._ctx, tool)
+
 
 # ── Agent-turn helper (domain logic, NOT on the context) ──────────────
 
@@ -856,8 +978,9 @@ async def _requeue_expired_running_runs(conn) -> int:
 async def do_agent_turn(
     ctx: WorkflowContext,
     *,
-    thread_key: str,
-    parts: list[dict[str, Any]],
+    prompt: str | None = None,
+    thread_key: str | None = None,
+    parts: list[dict[str, Any]] | None = None,
     message_id: str | None = None,
     user_id: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -867,29 +990,48 @@ async def do_agent_turn(
 ) -> dict[str, Any]:
     """Orchestrate spawn → message → execute → wait-for-terminal.
 
-    This is a plain helper function, not a method on WorkflowContext.
-    Workflow handlers call it to drive an agent turn.  It uses the
-    generic ``ctx.step()`` for the dispatch checkpoint, then suspends
-    if the execution is not yet terminal.
+    Simplest usage::
 
-    *delivery* accepts either a ``Delivery`` instance or a raw dict.
+        await do_agent_turn(ctx, prompt="Generate the daily digest.")
+
+    ``thread_key`` and ``delivery`` default to values from the
+    workflow run's input (set automatically by the schedule engine).
+    ``prompt`` is a shorthand for ``parts=[text_part(prompt)]``.
     """
 
+    # Resolve defaults from run input
+    run_in = ctx.run_input
+    effective_thread_key = (
+        thread_key
+        or str(run_in.get("thread_key", "")).strip()
+        or f"workflow:{ctx.run_id}"
+    )
+    effective_parts = parts or ([text_part(prompt)] if prompt else [])
+    if not effective_parts:
+        raise ControlPlaneError(
+            "MISSING_PROMPT",
+            "do_agent_turn requires prompt or parts",
+            422,
+        )
+
     async def _dispatch() -> dict[str, Any]:
-        effective_metadata = dict(metadata or {})
+        effective_metadata = dict(metadata or run_in.get("metadata") or {})
         effective_metadata["workflow_run_id"] = ctx.run_id
-        if user_id and not effective_metadata.get("user_id"):
-            effective_metadata["user_id"] = user_id
+        eff_user_id = user_id or run_in.get("user_id")
+        if eff_user_id and not effective_metadata.get("user_id"):
+            effective_metadata["user_id"] = eff_user_id
         if isinstance(delivery, Delivery):
             effective_delivery = delivery.to_dict()
+        elif delivery:
+            effective_delivery = dict(delivery)
         else:
-            effective_delivery = dict(delivery or {})
+            effective_delivery = dict(run_in.get("delivery") or {})
         selector = _resolve_prompt_selector(prompt_selector)
         step_id = f"wf:{ctx.run_id}:agent_turn"
 
         spawn = await spawn_assignment(
             ctx._pool,
-            thread_key=thread_key,
+            thread_key=effective_thread_key,
             spawn_id=f"{step_id}:spawn",
             harness=selector["harness"],
             engine=None,
@@ -900,11 +1042,11 @@ async def do_agent_turn(
 
         event = {
             "type": "user",
-            "message": {"role": "user", "content": parts},
+            "message": {"role": "user", "content": effective_parts},
         }
         await append_message(
             ctx._pool,
-            thread_key=thread_key,
+            thread_key=effective_thread_key,
             assignment_generation=ag,
             message_id=message_id or f"{step_id}:message",
             event=event,
@@ -913,7 +1055,7 @@ async def do_agent_turn(
 
         execution = await enqueue_execution(
             ctx._pool,
-            thread_key=thread_key,
+            thread_key=effective_thread_key,
             assignment_generation=ag,
             execute_id=f"{step_id}:execute",
             harness=selector["harness"],
@@ -938,8 +1080,10 @@ async def do_agent_turn(
     # Step 2: check if execution reached terminal state
     execution = await get_execution(ctx._pool, execution_id)
     if execution and execution.get("status") in _EXECUTION_TERMINAL_STATUSES:
+        result_text = str(execution.get("result_text") or "").strip()
         return {
             "execution_id": execution_id,
+            "result_text": result_text,
             "execution": execution,
         }
 
@@ -955,6 +1099,7 @@ class _RegisteredHandler:
     input_cls: type | None  # Optional typed Input dataclass
     source_path: str
     version: str
+    schedule: dict[str, Any] | None = None  # Optional SCHEDULE export
 
 
 # Maps workflow_name → registered handler + optional input class
@@ -1038,21 +1183,59 @@ def _load_workflow_file(
         spec.loader.exec_module(mod)
 
         wf_name = getattr(mod, "WORKFLOW_NAME", None)
-        wf_handler = getattr(mod, "handler", None)
-        if not isinstance(wf_name, str) or not callable(wf_handler):
-            log.warning(
-                "workflow_handler_skip",
-                file=str(py_file),
-                reason="missing WORKFLOW_NAME or handler",
-            )
+        if not isinstance(wf_name, str):
+            log.warning("workflow_handler_skip", file=str(py_file), reason="missing WORKFLOW_NAME")
             return
+        wf_handler = getattr(mod, "handler", None)
+
+        # Auto-generate handler from PROMPT + SLACK_CHANNEL exports
+        if not callable(wf_handler):
+            prompt_val = getattr(mod, "PROMPT", None)
+            if not isinstance(prompt_val, str) or not prompt_val.strip():
+                log.warning(
+                    "workflow_handler_skip",
+                    file=str(py_file),
+                    reason="missing handler and PROMPT",
+                )
+                return
+            channel_val = getattr(mod, "SLACK_CHANNEL", None)
+
+            async def _auto_handler(
+                inp: Any, ctx: WorkflowContext,
+                _prompt: str = prompt_val, _channel: str | None = channel_val,
+            ) -> dict[str, Any]:
+                result = await ctx.agent_turn(_prompt)
+                text = result.get("result_text", "")
+                channel = (inp.get("slack_channel") if isinstance(inp, dict) else None) or _channel
+                if text and channel:
+                    await ctx.post_to_slack(channel, text)
+                return result
+
+            wf_handler = _auto_handler
         input_cls = getattr(mod, "Input", None)
+        schedule = getattr(mod, "SCHEDULE", None)
+        if schedule is not None and not isinstance(schedule, dict):
+            log.warning("workflow_schedule_skip", file=str(py_file), reason="SCHEDULE must be a dict")
+            schedule = None
+        # Shorthand: CRON = "...", INTERVAL = 300, SLACK_CHANNEL = "..."
+        if schedule is None:
+            cron_val = getattr(mod, "CRON", None)
+            interval_val = getattr(mod, "INTERVAL", None)
+            if isinstance(cron_val, str) and cron_val.strip():
+                schedule = {"cron": cron_val.strip()}
+            elif isinstance(interval_val, (int, float)) and interval_val > 0:
+                schedule = {"interval_seconds": int(interval_val)}
+        if schedule is not None:
+            slack_ch = getattr(mod, "SLACK_CHANNEL", None)
+            if isinstance(slack_ch, str) and slack_ch.strip():
+                schedule.setdefault("slack_channel", slack_ch.strip())
         version = hashlib.sha256(py_file.read_bytes()).hexdigest()
         _WORKFLOW_HANDLERS[wf_name] = _RegisteredHandler(
             handler=wf_handler,
             input_cls=input_cls,
             source_path=str(py_file),
             version=version,
+            schedule=schedule,
         )
         discovered[wf_name] = str(py_file)
     except Exception:
@@ -1141,63 +1324,108 @@ def _split_thread_key(thread_key: str) -> tuple[str, str]:
 
 
 def _registered_schedule_specs() -> list[ScheduleSpec]:
-    thread_key = (os.getenv("PARADIGM_PULSE_THREAD_KEY") or "").strip()
-    if not thread_key:
-        return []
-    try:
-        channel, thread_ts = _split_thread_key(thread_key)
-    except ControlPlaneError:
-        log.warning(
-            "workflow_schedule_skipped_invalid_thread_key",
-            thread_key=thread_key,
-        )
-        return []
+    """Collect schedule specs from all registered workflow handlers.
 
-    team_id = (
-        (os.getenv("PARADIGM_PULSE_TEAM_ID") or "").strip() or None
-    )
-    enabled = os.getenv(
-        "PARADIGM_PULSE_ENABLED", "1",
-    ).strip().lower() not in {"0", "false", "no"}
-    schedule_expr = (
-        os.getenv("PARADIGM_PULSE_SCHEDULE") or "45 7 * * *"
-    ).strip()
-    timezone = (
-        (os.getenv("PARADIGM_PULSE_TIMEZONE") or "America/Los_Angeles")
-        .strip() or "UTC"
-    )
-    prompt_selector = (
-        (os.getenv("PARADIGM_PULSE_PROMPT_SELECTOR") or "").strip()
-        or None
-    )
-    input_json: dict[str, Any] = {
-        "thread_key": thread_key,
-        "delivery": {
-            "channel": channel,
-            "thread_ts": thread_ts,
-            "platform": "slack",
-            **({"recipient_team_id": team_id} if team_id else {}),
-        },
-        "metadata": {
-            "source": "workflow_schedule",
-            "workflow_name": "paradigm_pulse_daily",
-        },
-    }
-    if prompt_selector:
-        input_json["prompt_selector"] = prompt_selector
+    Each handler may export a ``SCHEDULE`` dict.  Minimal example::
 
-    return [
-        ScheduleSpec(
-            schedule_id="paradigm_pulse_daily",
-            workflow_name="paradigm_pulse_daily",
-            schedule_kind="cron",
-            schedule_expr=schedule_expr,
-            timezone=timezone,
-            catchup_policy="skip",
+        SCHEDULE = {
+            "cron": "45 7 * * *",
+            "timezone": "America/Los_Angeles",
+            "thread_key": os.getenv("MY_THREAD_KEY", ""),
+        }
+
+    Supported keys:
+
+    - ``cron`` or ``interval_seconds`` — trigger (required, one of)
+    - ``timezone`` — default ``"UTC"``
+    - ``enabled`` — default ``True``
+    - ``thread_key`` — Slack thread to post to; auto-derives delivery
+    - ``slack_channel`` — channel name (e.g. ``"paradigm-pulse"``);
+      used as delivery channel when no thread_key
+    - ``input`` — extra fields merged into the handler Input
+    - ``catchup_policy`` — ``"skip"`` (default) or ``"catch_up"``
+    """
+    specs: list[ScheduleSpec] = []
+    for wf_name, reg in _WORKFLOW_HANDLERS.items():
+        sched = reg.schedule
+        if not sched:
+            continue
+        cron_expr = sched.get("cron")
+        interval_s = sched.get("interval_seconds")
+        if not cron_expr and not interval_s:
+            log.warning(
+                "workflow_schedule_skip",
+                workflow_name=wf_name,
+                reason="SCHEDULE must have 'cron' or 'interval_seconds'",
+            )
+            continue
+
+        enabled_val = sched.get("enabled", True)
+        if isinstance(enabled_val, str):
+            enabled_val = enabled_val.strip().lower() not in {"0", "false", "no"}
+
+        input_json = dict(sched.get("input") or {})
+        input_json.setdefault("metadata", {})
+        input_json["metadata"]["source"] = "workflow_schedule"
+        input_json["metadata"]["workflow_name"] = wf_name
+
+        # thread_key: explicit > input > convention env var ({NAME}_THREAD_KEY)
+        thread_key = (
+            sched.get("thread_key")
+            or input_json.get("thread_key")
+            or os.getenv(f"{wf_name.upper()}_THREAD_KEY", "")
+        ).strip()
+        slack_channel = (
+            str(sched.get("slack_channel", ""))
+            or os.getenv(f"{wf_name.upper()}_SLACK_CHANNEL", "")
+        ).strip().lstrip("#")
+
+        # If both thread_key and slack_channel are empty, skip —
+        # the workflow has nowhere to deliver results.
+        if not thread_key and not slack_channel:
+            log.info(
+                "workflow_schedule_skip_no_destination",
+                workflow_name=wf_name,
+            )
+            continue
+
+        if thread_key:
+            input_json["thread_key"] = thread_key
+            # Auto-derive Slack delivery from thread_key
+            if "delivery" not in input_json:
+                try:
+                    channel, thread_ts = _split_thread_key(thread_key)
+                    input_json["delivery"] = {
+                        "channel": channel,
+                        "thread_ts": thread_ts,
+                        "platform": "slack",
+                    }
+                except ControlPlaneError:
+                    log.warning(
+                        "workflow_schedule_bad_thread_key",
+                        workflow_name=wf_name,
+                        thread_key=thread_key,
+                    )
+
+        # slack_channel: use channel name for delivery (no thread_ts)
+        if slack_channel and "delivery" not in input_json:
+            input_json["delivery"] = {
+                "channel": slack_channel,
+                "platform": "slack",
+            }
+
+        specs.append(ScheduleSpec(
+            schedule_id=sched.get("schedule_id", wf_name),
+            workflow_name=wf_name,
+            schedule_kind="cron" if cron_expr else "interval",
+            schedule_expr=cron_expr,
+            timezone=sched.get("timezone", "America/Los_Angeles"),
+            interval_seconds=interval_s,
+            catchup_policy=sched.get("catchup_policy", "skip"),
             input_json=input_json,
-            enabled=enabled,
-        ),
-    ]
+            enabled=bool(enabled_val),
+        ))
+    return specs
 
 
 # ── Cron helpers ──────────────────────────────────────────────────────
@@ -1837,6 +2065,7 @@ async def _run_handler(pool, run_row: dict[str, Any]) -> None:
         checkpoints=checkpoints,
         lease_s=WORKFLOW_WORKER_LEASE_S,
         worker_id=worker_id,
+        run_input=run_input if isinstance(run_input, dict) else {},
     )
     params = _coerce_input(run_input, registered.input_cls)
     heartbeat_stop = asyncio.Event()

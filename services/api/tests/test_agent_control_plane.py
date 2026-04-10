@@ -1259,7 +1259,6 @@ async def test_bootstrap_service_api_keys_inserts_missing_rows(db_pool, monkeypa
 
     slack_key = f"aiv2_{uuid.uuid4().hex}{uuid.uuid4().hex}"
     monkeypatch.setenv("SLACKBOT_API_KEY", slack_key)
-    monkeypatch.delenv("WEB_API_KEY", raising=False)
     monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
 
     bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool, secret_manager_url="")
@@ -1289,23 +1288,22 @@ async def test_bootstrap_service_api_keys_fetches_and_reactivates_revoked_rows(
 ):
     import api.api_keys as api_keys
 
-    web_key = f"aiv2_{uuid.uuid4().hex}{uuid.uuid4().hex}"
+    slack_key = f"aiv2_{uuid.uuid4().hex}{uuid.uuid4().hex}"
     await db_pool.execute(
         "INSERT INTO api_keys (name, key_prefix, key_hash, scopes, created_by, revoked_at) "
         "VALUES ($1, $2, $3, $4, $5, NOW())",
-        "old-web-key",
-        web_key[:8],
-        hashlib.sha256(web_key.encode()).hexdigest(),
+        "old-slackbot-key",
+        slack_key[:8],
+        hashlib.sha256(slack_key.encode()).hexdigest(),
         ["agent"],
         "manual",
     )
     monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
-    monkeypatch.delenv("WEB_API_KEY", raising=False)
     monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
 
     async def fake_fetch_secret_value(secret_manager_url: str, key: str) -> str | None:
         assert secret_manager_url == "http://secret-manager"
-        return web_key if key == "WEB_API_KEY" else None
+        return slack_key if key == "SLACKBOT_API_KEY" else None
 
     monkeypatch.setattr(api_keys, "_fetch_secret_value", fake_fetch_secret_value)
 
@@ -1314,14 +1312,14 @@ async def test_bootstrap_service_api_keys_fetches_and_reactivates_revoked_rows(
         secret_manager_url="http://secret-manager",
     )
 
-    assert [info.name for info in bootstrapped] == ["service:web"]
+    assert [info.name for info in bootstrapped] == ["service:slackbot"]
     row = await db_pool.fetchrow(
         "SELECT name, scopes, revoked_at, created_by FROM api_keys WHERE key_hash = $1",
-        hashlib.sha256(web_key.encode()).hexdigest(),
+        hashlib.sha256(slack_key.encode()).hexdigest(),
     )
     assert row is not None
-    assert row["name"] == "service:web"
-    assert list(row["scopes"]) == ["agent", "tools:paradigmdb"]
+    assert row["name"] == "service:slackbot"
+    assert list(row["scopes"]) == ["agent"]
     assert row["revoked_at"] is None
     assert row["created_by"] == "service-bootstrap"
 
@@ -1332,7 +1330,6 @@ async def test_bootstrap_service_api_keys_includes_local_dev_key(db_pool, monkey
 
     local_dev_key = f"aiv2_{uuid.uuid4().hex}{uuid.uuid4().hex}"
     monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
-    monkeypatch.delenv("WEB_API_KEY", raising=False)
     monkeypatch.setenv("LOCAL_DEV_API_KEY", local_dev_key)
 
     bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool, secret_manager_url="")

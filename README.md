@@ -39,7 +39,7 @@ Centaur is infrastructure for running AI agents in production that limits the bl
 
 7. **Free for anyone to use any way they want**: Open source, built by [Paradigm](https://paradigm.xyz). Private extensions via submodule + docker-compose override — no fork required.
 
-Centaur's entire security-critical core is **~3,700 lines of Python**: the [API](services/api/) (2,400), [firewall](services/firewall/) (950), and [secrets manager](services/secrets/) (270). That's what runs your agents, guards your keys, and enforces isolation. Everything else — 46 [tool plugins](tools/), a [Slack interface](services/slackbot/), infra config — is a leaf-node integration that doesn't touch auth, secrets, or sandbox boundaries.
+Centaur's entire security-critical core is **~3,700 lines of Python**: the [API](services/api/) (2,400), [firewall](services/firewall/) (950), and [secrets manager](services/secrets/) (270). That's what runs your agents, guards your keys, and enforces isolation. Everything else — 46 [tool plugins](tools/), a [Slack interface](services/slackbot/), infra config — is a leaf-node integration that doesn't touch API key verification, secrets, or sandbox boundaries.
 
 ## How It Compares
 
@@ -87,7 +87,7 @@ Centaur's security is defense in depth — no single layer is a silver bullet, b
 
 - **Per-host injection maps**: Built from tool manifests, pushed to the firewall on startup and on every hot-reload. Wildcard host patterns (`*.domain.com`) are supported. Catch-all domains and raw IPs are rejected.
 
-- **7 isolated Docker networks**: `secrets_net` (firewall→secrets only), `secrets_egress` (secrets→1Password), `agent_net` (sandbox↔firewall↔API), `app_net` (API↔slackbot↔auth), `control_net` (API↔pgbouncer↔firewall), `data_net` (postgres↔pgbouncer↔API), `obs_net` (monitoring).
+- **8 isolated Docker networks**: `default` (host-facing slackbot plus internal app traffic), `secrets_net` (firewall→secrets only), `secrets_egress` (secrets→1Password), `agent_net` (sandbox↔firewall↔API), `agent_egress` (sandbox direct egress for Amp DTW), `backend_net` (postgres/slackbot/api backplane), `control_net` (api↔pgbouncer↔firewall), and `obs_net` (monitoring).
 
 - **Warm pool**: Pre-spawned containers eliminate ~15s cold-start latency. The pool auto-replenishes, recovers on API restart, and mints fresh scoped tokens on claim.
 

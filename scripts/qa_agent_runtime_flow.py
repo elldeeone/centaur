@@ -31,7 +31,6 @@ DEFAULT_REQUEST_TIMEOUT_S = float(os.environ.get("QA_AGENT_RUNTIME_REQUEST_TIMEO
 DEFAULT_EXTERNAL_API_KEY_ENV_KEYS = (
     "QA_AGENT_RUNTIME_API_KEY",
     "LOCAL_DEV_API_KEY",
-    "WEB_API_KEY",
     "SLACKBOT_API_KEY",
 )
 
@@ -1135,7 +1134,7 @@ class QARunner:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run durable agent runtime QA through the external nginx/API auth path, "
+            "Run durable agent runtime QA through the configured API path, "
             "with optional in-agent API tool access smoke checks."
         ),
     )

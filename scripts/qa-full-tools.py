@@ -272,7 +272,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--external-url",
         default=os.environ.get("QA_FULL_TOOLS_EXTERNAL_URL", DEFAULT_EXTERNAL_URL),
-        help="Base URL for nginx/Bearer replay (default: %(default)s)",
+        help="Base URL for authenticated API replay (default: %(default)s)",
     )
     return parser.parse_args()
 
@@ -299,7 +299,7 @@ def require_running_service(api_service: str) -> None:
                 f"""
                 {api_service} service is not running.
                 Start the compose stack first, for example:
-                docker compose up -d secrets firewall postgres pgbouncer docker-socket-proxy api nginx web slackbot
+                docker compose up -d secrets firewall postgres pgbouncer docker-socket-proxy api slackbot
                 """
             ).strip()
         )
@@ -717,10 +717,9 @@ def to_markdown(report: dict[str, Any], json_path: Path, md_path: Path) -> str:
         f"{', '.join(f'{count} {name}' for name, count in report['layer1']['summary'].items())} |"
     )
     lines.append(
-        f"| 2. Nginx | ✅ | {', '.join(f'{count} {name}' for name, count in report['layer2']['summary'].items())} |"
+        f"| 2. Authenticated API edge | ✅ | {', '.join(f'{count} {name}' for name, count in report['layer2']['summary'].items())} |"
     )
     lines.append("| 3a. Slackbot | ⏭️ | Not part of this tool-focused pass |")
-    lines.append("| 3b. Web App | ⏭️ | Not part of this tool-focused pass |")
     lines.append("")
     lines.append("## Services")
     lines.append("")
@@ -767,18 +766,18 @@ def to_markdown(report: dict[str, Any], json_path: Path, md_path: Path) -> str:
             continue
         lines.append(f"| {tool} | {result.get('note', '').replace('|', '/')} |")
     lines.append("")
-    lines.append("## Proxy/Auth Notes")
+    lines.append("## API Key Notes")
     lines.append("")
     if report.get("layer1_transport") == "external_host_key":
         lines.append(
             "1. Layer 1 runs entirely from the host using the configured local dev key (`LOCAL_DEV_API_KEY` or `QA_FULL_TOOLS_API_KEY`)."
         )
         lines.append(
-            "2. Layer 2 replays the same read-only probes through nginx using an ephemeral DB-backed `aiv2_*` key minted and revoked entirely from the host."
+            "2. Layer 2 replays the same read-only probes through the configured authenticated API edge using an ephemeral DB-backed `aiv2_*` key minted and revoked entirely from the host."
         )
     else:
         lines.append(
-            "1. Layer 2 replays the same read-only probes through nginx using an ephemeral DB-backed `aiv2_*` key minted via the localhost admin route."
+            "1. Layer 2 replays the same read-only probes through the configured authenticated API edge using an ephemeral DB-backed `aiv2_*` key minted via the localhost admin route."
         )
         lines.append("2. The script revokes that temporary key automatically after the replay completes.")
     if report.get("layer_mismatches"):
@@ -800,8 +799,6 @@ def main() -> int:
     args.local_api_key_source = local_api_key[0] if local_api_key else None
     args.local_api_key = local_api_key[1] if local_api_key else None
     require_running_service(args.api_service)
-    if args.local_api_key:
-        require_running_service("nginx")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
