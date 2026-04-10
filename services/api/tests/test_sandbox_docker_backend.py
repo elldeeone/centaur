@@ -87,3 +87,37 @@ async def test_create_connects_dind_and_sandbox_to_egress(monkeypatch: pytest.Mo
     connected_ids = {call["Container"] for call in egress.connections}
     assert session.sandbox_id in connected_ids
     assert any(container_id.startswith("centaur-dind-") for container_id in connected_ids)
+
+
+@pytest.mark.asyncio
+async def test_create_mounts_centaur_skills_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake_client = FakeDockerClient()
+    backend = DockerSandboxBackend()
+    backend._client = fake_client
+
+    repo_root = tmp_path / "centaur"
+    skills_dir = repo_root / ".agents" / "skills"
+    skills_dir.mkdir(parents=True)
+    (repo_root / "services" / "sandbox").mkdir(parents=True)
+    (repo_root / "services" / "sandbox" / "SYSTEM_PROMPT.md").write_text("prompt")
+
+    monkeypatch.setenv("REPO_HOST_DIR", str(repo_root))
+    monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
+
+    async def fake_wait_ready(*_args, **_kwargs) -> float:
+        return 0.01
+
+    monkeypatch.setattr("api.sandbox.docker._wait_ready", fake_wait_ready)
+
+    await backend.create("C123:1.2", "amp", "amp")
+
+    sandbox = next(
+        container
+        for name, container in fake_client.containers.by_name.items()
+        if name.startswith("centaur-sandbox-")
+    )
+    binds = sandbox.config["HostConfig"]["Binds"]
+    assert f"{skills_dir}:/home/agent/centaur-skills:ro" in binds

@@ -153,9 +153,13 @@ fi
             [
                 "sh", "-c",
                 '''
+MOUNTED_CENTAUR_SKILLS="/home/agent/centaur-skills"
 CENTAUR_SKILLS="/home/agent/github/paradigmxyz/centaur/.agents/skills"
 WS_SKILLS="/home/agent/workspace/.agents/skills"
-if [ -d "$CENTAUR_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
+if [ -d "$MOUNTED_CENTAUR_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
+    mkdir -p "$WS_SKILLS"
+    cp -r "$MOUNTED_CENTAUR_SKILLS"/. "$WS_SKILLS"/
+elif [ -d "$CENTAUR_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
     mkdir -p "$WS_SKILLS"
     cp -r "$CENTAUR_SKILLS"/. "$WS_SKILLS"/
 fi

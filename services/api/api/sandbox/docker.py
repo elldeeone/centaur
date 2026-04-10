@@ -197,6 +197,7 @@ class DockerSandboxBackend(SandboxBackend):
     ) -> SandboxSession:
         client = self._get_client()
         repos_dir = os.path.abspath(_repos_host_dir())
+        repo_host = _repo_host_dir()
 
         container_name = f"centaur-sandbox-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
         env = _container_env(
@@ -264,11 +265,12 @@ class DockerSandboxBackend(SandboxBackend):
         binds = [
             f"{repos_dir}:/home/agent/github:ro",
         ]
+        skills_host = os.path.join(repo_host, ".agents", "skills")
+        binds.append(f"{skills_host}:/home/agent/centaur-skills:ro")
         vol = os.getenv("FIREWALL_CERTS_VOLUME", "firewall-certs")
         binds.append(f"{vol}:/firewall-certs:ro")
 
         # Bind-mount base system prompt
-        repo_host = _repo_host_dir()
         base_prompt_host = os.path.join(repo_host, "services", "sandbox", "SYSTEM_PROMPT.md")
         binds.append(f"{base_prompt_host}:/home/agent/AGENTS_BASE.md:ro")
 
