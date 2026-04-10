@@ -40,7 +40,7 @@ configure_structlog()
 
 log = structlog.get_logger().bind(service="api")
 
-# Suppress noisy uvicorn access logs (nginx already logs requests)
+# Suppress noisy uvicorn access logs; container-level logs already capture requests.
 for _uvi_name in ("uvicorn.access",):
     logging.getLogger(_uvi_name).propagate = False
 

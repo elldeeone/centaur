@@ -39,7 +39,7 @@ Centaur is infrastructure for running AI agents in production that limits the bl
 
 7. **Free for anyone to use any way they want**: Open source, built by [Paradigm](https://paradigm.xyz). Private extensions via submodule + docker-compose override — no fork required.
 
-Centaur's entire security-critical core is **~3,700 lines of Python**: the [API](services/api/) (2,400), [firewall](services/firewall/) (950), and [secrets manager](services/secrets/) (270). That's what runs your agents, guards your keys, and enforces isolation. Everything else — 46 [tool plugins](tools/), a [Slack interface](services/slackbot/), infra config — is a leaf-node integration that doesn't touch auth, secrets, or sandbox boundaries.
+Centaur's entire security-critical core is **~3,700 lines of Python**: the [API](services/api/) (2,400), [firewall](services/firewall/) (950), and [secrets manager](services/secrets/) (270). That's what runs your agents, guards your keys, and enforces isolation. Everything else — 46 [tool plugins](tools/), a [Slack interface](services/slackbot/), infra config — is a leaf-node integration that doesn't touch API key verification, secrets, or sandbox boundaries.
 
 ## How It Compares
 
