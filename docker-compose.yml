@@ -175,6 +175,8 @@ services:
     build:
       context: .
       dockerfile: services/slackbot/Dockerfile
+    ports:
+      - "127.0.0.1:8000:3001"
     environment:
       CENTAUR_API_URL: http://api:8000
       SECRET_MANAGER_URL: http://firewall:8081
@@ -232,22 +234,6 @@ services:
       dockerfile: services/sandbox/Dockerfile
     image: centaur-agent:latest
     profiles: ["build"]
-
-  nginx:
-    build:
-      context: services/nginx
-    ports:
-      - "127.0.0.1:8000:8000"
-      - "[::1]:8000:8000"
-    depends_on:
-      - auth
-      - api
-      - slackbot
-      - grafana
-    networks:
-      - default
-      - obs_net
-    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:latest

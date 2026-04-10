@@ -35,7 +35,7 @@ jobs:
       - name: Health check
         run: |
           for i in $(seq 1 90); do
-            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+            if docker exec centaur-api-1 curl -sf http://localhost:8000/health/ready > /dev/null; then
               echo "API healthy after ${i}s"
               exit 0
             fi
