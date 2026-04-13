@@ -69,50 +69,7 @@ Or create a DB-backed key for external use (see [API Key Management](#api-key-ma
 
 ## Architecture
 
-```
-                           Slack
-                             |
-                      events / webhooks
-                             v
-        ┌───────────────────────────────────────────────┐
-        │ slackbot (Next.js, :3001, host :8000)         │
-        │ health endpoint + Slack webhook surface       │
-        └───────────────────────┬───────────────────────┘
-                                │ spawn / message / execute
-                                v
-        ┌───────────────────────────────────────────────┐
-        │ api (FastAPI :8000)                           │
-        │ durable control plane + tools + admin         │
-        └───────────────┬───────────────┬───────────────┘
-                        │               │
-                        │ DB pool       │ Docker API
-                        v               v
-              ┌────────────────┐   ┌──────────────────────┐
-              │ pgbouncer      │   │ docker-socket-proxy  │
-              └──────┬─────────┘   └──────────┬───────────┘
-                     │                        │
-                     v                        v
-              ┌────────────────┐     ┌────────────────────┐
-              │ Postgres       │     │ sandbox            │
-              │ durable state  │<--->│ centaur-agent      │
-              └────────────────┘     └─────────┬──────────┘
-                                               │ tool calls + HTTPS proxy
-                                               v
-                                      ┌────────────────────┐
-                                      │ firewall           │
-                                      │ mitmproxy          │
-                                      └─────────┬──────────┘
-                                                │
-                         ┌──────────────────────┴──────────────────────┐
-                         v                                             v
-                ┌────────────────────┐                       external LLMs
-                │ secrets (:8100)    │                       + external APIs
-                │ 1Password / env    │
-                └────────────────────┘
-
-        Observability: api / slackbot / firewall / fluentbit ->
-                       VictoriaLogs + VictoriaMetrics -> Grafana
-```
+See the [architecture diagram in the README](README.md#architecture).
 
 ### End-to-End Request Flow
 
@@ -269,16 +226,18 @@ Agents call tools via `curl http://api:8000/tools/<tool>/<method>` over the `age
 centaur/
 ├── services/
 │   ├── api/              # FastAPI control plane (standalone service)
-│   │   ├── api/          # Python package (routers/, agent.py, app.py, tool_manager.py)
+│   │   ├── api/          # Python package
+│   │   │   ├── routers/  # HTTP endpoints (agent, workflows, admin, health, …)
+│   │   │   ├── sandbox/  # Sandbox backend abstraction (Docker, pluggable)
+│   │   │   ├── workflows/# Built-in workflow handlers (agent_turn, slack_thread_turn)
+│   │   │   ├── runtime_control.py   # Durable execution control-plane
+│   │   │   ├── workflow_engine.py   # Durable workflow engine (checkpoint/replay)
+│   │   │   ├── warm_pool.py         # Pre-warmed sandbox pool
+│   │   │   ├── vm_metrics.py        # Push-based VictoriaMetrics metrics
+│   │   │   └── observability.py     # Execution observation projections
 │   │   ├── Dockerfile
-│   │   ├── entrypoint.sh
-│   │   ├── pyproject.toml
-│   │   ├── ruff.toml
 │   │   └── tools.toml    # Tool plugin directory config
 │   ├── secrets/          # Pluggable secrets manager (standalone service)
-│   │   ├── app.py
-│   │   ├── Dockerfile
-│   │   └── pyproject.toml
 │   ├── firewall/         # mitmproxy addon — credential injection proxy
 │   ├── sandbox/          # Agent container image (Ubuntu 24.04 + uv + gh + node + amp)
 │   ├── slackbot/         # Next.js + Slack Bolt event listener (pnpm)
@@ -287,15 +246,16 @@ centaur/
 │   ├── fluentbit/        # Fluent Bit log shipping config
 │   └── alloy/            # Grafana Alloy config
 ├── centaur_sdk/          # Standalone SDK (pip install centaur-sdk)
-├── tools/                # Open-source tool plugins (by category)
-│   ├── comms/            # Telegram, Twitter
-│   ├── crypto/           # Alchemy, Allium, Dune, Etherscan, Nansen, …
-│   ├── finance/          # Databento, EODHD, Standard Metrics
-│   ├── gov/              # Congress, FedReg, LegiStorm, OpenFEC
-│   ├── infra/            # Grafana, PostHog, reth, VLogs, …
-│   ├── media/            # Nano Banana, Transcriber, Veo3
-│   ├── productivity/     # Figma, Linear, Notion, OpenTable
-│   └── research/         # Archiver, Crunchbase, Google News, Websearch, …
+├── packages/             # Shared packages (api-client, harness-events)
+├── tools/                # Open-source tool plugins (auto-discovered)
+│   ├── alchemy/          # One directory per tool — each has client.py + pyproject.toml
+│   ├── websearch/
+│   ├── telegram/
+│   └── …                 # 60+ tool plugins (crypto, research, productivity, infra, …)
+├── workflows/            # External workflow definitions (auto-discovered)
+│   ├── agent_loop.py     # Recurring agent polling/monitoring loop
+│   ├── paradigm_pulse_daily.py  # Scheduled daily digest
+│   └── multi_step_demo.py       # Demo: branching, loops, conditionals
 ├── scripts/              # Operational scripts
 └── docker-compose.yml    # Full stack
 ```
@@ -369,9 +329,13 @@ uv run ruff format .         # auto-fix
 uv run pytest                # tests
 ```
 
-## Tool Conventions
+## Plugin System — Tools & Workflows
 
-Tools live in `tools/` organized by category and are discovered via `services/api/tools.toml`. Each tool is a directory with `client.py` (class + `_client()` factory), `pyproject.toml`, and optional `cli.py`. The API auto-discovers tools on startup and hot-reloads on file changes.
+Centaur has two plugin types that are auto-discovered at startup and hot-reloaded on file changes — no core code changes required to extend the system.
+
+### Tool Plugins
+
+Tools live in directories listed in `tools.toml` (`plugin_dirs`). Each tool is a directory with `client.py` (class + `_client()` factory), `pyproject.toml`, and optional `cli.py`. The API auto-discovers tools on startup, generates REST endpoints at `/tools/{name}/{method}`, and hot-reloads on file changes.
 
 - `client.py`: NO `load_dotenv()`. Secrets via `secret()` from `centaur_sdk.tool_sdk`.
 - `cli.py`: YES `load_dotenv()` at top. Thin typer wrapper for standalone use.
@@ -381,7 +345,7 @@ Tools live in `tools/` organized by category and are discovered via `services/ap
 Example:
 
 ```python
-# tools/research/my-tool/client.py
+# tools/my-tool/client.py
 import httpx
 
 class MyToolClient:
@@ -394,21 +358,110 @@ def _client():
     return MyToolClient()
 ```
 
+### Workflow Plugins
+
+Workflows live in directories listed in the `WORKFLOW_DIRS` env var (colon-separated paths, bind-mounted into the API container). Each workflow is a single Python file exporting `WORKFLOW_NAME`, an async `handler(params, ctx)`, and an optional `Input` dataclass. See [Durable Workflows](#durable-workflows) for the full programming model.
+
+Built-in workflows ship in `services/api/api/workflows/`. External workflows (like those in the top-level `workflows/` directory) are loaded identically — just point `WORKFLOW_DIRS` at them.
+
 ### Private overlay
 
-Organizations can extend Centaur with private tools without forking. Use the submodule + docker-compose override pattern:
+Organizations can extend Centaur with private tools and workflows without forking. Use the submodule + docker-compose override pattern:
 
 ```
 your-org-internal/
 ├── centaur/                         # git submodule → paradigmxyz/centaur
 ├── tools-private/                   # Your proprietary tools
-├── docker-compose.override.yml      # Adds your services + tool mounts
+├── workflows-private/               # Your proprietary workflows
+├── docker-compose.override.yml      # Adds your services + plugin mounts
 └── tools.toml                       # plugin_dirs = ["./centaur/tools", "./tools-private"]
 ```
 
 ```bash
 docker compose -f centaur/docker-compose.yml -f docker-compose.override.yml up -d
 ```
+
+## Durable Workflows
+
+The workflow engine (`workflow_engine.py`) provides a checkpoint/replay model inspired by [Cloudflare Workflows](https://developers.cloudflare.com/workflows/). The handler function IS the workflow — steps are runtime-discovered via `ctx.step(name, fn)` calls. The engine checkpoints each step result to Postgres. On resume after crash or suspension, the handler re-executes top-to-bottom but skips steps that already have checkpoints (returning the cached result instantly). Dynamic branching, loops, and conditional logic work naturally because it is just Python.
+
+### WorkflowContext API
+
+Every handler receives `(params, ctx)` where `ctx: WorkflowContext` provides:
+
+| Primitive | Purpose |
+|-----------|---------|
+| `ctx.step(name, fn)` | Execute *fn* exactly once; return cached result on replay. Supports `retry` (RetryPolicy) and `timeout`. |
+| `ctx.sleep(name, duration)` | Suspend the run for *duration*; checkpoint + resume automatically. |
+| `ctx.sleep_until(name, when)` | Suspend until a specific datetime. |
+| `ctx.wait_for_event(name, event_type, correlation_id)` | Suspend until an external event arrives via `POST /workflows/events`. |
+| `ctx.start_workflow(name, workflow_name, run_input)` | Create a child workflow run (returns immediately). |
+| `ctx.wait_for_workflow(name, run_id)` | Suspend until a child workflow reaches terminal state. |
+| `ctx.run_workflow(name, workflow_name, run_input)` | Start + wait in one call. |
+| `ctx.start_agent(name, text=…)` | Shorthand: start a child `agent_turn` workflow. |
+| `ctx.run_agent(name, text=…)` | Shorthand: start + wait for a child `agent_turn` workflow. |
+| `ctx.log(msg, **kwargs)` | Structured log, suppressed during replay. |
+
+### Writing a workflow
+
+```python
+# workflows/my_workflow.py
+from dataclasses import dataclass
+from typing import Any
+from api.workflow_engine import WorkflowContext
+
+WORKFLOW_NAME = "my_workflow"
+
+@dataclass
+class Input:
+    message: str = "hello"
+
+async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
+    greeting = await ctx.step("gather", lambda: {"msg": inp.message})
+    await ctx.sleep("pause", timedelta(minutes=5))
+    result = await ctx.run_agent("agent", text=f"Summarize: {greeting['msg']}")
+    return {"greeting": greeting, "agent_result": result}
+```
+
+### Workflow lifecycle
+
+Runs go through: `queued → running → sleeping/waiting → running → … → completed/failed/cancelled`.
+
+- **Worker pool**: `WORKFLOW_WORKER_CONCURRENCY` workers (default 2) poll for claimable runs.
+- **Lease-based fencing**: Each worker holds a lease on its run, extended by a heartbeat. If the worker dies, the lease expires and another worker reclaims the run.
+- **Schedules**: Cron-based or interval-based schedules are configured in `workflow_schedules` table and ticked by the worker loop.
+- **External events**: `POST /workflows/events` delivers events that wake waiting runs.
+- **Child workflows**: Parent→child relationships are tracked; cancelling a parent cascels linked executions.
+
+### Workflow REST API
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /workflows/runs` | Create a workflow run (`workflow_name`, `input`, optional `trigger_key` for idempotency, `eager_start`) |
+| `GET /workflows/runs` | List runs (filter by `workflow_name`, `thread_key`, `status`, `parent_run_id`) |
+| `GET /workflows/runs/{run_id}` | Get run details (status, checkpoints, waiting_on) |
+| `GET /workflows/runs/{run_id}/children` | List child workflow runs |
+| `GET /workflows/runs/{run_id}/checkpoints` | Inspect all checkpoints for a run |
+| `POST /workflows/runs/{run_id}/cancel` | Cancel a run (idempotent for terminal runs) |
+| `POST /workflows/events` | Deliver an external event (`event_type`, `correlation_id`, `payload`) |
+
+### Built-in workflows
+
+| Workflow | Description |
+|----------|-------------|
+| `agent_turn` | Single durable agent turn: spawn → message → execute → wait for terminal result. |
+| `slack_thread_turn` | Same as `agent_turn` but requires a Slack `thread_key`. Used by the slackbot. |
+| `agent_loop` | Recurring agent loop: runs an agent turn every N seconds until the agent signals `{"done": true}`, max iterations, or deadline. |
+| `paradigm_pulse_daily` | Scheduled daily digest via a single agent turn. |
+
+### Durable state
+
+| Table | What |
+|-------|------|
+| `workflow_runs` | Run metadata, status, input/output, parent/root hierarchy |
+| `workflow_checkpoints` | Per-step cached results, linked execution/child-run IDs |
+| `workflow_schedules` | Cron/interval schedule definitions with next_run_at tracking |
+| `workflow_events` | External events for `wait_for_event` correlation |
 
 ## Agent Sandbox
 
@@ -595,13 +648,13 @@ All deploys happen automatically via GitHub Actions on merge to `main`.
 
 | Change | Deploy action |
 |--------|--------------|
-| `tools/**` only | Zero-downtime hot-reload (file watcher auto-detects, no restart) |
+| `tools/**` or `workflows/**` only | Zero-downtime hot-reload (file watcher auto-detects, no restart) |
 | `services/api/**` | `docker compose up -d --build api` |
 | `services/slackbot/**` | `docker compose up -d --build slackbot` |
 | `services/sandbox/**` | `docker compose build sandbox` |
 | `docker-compose.yml`, `services/api/Dockerfile` | Rebuild API |
 
-**Tool hot-reload:** The API watches bind-mounted `tools/` directories via `watchfiles`. When tool files change, the API auto-reloads within seconds — no container restart needed.
+**Tool & workflow hot-reload:** The API watches bind-mounted `tools/` and `workflows/` directories via `watchfiles`. When plugin files change, the API auto-reloads within seconds — no container restart needed.
 
 ## E2E Testing (without Slack)
 

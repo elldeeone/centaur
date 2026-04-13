@@ -3,7 +3,7 @@
 </h1>
 
 <h4 align="center">
-    Secure, self-hosted AI agent runtime where the agent never sees your secrets.
+    Self-hosted AI agent platform: give your team a shared agent that can use your tools, run durable workflows, and never see your secrets.
     <br>Built by <a href="https://paradigm.xyz">Paradigm</a>.
 </h4>
 
@@ -14,32 +14,98 @@
 
 <p align="center">
   <a href="#whats-centaur">What's Centaur?</a> •
-  <a href="#how-it-compares">How It Compares</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#durable-workflows">Durable Workflows</a> •
   <a href="#security-model">Security Model</a> •
   <a href="./AGENTS.md">Developer Guide</a>
 </p>
 
 ## What's Centaur?
 
-Today's open-source agent runtimes run as a single process with full system access. The agent holds your API keys, has shell access, and can reach the internet directly. [CrowdStrike](https://www.crowdstrike.com/en-us/blog/what-security-teams-need-to-know-about-openclaw-ai-super-agent/) calls this "untrusted code execution with persistent credentials." Prompt injection turns the agent into a backdoor.
+Centaur is infrastructure for teams that want to deploy AI agents to their organization — in Slack, on the web, or via API — with shared tools, durable multi-step workflows, and security that doesn't require trusting the agent with your keys.
 
-Centaur is infrastructure for running AI agents in production that limits the blast radius by architecture:
+1. **Collaboration-first**: Deploy an agent your whole team can talk to. Users interact via [Slack](services/slackbot/) or the [REST API](AGENTS.md#service-interface-contracts) directly. Each conversation gets its own isolated sandbox, but tools, workflows, and knowledge are shared across the organization. Add a new tool or workflow and everyone has access immediately — no per-user setup.
 
-1. **Defense in depth**: Each conversation runs in an isolated Docker container on an internal-only network. A [MITM proxy](services/firewall/) injects credentials at the network boundary — the agent never holds them directly. The firewall enforces per-host credential scoping, HTTP method restrictions, SSRF protection, rate limiting, response scanning for leaked secrets, and structured audit logging. A compromised container can still make authenticated requests through the proxy, but it can't extract credentials, reach internal services, or operate undetected.
+2. **Durable workflows**: Compose multi-step agent pipelines that survive crashes and span hours or days. [Checkpoint/replay](AGENTS.md#durable-workflows) means you can `sleep` for five minutes between polling iterations, `wait_for_event` from an external webhook, or chain parent→child agent turns — all with exactly-once step execution. Cron schedules, external events, and child workflows are built in. Just drop a Python file in [`workflows/`](workflows/).
 
-2. **Harness-agnostic**: Not locked to a single AI runtime. Run [Amp](https://ampcode.com), Claude Code, Codex, or any CLI-based agent inside the sandbox. The sandbox image ships with Node.js, Rust, Python, and git — agents can `git clone`, `cargo build`, and run tests in a real Linux environment.
+3. **Defense in depth**: Each conversation runs in an isolated Docker container on an internal-only network. A [MITM proxy](services/firewall/) injects credentials at the network boundary — the agent never holds them directly. The firewall enforces per-host credential scoping, HTTP method restrictions, SSRF protection, rate limiting, response scanning for leaked secrets, and structured audit logging. A compromised container can still make authenticated requests through the proxy, but it can't extract credentials, reach internal services, or operate undetected.
 
-3. **Modularity**: Every service — [API](services/api/), [secrets manager](services/secrets/), [firewall](services/firewall/), [sandbox](services/sandbox/), [slackbot](services/slackbot/) — is standalone with its own Dockerfile and dependency manifest. Use them together via Docker Compose, or pull individual pieces into your own stack.
+4. **Harness-agnostic**: Not locked to a single AI runtime. Run [Amp](https://ampcode.com), Claude Code, Codex, or any CLI-based agent inside the sandbox. The sandbox image ships with Node.js, Rust, Python, and git — agents can `git clone`, `cargo build`, and run tests in a real Linux environment.
 
-4. **Extensibility**: Convention-based Python [tool plugins](tools/) and standard [`SKILL.md`](.agents/skills/) workflow instructions, both hot-reloadable. The [`centaur_sdk`](centaur_sdk/) is a standalone pip-installable package for building tools outside the repo.
-
-5. **Pluggable secrets**: Ships with [1Password](https://1password.com/) support. The secrets backend is an interface — bring your own HashiCorp Vault, AWS Secrets Manager, or plain environment variables.
+5. **Extensible by design**: Convention-based Python [tool plugins](tools/) (60+) and [durable workflow plugins](workflows/) are auto-discovered and hot-reloaded — no core code changes to extend the system. The [`centaur_sdk`](centaur_sdk/) is a standalone pip-installable package for building tools outside the repo. Private extensions via submodule + docker-compose override — no fork required.
 
 6. **Observable by default**: Every service writes structured JSON to stdout. [Fluent Bit](services/fluentbit/) auto-discovers all containers (including ephemeral agent sandboxes) and ships logs to [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/). Metrics push to [VictoriaMetrics](https://docs.victoriametrics.com/). The [firewall](services/firewall/) emits audit events for every outbound request. Query everything in [Grafana](services/grafana/) or via [LogsQL](https://docs.victoriametrics.com/victorialogs/logsql/) CLI.
 
-7. **Free for anyone to use any way they want**: Open source, built by [Paradigm](https://paradigm.xyz). Private extensions via submodule + docker-compose override — no fork required.
+Centaur's entire security-critical core is **~5,400 lines of Python**: the [API](services/api/) (3,900), [firewall](services/firewall/) (1,000), and [secrets manager](services/secrets/) (470). That's what runs your agents, guards your keys, and enforces isolation. Everything else — 60+ [tool plugins](tools/), [durable workflows](AGENTS.md#durable-workflows), a [Slack interface](services/slackbot/), infra config — is a leaf-node integration that doesn't touch auth, secrets, or sandbox boundaries.
 
-Centaur's entire security-critical core is **~3,700 lines of Python**: the [API](services/api/) (2,400), [firewall](services/firewall/) (950), and [secrets manager](services/secrets/) (270). That's what runs your agents, guards your keys, and enforces isolation. Everything else — 46 [tool plugins](tools/), a [Slack interface](services/slackbot/), infra config — is a leaf-node integration that doesn't touch API key verification, secrets, or sandbox boundaries.
+## Architecture
+
+```
+                           Slack
+                             |
+                      events / webhooks
+                             v
+        ┌───────────────────────────────────────────────┐
+        │ slackbot (Next.js, :3001, host :8000)         │
+        │ health endpoint + Slack webhook surface       │
+        └───────────────────────┬───────────────────────┘
+                                │ spawn / message / execute
+                                v
+        ┌───────────────────────────────────────────────┐
+        │ api (FastAPI :8000)                           │
+        │ durable control plane + tools + admin         │
+        │ workflow engine (checkpoint/replay)            │
+        └───────────────┬───────────────┬───────────────┘
+                        │               │
+                        │ DB pool       │ Docker API
+                        v               v
+              ┌────────────────┐   ┌──────────────────────┐
+              │ pgbouncer      │   │ docker-socket-proxy  │
+              └──────┬─────────┘   └──────────┬───────────┘
+                     │                        │
+                     v                        v
+              ┌────────────────┐     ┌────────────────────┐
+              │ Postgres       │     │ sandbox            │
+              │ durable state  │<--->│ centaur-agent      │
+              └────────────────┘     └─────────┬──────────┘
+                                               │ tool calls + HTTPS proxy
+                                               v
+                                      ┌────────────────────┐
+                                      │ firewall           │
+                                      │ mitmproxy          │
+                                      └─────────┬──────────┘
+                                                │
+                         ┌──────────────────────┴──────────────────────┐
+                         v                                             v
+                ┌────────────────────┐                       external LLMs
+                │ secrets (:8100)    │                       + external APIs
+                │ 1Password / env    │
+                └────────────────────┘
+
+        Observability: api / slackbot / firewall / fluentbit ->
+                       VictoriaLogs + VictoriaMetrics -> Grafana
+```
+
+## Durable Workflows
+
+The workflow engine uses checkpoint/replay — the handler function IS the workflow, and steps are checkpointed to Postgres. On resume after crash or suspension, the handler re-executes top-to-bottom but skips steps that already have results. Loops, branches, and conditionals work naturally because it's just Python.
+
+```python
+# workflows/my_workflow.py — drop this file in and it's live
+WORKFLOW_NAME = "my_workflow"
+
+async def handler(inp, ctx):
+    data = await ctx.step("fetch", lambda: fetch_data(inp.query))
+    await ctx.sleep("wait", timedelta(minutes=5))
+    result = await ctx.run_agent("analyze", text=f"Summarize: {data}")
+    return {"data": data, "analysis": result}
+```
+
+**Primitives**: `ctx.step()` (exactly-once execution), `ctx.sleep()` / `ctx.sleep_until()` (durable suspend), `ctx.wait_for_event()` (external webhook), `ctx.run_agent()` (spawn a child agent turn), `ctx.run_workflow()` (child workflow). Cron and interval schedules are built in.
+
+**REST API**: `POST /workflows/runs` (create), `GET /workflows/runs/{id}` (inspect), `POST /workflows/runs/{id}/cancel`, `POST /workflows/events` (deliver external events to waiting runs).
+
+See the [Developer Guide](AGENTS.md#durable-workflows) for full API reference, built-in workflows, and the WorkflowContext API.
 
 ## How It Compares
 
