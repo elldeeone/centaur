@@ -52,7 +52,7 @@ def _env_positive_int(name: str, default: int) -> int:
 
 REVIEW_WINDOW_HOURS_DEFAULT = _env_positive_int("SELF_IMPROVE_REVIEW_WINDOW_HOURS", 24)
 MAX_SELECTED_FIXES_DEFAULT = _env_positive_int("SELF_IMPROVE_MAX_SELECTED_FIXES", 1)
-CANDIDATE_LIMIT_DEFAULT = _env_positive_int("SELF_IMPROVE_CANDIDATE_LIMIT", 10)
+CANDIDATE_LIMIT_DEFAULT = _env_positive_int("SELF_IMPROVE_CANDIDATE_LIMIT", 5)
 CANDIDATE_FETCH_FACTOR = _env_positive_int("SELF_IMPROVE_CANDIDATE_FETCH_FACTOR", 4)
 REVIEW_PREFERRED_KEYS = (
     "tasks_reviewed",
@@ -858,10 +858,12 @@ async def _run_batch_review_pass(
         The `target_surface` must name a real file in the Centaur codebase.
         Vague recommendations are not acceptable.
 
-        Progress reporting: Generating the full review JSON is long. To avoid
-        watchdog timeouts, emit a short status line (e.g. "reviewing task N/M")
-        as plain assistant text between every 2-3 tasks you evaluate. These
-        status lines are ignored by the parser but keep the workflow alive.
+        Progress reporting: Generating the final review JSON can be long.
+        Between evaluating each task (before you start writing the final JSON
+        answer), emit a tiny `shell_command` call like `echo "reviewing N/M"`.
+        These shell calls reset the silence watchdog to 30 minutes and are
+        ignored by the parser. Do this after every 1-2 tasks you evaluate.
+        Then write the final JSON answer as your last message.
 
         {recent_titles_block}
 
