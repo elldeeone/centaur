@@ -166,20 +166,43 @@ def _normalize_message(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _message_user_display(message: dict[str, Any]) -> str:
+def _message_user_display(
+    message: dict[str, Any],
+    user_name_by_id: dict[str, str] | None = None,
+) -> str:
+    """Resolve a Slack-side display name for *message*.
+
+    In production, ``chat_messages.metadata`` only carries ``user_id`` —
+    the slackbot does not resolve names at insert time. We therefore take
+    an optional ``user_name_by_id`` cache (typically fetched once per run
+    via the Slack tool) and use it to hydrate the name. Explicit fields
+    on the metadata still win when present so local tests and future
+    slackbot changes that populate names directly keep working.
+    """
     metadata = message.get("metadata") or {}
     if not isinstance(metadata, dict):
         return ""
-    name = str(
+    direct = str(
         metadata.get("user_name")
         or metadata.get("name")
         or metadata.get("username")
         or ""
     ).strip()
-    return name
+    if direct:
+        return direct
+    if user_name_by_id:
+        user_id = str(metadata.get("user_id") or "").strip()
+        if user_id:
+            resolved = str(user_name_by_id.get(user_id) or "").strip()
+            if resolved:
+                return resolved
+    return ""
 
 
-def _serialize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _serialize_messages(
+    messages: list[dict[str, Any]],
+    user_name_by_id: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
     for message in messages:
         created_at = message.get("created_at")
@@ -192,7 +215,7 @@ def _serialize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 else None,
                 "text": message.get("text", ""),
                 "part_types": list(message.get("part_types") or []),
-                "user_name": _message_user_display(message),
+                "user_name": _message_user_display(message, user_name_by_id),
             }
         )
     return payload
@@ -402,6 +425,7 @@ def _reconstruct_task_from_thread(
     thread_messages: list[dict[str, Any]],
     source_created_at: dt.datetime,
     next_anchor_at: dt.datetime | None,
+    user_name_by_id: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     source_message_id = str(run.get("source_message_id") or "")
     source_message: dict[str, Any] | None = None
@@ -414,7 +438,7 @@ def _reconstruct_task_from_thread(
         source_message.get("text", "") if source_message else str(run.get("ask_text") or "")
     ).strip()
     source_user_name = (
-        _message_user_display(source_message) if source_message else ""
+        _message_user_display(source_message, user_name_by_id) if source_message else ""
     )
     prior_messages = [
         message
@@ -447,8 +471,8 @@ def _reconstruct_task_from_thread(
         "source_created_at": source_created_at.isoformat(),
         "source_user_name": source_user_name,
         "ask_text": ask_text,
-        "prior_context": _serialize_messages(prior_context),
-        "followups": _serialize_messages(followups),
+        "prior_context": _serialize_messages(prior_context, user_name_by_id),
+        "followups": _serialize_messages(followups, user_name_by_id),
         "workflow_run_id": str(run.get("run_id") or ""),
     }
 
@@ -626,11 +650,47 @@ async def _aggregate_execution_details(
     }
 
 
+async def _fetch_user_name_cache(ctx: WorkflowContext) -> dict[str, str]:
+    """Fetch the workspace-wide `user_id → display_name` map via the Slack tool.
+
+    The slackbot currently only persists ``user_id`` in message metadata,
+    so every scorecard narrative would otherwise have to say "a user".
+    We call ``slack.get_user_cache`` once per run, cache-friendly and
+    bounded (~1000 users max), and use the result to hydrate names on
+    evidence packs. On any failure we return an empty dict and the
+    workflow degrades gracefully back to the previous "a user" behavior.
+    """
+
+    async def _fetch() -> dict[str, str]:
+        from api.app import get_tool_manager
+
+        tm = get_tool_manager()
+        try:
+            raw = await tm.call_tool("slack", "get_user_cache", {})
+        except Exception as exc:
+            ctx.log("self_improve_user_cache_failed", error=str(exc))
+            return {}
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): str(v) for k, v in data.items() if v}
+
+    cache = await ctx.step("fetch_user_name_cache", _fetch, step_kind="tool_call")
+    if not isinstance(cache, dict):
+        return {}
+    ctx.log("self_improve_user_cache_loaded", size=len(cache))
+    return cache
+
+
 async def _collect_evidence_packs(
     ctx: WorkflowContext,
     *,
     review_window_hours: int,
     candidate_limit: int,
+    user_name_by_id: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=review_window_hours)
     fetch_limit = max(candidate_limit * CANDIDATE_FETCH_FACTOR, candidate_limit)
@@ -721,6 +781,7 @@ async def _collect_evidence_packs(
                 thread_messages=messages,
                 source_created_at=source_time,
                 next_anchor_at=next_anchor_at,
+                user_name_by_id=user_name_by_id,
             )
             if _looks_insufficient(task):
                 live_messages = await _fetch_live_thread_messages(ctx, thread_key=thread_key)
@@ -735,6 +796,7 @@ async def _collect_evidence_packs(
                         thread_messages=live_messages,
                         source_created_at=source_time,
                         next_anchor_at=next_anchor_at,
+                        user_name_by_id=user_name_by_id,
                     )
 
             execution = await _aggregate_execution_details(ctx, run_ids=list(anchor["run_ids"]))
@@ -1022,6 +1084,43 @@ def _slack_pr_link(pr_number: int | str, pr_url: str) -> str:
     return f"<{url}|#{number}>"
 
 
+def _slack_thread_archive_url(channel: str, thread_ts: str) -> str:
+    """Build the `https://slack.com/archives/<channel>/p<compact_ts>` URL.
+
+    Slack archive URLs use a compact timestamp format where the `.` in
+    `1776374169.372999` becomes `p1776374169372999`. Returns empty string
+    when we lack the data needed to build a usable link.
+    """
+    channel = str(channel or "").strip()
+    ts = str(thread_ts or "").strip()
+    if not channel or not ts:
+        return ""
+    compact = ts.replace(".", "")
+    return f"https://slack.com/archives/{channel}/p{compact}"
+
+
+def _render_source_thread_links(source_threads: list[dict[str, Any]] | None) -> str:
+    """Render one or more source threads as Slack `<url|thread>` links.
+
+    Returns an empty string when there are no usable entries so the caller
+    can skip the line entirely. Multiple threads render comma-separated
+    so the reader can jump to whichever session looks most relevant.
+    """
+    if not source_threads:
+        return ""
+    links: list[str] = []
+    for entry in source_threads:
+        if not isinstance(entry, dict):
+            continue
+        url = _slack_thread_archive_url(
+            str(entry.get("channel") or ""),
+            str(entry.get("thread_ts") or ""),
+        )
+        if url:
+            links.append(f"<{url}|thread>")
+    return ", ".join(links)
+
+
 def _clip(text: str, max_chars: int = 500) -> str:
     stripped = str(text or "").strip()
     if len(stripped) <= max_chars:
@@ -1087,6 +1186,10 @@ def _build_scorecard_markdown(
         narrative = _clip(fix.get("slack_narrative"))
         if narrative:
             lines.append(f"    - _Why:_ {narrative}")
+        thread_links = _render_source_thread_links(fix.get("source_threads"))
+        if thread_links:
+            label = "Thread" if "," not in thread_links else "Threads"
+            lines.append(f"    - _{label}:_ {thread_links}")
 
     opportunities = [
         item
@@ -1123,6 +1226,10 @@ def _build_scorecard_markdown(
         narrative = _clip(build.get("slack_narrative"))
         if narrative:
             lines.append(f"    - _Why:_ {narrative}")
+        thread_links = _render_source_thread_links(build.get("source_threads"))
+        if thread_links:
+            label = "Thread" if "," not in thread_links else "Threads"
+            lines.append(f"    - _{label}:_ {thread_links}")
 
     opened_pr_entries = [
         item
@@ -1151,6 +1258,10 @@ def _build_scorecard_markdown(
         narrative = _clip(entry.get("slack_narrative"))
         if narrative:
             lines.append(f"    - _Why:_ {narrative}")
+        thread_links = _render_source_thread_links(entry.get("source_threads"))
+        if thread_links:
+            label = "Thread" if "," not in thread_links else "Threads"
+            lines.append(f"    - _{label}:_ {thread_links}")
 
     lines.append("- Child workflow errors:")
     if not failed_entries:
@@ -1309,6 +1420,9 @@ def _annotate_child_results_with_narratives(
             narrative = str(fix.get("slack_narrative") or "").strip()
             if narrative:
                 entry["slack_narrative"] = narrative
+            source_threads = fix.get("source_threads")
+            if source_threads and not entry.get("source_threads"):
+                entry["source_threads"] = source_threads
             for key in ("dominant_failure_mode", "fix_type", "title"):
                 value = fix.get(key)
                 if value and not entry.get(key):
@@ -1461,11 +1575,14 @@ async def _load_recent_notifier_stats(ctx: WorkflowContext) -> dict[str, int]:
 
 
 async def _run_parent(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
+    user_name_by_id = await _fetch_user_name_cache(ctx)
+
     async def _collect() -> list[dict[str, Any]]:
         return await _collect_evidence_packs(
             ctx,
             review_window_hours=max(inp.review_window_hours, 1),
             candidate_limit=max(inp.candidate_limit, 1),
+            user_name_by_id=user_name_by_id,
         )
 
     all_tasks = await ctx.step("collect_tasks", _collect, step_kind="gather")
@@ -1661,8 +1778,10 @@ async def _run_fix_child(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         content from specific user conversations. Describe system behavior
         patterns, not individual sessions.
 
-        After opening the PR, verify with `gh pr view` that the labels and
-        metadata block are present. Fix the PR if verification fails.
+        After opening the PR, verify with `gh pr view` that the required
+        labels (`self-improve` and `fix-type:{fix_type}`) are present on the
+        PR. Fix the PR if verification fails. Do NOT add any hidden HTML
+        comment metadata block — labels alone identify self-improve PRs.
 
         Return JSON only with these top-level keys:
         - `research`: object with root_cause, fix_type, affected_files,

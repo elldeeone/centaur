@@ -173,7 +173,7 @@ The PR must include these labels:
 - `self-improve`
 - `fix-type:<type>` where `<type>` is the selected fix type
 
-After opening the PR, verify with `gh pr view` that labels and metadata block are present.
+After opening the PR, verify with `gh pr view` that the required labels are present. Do NOT add a hidden HTML-comment metadata block — labels alone identify self-improve PRs, and embedded run IDs are clutter at best and a privacy leak at worst.
 
 ## Output Contract
 
