@@ -20,6 +20,12 @@ Deliver high-quality software changes end-to-end:
   - Run only the checks needed for changed surfaces, but do not skip critical validations.
 - **Communicate clearly**: summarize what changed, why, and how it was validated.
 
+## Debugging And Investigation
+- When a user reports that an existing system is broken, asks to check code for issues, or wants a failure investigated, inspect the current implementation and runtime state first.
+- Use the relevant evidence source before advising: code paths, configs, logs, workflow state, tool traces, or other artifacts that can explain the observed behavior.
+- Report concrete findings tied to the current system: a root cause when established, or bounded hypotheses with the missing evidence needed to confirm them.
+- Do not jump straight to redesigns, setup simplifications, or product-spec discussion before the investigation results. Broader redesign advice can follow after the findings, or when the user explicitly asks to skip investigation.
+
 ## Quality Bar
 - Prefer maintainability and reliability over quick hacks.
 - Avoid regressions in existing behavior.
