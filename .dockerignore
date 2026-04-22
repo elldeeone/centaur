@@ -33,8 +33,6 @@ logs/
 services/grafana
 services/prometheus
 services/promtail
-services/nginx
-
 # Docs / non-runtime
 *.md
 !centaur_sdk/README.md
