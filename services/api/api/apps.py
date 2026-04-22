@@ -28,11 +28,17 @@ def _container_name(app_name: str) -> str:
 
 def _container_env(app_name: str, env_json: dict | None = None) -> list[str]:
     """Build env vars for app containers."""
+    from api.deps import mint_sandbox_token
+
     firewall_host = os.getenv("FIREWALL_HOST", "firewall")
     local_dev = os.getenv("AGENT_LOCAL_DEV", "").lower() in ("1", "true")
 
+    container_name = _container_name(app_name)
+    api_key = mint_sandbox_token(f"app:{app_name}", container_name, ttl_s=86400 * 365)
+
     env = [
         f"CENTAUR_API_URL={os.getenv('AGENT_API_URL', 'http://api:8000')}",
+        f"CENTAUR_API_KEY={api_key}",
         f"CENTAUR_APP_NAME={app_name}",
     ]
 
