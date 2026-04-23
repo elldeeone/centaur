@@ -84,12 +84,15 @@ async def _push_injection_map() -> None:
     firewall polls the API for the map before the API is ready.
     """
     firewall_url = os.environ.get("FIREWALL_HEALTH_URL", "http://firewall:8081")
+    control_token = os.environ.get("FIREWALL_CONTROL_TOKEN", "").strip()
+    headers = {"Authorization": f"Bearer {control_token}"} if control_token else {}
     injection_map = tool_manager.build_injection_map()
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{firewall_url}/injection-map",
                 json=injection_map,
+                headers=headers,
                 timeout=5,
             )
             resp.raise_for_status()

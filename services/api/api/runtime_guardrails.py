@@ -34,6 +34,8 @@ async def check_runtime_credentials() -> dict[str, object]:
         }
 
     firewall_url = os.getenv("FIREWALL_HEALTH_URL", "http://firewall:8081").rstrip("/")
+    control_token = os.environ.get("FIREWALL_CONTROL_TOKEN", "").strip()
+    headers = {"Authorization": f"Bearer {control_token}"} if control_token else {}
     missing_keys: list[str] = []
     errors: list[str] = []
     key_lengths: dict[str, int] = {}
@@ -43,7 +45,7 @@ async def check_runtime_credentials() -> dict[str, object]:
             for key in keys:
                 url = f"{firewall_url}/secrets/{quote(key, safe='')}"
                 try:
-                    resp = await client.get(url)
+                    resp = await client.get(url, headers=headers)
                 except Exception as exc:  # pragma: no cover - network failures are environment-specific
                     errors.append(f"{key}:request_failed:{exc}")
                     continue

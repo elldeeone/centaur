@@ -52,10 +52,12 @@ async def _resolve_secrets(keys: list[str]) -> dict[str, str]:
             missing.append(k)
     if not missing:
         return result
+    control_token = os.environ.get("FIREWALL_CONTROL_TOKEN", "").strip()
+    headers = {"Authorization": f"Bearer {control_token}"} if control_token else {}
     async with httpx.AsyncClient(timeout=5) as client:
         for k in missing:
             try:
-                resp = await client.get(f"{_FIREWALL_URL}/secrets/{k}")
+                resp = await client.get(f"{_FIREWALL_URL}/secrets/{k}", headers=headers)
                 if resp.status_code == 200:
                     val = resp.json().get("value", "")
                     if val:

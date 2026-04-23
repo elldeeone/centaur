@@ -15,6 +15,7 @@ jobs:
     env:
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
       SECRET_MANAGER_TOKEN: ${{ secrets.SECRET_MANAGER_TOKEN }}
+      FIREWALL_CONTROL_TOKEN: ${{ secrets.FIREWALL_CONTROL_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SLACK_DEPLOY_CHANNEL: ${{ secrets.SLACK_DEPLOY_CHANNEL }}
     defaults:

@@ -16,7 +16,11 @@ BOOTSTRAP_RETRY_DELAY="${BOOTSTRAP_RETRY_DELAY:-2}"
 
 _fetch_secret() {
   local key="$1"
-  curl -fsS --max-time 5 "${SECRET_MANAGER_URL}/secrets/${key}" \
+  local auth_header=()
+  if [[ -n "${FIREWALL_CONTROL_TOKEN:-}" ]]; then
+    auth_header=(-H "Authorization: Bearer ${FIREWALL_CONTROL_TOKEN}")
+  fi
+  curl -fsS --max-time 5 "${auth_header[@]}" "${SECRET_MANAGER_URL}/secrets/${key}" \
     | jq -er '.value | select(type == "string" and length > 0)'
 }
 

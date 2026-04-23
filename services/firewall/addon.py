@@ -40,6 +40,7 @@ from centaur_sdk.logging import configure_json_logging
 log = configure_json_logging("firewall")
 
 SECRET_MANAGER_URL = os.environ.get("SECRET_MANAGER_URL", "http://secrets:8100")
+API_URL = os.environ.get("API_URL", "http://api:8000")
 CACHE_TTL = int(os.environ.get("FIREWALL_CACHE_TTL", "30"))
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8081"))
 KEYS_REFRESH_INTERVAL = int(os.environ.get("KEYS_REFRESH_INTERVAL", "60"))
@@ -248,6 +249,19 @@ def _resolve_host(host: str) -> list[str]:
 
 class CredentialInjector:
     def __init__(self) -> None:
+        # Fail-closed on unset control token: /secrets/{key} and /injection-map
+        # would otherwise serve unauthenticated to anything reachable on the
+        # firewall's internal networks (including sandbox containers), which
+        # defeats the "agent never sees your secrets" guarantee.
+        if not CONTROL_TOKEN:
+            raise RuntimeError(
+                "FIREWALL_CONTROL_TOKEN is not set. Refusing to start: "
+                "an empty token would leave /secrets/{key} and /injection-map "
+                "unauthenticated. Set FIREWALL_CONTROL_TOKEN to a random "
+                "value (e.g. `openssl rand -hex 32`) on the firewall and on "
+                "every service that calls the firewall control plane."
+            )
+
         self._cache: dict[str, tuple[str | None, float]] = {}
         self._lock = threading.Lock()
         self._known_keys: set[str] = set()
@@ -280,8 +294,6 @@ class CredentialInjector:
         class Handler(BaseHTTPRequestHandler):
             def _check_control_auth(self) -> bool:
                 """Verify control token for sensitive endpoints. Returns True if OK."""
-                if not CONTROL_TOKEN:
-                    return True
                 auth = self.headers.get("Authorization", "")
                 if auth == f"Bearer {CONTROL_TOKEN}":
                     return True
@@ -383,6 +395,7 @@ class CredentialInjector:
             backoff = 2
             while True:
                 self._refresh_keys()
+                self._refresh_injection_map()
                 with self._injection_map_lock:
                     map_loaded = bool(self._injection_map)
                 with self._keys_lock:
@@ -392,12 +405,37 @@ class CredentialInjector:
                 log.info("waiting for keys/injection-map, retrying in %ds", backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 30)
-            # Steady-state refresh
+            # Steady-state refresh. Keep pulling the injection map too so a
+            # firewall recreate without an API restart recovers on its own
+            # instead of staying fail-closed until the next tool-file change.
             while True:
                 time.sleep(KEYS_REFRESH_INTERVAL)
                 self._refresh_keys()
+                self._refresh_injection_map()
 
         threading.Thread(target=loop, daemon=True).start()
+
+    def _refresh_injection_map(self) -> None:
+        url = f"{API_URL}/internal/injection-map"
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+            new_map: dict[str, set[str]] = {
+                host: set(keys) for host, keys in data.items()
+            }
+            with self._injection_map_lock:
+                self._injection_map = new_map
+            log.info(
+                "injection_map_pulled",
+                extra={
+                    "event": "injection_map_pulled",
+                    "host_count": len(new_map),
+                    "key_count": sum(len(v) for v in new_map.values()),
+                },
+            )
+        except Exception as exc:
+            log.warning("injection_map_pull_failed: %s", exc)
 
     def _sm_request(self, path: str, timeout: int = 5) -> bytes:
         """Make a request to the secret manager."""

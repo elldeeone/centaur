@@ -73,6 +73,7 @@ services:
       dockerfile: services/firewall/Dockerfile
     environment:
       SECRET_MANAGER_URL: http://secrets:8100
+      FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?FIREWALL_CONTROL_TOKEN must be set — generate with `openssl rand -hex 32` and store in the deployer env or GitHub Actions secrets}
 
     networks:
       - default
@@ -100,6 +101,7 @@ services:
       dockerfile: services/pgbouncer/Dockerfile
     environment:
       SECRET_MANAGER_URL: http://firewall:8081
+      FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?FIREWALL_CONTROL_TOKEN must be set — generate with `openssl rand -hex 32` and store in the deployer env or GitHub Actions secrets}
       AUTH_TYPE: scram-sha-256
       POOL_MODE: transaction
       MAX_CLIENT_CONN: 200
@@ -127,6 +129,7 @@ services:
       dockerfile: services/api/Dockerfile
     environment:
       SECRET_MANAGER_URL: http://firewall:8081
+      FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?FIREWALL_CONTROL_TOKEN must be set — generate with `openssl rand -hex 32` and store in the deployer env or GitHub Actions secrets}
       SLACKBOT_URL: http://slackbot:3001
       CENTAUR_LOG_LEVEL: info
       LOCAL_DEV_API_KEY: ${LOCAL_DEV_API_KEY:-}
@@ -211,6 +214,7 @@ services:
     environment:
       CENTAUR_API_URL: http://api:8000
       SECRET_MANAGER_URL: http://firewall:8081
+      FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?FIREWALL_CONTROL_TOKEN must be set — generate with `openssl rand -hex 32` and store in the deployer env or GitHub Actions secrets}
       HTTPS_PROXY: http://firewall:8080
       NODE_EXTRA_CA_CERTS: /firewall-certs/ca-cert.pem
       NO_PROXY: localhost,127.0.0.1,postgres,pgbouncer,api,firewall

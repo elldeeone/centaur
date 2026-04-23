@@ -227,8 +227,13 @@ async def ensure_static_key(
 
 async def _fetch_secret_value(secret_manager_url: str, key: str) -> str | None:
     """Fetch a secret value from the local secret manager."""
+    control_token = os.environ.get("FIREWALL_CONTROL_TOKEN", "").strip()
+    headers = {"Authorization": f"Bearer {control_token}"} if control_token else {}
     async with httpx.AsyncClient(timeout=5.0) as client:
-        response = await client.get(f"{secret_manager_url.rstrip('/')}/secrets/{key}")
+        response = await client.get(
+            f"{secret_manager_url.rstrip('/')}/secrets/{key}",
+            headers=headers,
+        )
         if response.status_code == 404:
             return None
         response.raise_for_status()
