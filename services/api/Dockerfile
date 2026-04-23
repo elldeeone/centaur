@@ -56,4 +56,4 @@ RUN chmod +x /entrypoint.sh /app/scripts/bootstrap-secrets.sh
 EXPOSE 8000
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["/app/.venv/bin/uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/.venv/bin/uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
