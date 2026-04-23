@@ -209,11 +209,22 @@ tbody td.tool-name {
 }
 
 .tool-icon {
-  width: 18px;
-  height: 18px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
-  border-radius: 3px;
+  border-radius: 6px;
   object-fit: contain;
+}
+
+.team-emoji {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  font-size: 18px;
+  line-height: 1;
 }
 
 tbody td.user-name {

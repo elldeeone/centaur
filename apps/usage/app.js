@@ -126,6 +126,14 @@ function renderHead() {
   $("#thead").innerHTML = `<tr>${ths}</tr>`;
 }
 
+function renderTeamCell(r) {
+  return `<td class="tool-name"><span class="tool-identity"><span class="team-emoji">${r.emoji || ""}</span>${escapeHtml(r.team)}</span></td>`;
+}
+
+function renderTeamBadge(r) {
+  return `<td class="col-team"><span class="tool-identity"><span class="team-emoji">${r.team_emoji || ""}</span>${escapeHtml(r.team || "")}</span></td>`;
+}
+
 function renderToolCell(r) {
   const icon = r.icon
     ? `<img class="tool-icon" src="${escapeHtml(r.icon)}" loading="lazy" alt="" onerror="this.style.display='none'">`
@@ -150,14 +158,12 @@ function renderBody() {
     const tds = cols.map((c) => {
       if (c.hasIcon && state.view === "tools") return renderToolCell(r);
       if (c.hasPfp && state.view === "users") return renderUserCell(r);
+      if (c.hasEmoji) return renderTeamCell(r);
+      if (c.key === "team" && state.view === "users") return renderTeamBadge(r);
       const cls = [c.num ? "num" : "", c.cls || ""].filter(Boolean).join(" ");
       let val;
       if (c.key === "rank") {
         val = i + 1;
-      } else if (c.hasEmoji) {
-        val = `${r.emoji || ""} ${escapeHtml(r[c.key] || "")}`;
-      } else if (c.key === "team" && state.view === "users") {
-        val = `${r.team_emoji || ""} ${escapeHtml(r[c.key] || "")}`;
       } else if (c.num) {
         val = fmt(r[c.key]);
       } else {
