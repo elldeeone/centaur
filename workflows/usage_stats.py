@@ -383,80 +383,81 @@ def _build_teams(user_rows: list[dict]) -> list[dict]:
     return result
 
 
+async def _vlogs_stats(client: httpx.AsyncClient, query: str) -> dict[str, int]:
+    """Run a VictoriaLogs stats_query and return {label: count}."""
+    resp = await client.get(
+        "http://victorialogs:9428/select/logsql/stats_query",
+        params={"query": query},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    result: dict[str, int] = {}
+    for item in data.get("data", {}).get("result", []):
+        metric = item.get("metric", {})
+        label = ""
+        for k, v in metric.items():
+            if k != "__name__":
+                label = v
+                break
+        value = int(item.get("value", [0, "0"])[1])
+        if label and " " not in label and "?" not in label and '"' not in label:
+            result[label] = result.get(label, 0) + value
+    return result
+
+
 async def _extract_apps(pool) -> list[dict]:
     app_rows = await pool.fetch(
         "SELECT name, status FROM apps ORDER BY name"
     )
     app_status = {r["name"]: r["status"] for r in app_rows}
 
-    app_stats: dict[str, dict] = defaultdict(
-        lambda: {"views": 0, "requests": 0, "ips": set(), "errors": 0, "paths": Counter()}
-    )
+    views: dict[str, int] = {}
+    requests: dict[str, int] = {}
+    visitors: dict[str, int] = {}
+    errors: dict[str, int] = {}
+
+    static_filter = " AND NOT _msg:.css AND NOT _msg:.js AND NOT _msg:.png AND NOT _msg:.ico AND NOT _msg:.json AND NOT _msg:.svg AND NOT _msg:.woff AND NOT _msg:.map AND NOT _msg:.webp"
+    base = '_time:1y AND _msg:/apps/ AND _msg:"HTTP/1.1" AND NOT _msg:INFO'
+    extract_app = '| extract "GET /apps/<app>/" from _msg'
+    extract_app_any = '| extract "/apps/<app>/" from _msg'
+    extract_ip = '| extract "\\"<ip>\\"" from _msg'
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "http://victorialogs:9428/select/logsql/query",
-                params={
-                    "query": (
-                        '_time:7d AND _msg:/apps/ AND _msg:"HTTP/1.1" AND NOT _msg:INFO'
-                    ),
-                    "limit": "10000",
-                },
+        async with httpx.AsyncClient(timeout=30) as client:
+            views = await _vlogs_stats(
+                client,
+                f'{base} AND _msg:"GET /apps/" AND _msg:" 200 "{static_filter} {extract_app} | stats by (app) count() as views',
             )
-            resp.raise_for_status()
-            lines = resp.text.strip().split("\n")
-            if len(lines) >= 10000:
-                log.warning("VictoriaLogs returned 10000 rows (limit hit), app stats may be undercounted")
-            for line in lines:
-                if not line.strip():
-                    continue
-                try:
-                    d = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                msg = d.get("_msg", "")
-                app_m = re.search(r"/apps/([a-z0-9_-]+)(/[^\s?]*)?", msg)
-                if not app_m:
-                    continue
-                app = app_m.group(1)
-                subpath = app_m.group(2) or "/"
-                ext = subpath.rsplit(".", 1)[-1] if "." in subpath else ""
-                is_static = ext in STATIC_EXTS
-                status_m = re.search(r'" (\d{3}) ', msg)
-                status = int(status_m.group(1)) if status_m else 0
-                ip_m = re.search(r'"(\d+\.\d+\.\d+\.\d+)"$', msg)
-                ip = ip_m.group(1) if ip_m else ""
-
-                s = app_stats[app]
-                s["requests"] += 1
-                if ip:
-                    s["ips"].add(ip)
-                if status >= 400:
-                    s["errors"] += 1
-                if status == 200 and not is_static and "GET" in msg:
-                    s["views"] += 1
-                    s["paths"][subpath] += 1
+            requests = await _vlogs_stats(
+                client,
+                f"{base} {extract_app_any} | stats by (app) count() as requests",
+            )
+            visitors = await _vlogs_stats(
+                client,
+                f"{base} {extract_app_any} {extract_ip} | stats by (app) count_uniq(ip) as visitors",
+            )
+            errors = await _vlogs_stats(
+                client,
+                f'{base} AND _msg:" 5" {extract_app_any} | stats by (app) count() as errors',
+            )
     except Exception:
         log.warning("failed to query VictoriaLogs for app traffic", exc_info=True)
 
+    all_apps = set(views) | set(requests) | set(visitors)
     result = []
-    for app in sorted(app_stats, key=lambda a: app_stats[a]["views"], reverse=True):
-        s = app_stats[app]
-        if s["views"] == 0 and s["requests"] < 3:
+    for app in sorted(all_apps, key=lambda a: views.get(a, 0), reverse=True):
+        v = views.get(app, 0)
+        r = requests.get(app, 0)
+        if v == 0 and r < 3:
             continue
-        top_paths = s["paths"].most_common(3)
         result.append({
             "app": app,
-            "views": s["views"],
-            "requests": s["requests"],
-            "visitors": len(s["ips"]),
-            "errors": s["errors"],
-            "error_rate": round(s["errors"] / s["requests"] * 100, 1) if s["requests"] > 0 else 0,
+            "views": v,
+            "requests": r,
+            "visitors": visitors.get(app, 0),
+            "errors": errors.get(app, 0),
+            "error_rate": round(errors.get(app, 0) / r * 100, 1) if r > 0 else 0,
             "status": app_status.get(app, "?"),
-            "path1": f"{top_paths[0][0]} ({top_paths[0][1]})" if len(top_paths) > 0 else "",
-            "path2": f"{top_paths[1][0]} ({top_paths[1][1]})" if len(top_paths) > 1 else "",
-            "path3": f"{top_paths[2][0]} ({top_paths[2][1]})" if len(top_paths) > 2 else "",
             "emoji": APP_EMOJIS.get(app, "\U0001F4E6"),
         })
     return result
