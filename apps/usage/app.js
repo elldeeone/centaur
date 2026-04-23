@@ -1,7 +1,7 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-let DATA = { tools: [], users: [], teams: [], skills: [] };
+let DATA = { tools: [], users: [], teams: [], skills: [], apps: [] };
 let state = {
   view: "tools",
   sort: "threads",
@@ -66,7 +66,21 @@ const SKILL_COLS = [
   { key: "last_seen",  label: "Last",   num: false, w: "7%",  cls: "col-last" },
 ];
 
-const DEFAULT_SORT = { tools: "threads", skills: "threads", users: "threads", teams: "threads_per_member" };
+const APP_COLS = [
+  { key: "rank",          label: "#",         num: true,  noSort: true, w: "3.5%" },
+  { key: "app",           label: "App",       num: false, w: "14%",     cls: "tool-name", hasAppLink: true },
+  { key: "status",        label: "Status",    num: false, w: "7%",      cls: "col-status" },
+  { key: "views",         label: "Views",     num: true,  w: "7%" },
+  { key: "requests",      label: "Requests",  num: true,  w: "8%" },
+  { key: "visitors",      label: "Visitors",  num: true,  w: "7%" },
+  { key: "errors",        label: "Errors",    num: true,  w: "6%" },
+  { key: "error_rate",    label: "Err%",      num: true,  w: "5%",      cls: "col-cpt" },
+  { key: "path1",         label: "#1 Path",   num: false, w: "16%", noSort: true, cls: "method" },
+  { key: "path2",         label: "#2 Path",   num: false, w: "14%", noSort: true, cls: "method col-method2" },
+  { key: "path3",         label: "#3 Path",   num: false, w: "12%", noSort: true, cls: "method col-method3" },
+];
+
+const DEFAULT_SORT = { tools: "threads", skills: "threads", users: "threads", teams: "threads_per_member", apps: "views" };
 
 function fmt(n) {
   if (n == null) return "\u2014";
@@ -83,6 +97,7 @@ function getCols() {
   if (state.view === "tools") return TOOL_COLS;
   if (state.view === "skills") return SKILL_COLS;
   if (state.view === "teams") return TEAM_COLS;
+  if (state.view === "apps") return APP_COLS;
   return USER_COLS;
 }
 
@@ -91,6 +106,7 @@ function getRows() {
   if (state.view === "tools") src = DATA.tools;
   else if (state.view === "skills") src = DATA.skills;
   else if (state.view === "teams") src = DATA.teams;
+  else if (state.view === "apps") src = DATA.apps;
   else src = DATA.users;
 
   let rows = [...(src || [])];
@@ -102,6 +118,7 @@ function getRows() {
       if (state.view === "tools") fields = [r.tool, r.method1, r.method2, r.method3];
       else if (state.view === "skills") fields = [r.skill, r.user1, r.user2, r.user3];
       else if (state.view === "teams") fields = [r.team, r.member_list];
+      else if (state.view === "apps") fields = [r.app, r.path1, r.path2, r.path3];
       else fields = [r.name, r.handle, r.team, r.tool1, r.tool2, r.tool3];
       return fields.some((f) => f && f.toLowerCase().includes(q));
     });
@@ -174,6 +191,7 @@ function renderBody() {
 
   const html = rows.map((r, i) => {
     const tds = cols.map((c) => {
+      if (c.hasAppLink) return `<td class="tool-name"><a href="https://svc-ai.dayno.xyz/apps/${escapeHtml(r.app)}/" target="_blank" class="app-link">${escapeHtml(r.app)}</a></td>`;
       if (c.hasSkillEmoji) return `<td class="tool-name"><span class="tool-identity"><span class="team-emoji">${r.emoji || ""}</span>${escapeHtml(r.skill)}</span></td>`;
       if (c.hasIcon && state.view === "tools") return renderToolCell(r);
       if (c.hasPfp && state.view === "users") return renderUserCell(r);
@@ -207,7 +225,7 @@ function render() {
 }
 
 const BASE_PATH = "/apps/usage";
-const VIEWS = ["tools", "skills", "teams", "users"];
+const VIEWS = ["tools", "skills", "teams", "users", "apps"];
 
 function viewPath(view) {
   return `${BASE_PATH}/${view}`;
