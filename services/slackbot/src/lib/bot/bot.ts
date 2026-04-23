@@ -164,6 +164,37 @@ export function parsePromptSelectorFlag(text: string): string | undefined {
   return extractFlagSelector(text).selector;
 }
 
+/**
+ * Strip residual mention tokens (`<@U...>`) so we can detect a truly empty
+ * payload after flag removal. Used by the bare-trigger short-circuit.
+ */
+function stripMentions(text: string): string {
+  return text.replace(/<@[A-Z0-9]+>/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Persona-specific canned responses for bare-flag invocations (e.g. just
+ * `@centaur_ai --invest`). The LLM's compliance with prompt-level "respond
+ * with exactly this line" rules is unreliable for empty-payload turns, so
+ * we short-circuit at the slackbot to guarantee the persona identifier
+ * appears and to save a sandbox round-trip.
+ */
+const BARE_FLAG_GREETINGS: Record<string, string> = {
+  invest: "Spock — Paradigm's investment agent. What are we looking at?",
+};
+
+/** Return the canned greeting for a bare `--<persona>` mention with no other content. */
+export function bareFlagGreeting(
+  selector: string | undefined,
+  cleanedText: string,
+  attachmentCount: number,
+): string | undefined {
+  if (!selector) return undefined;
+  if (attachmentCount > 0) return undefined;
+  if (stripMentions(cleanedText).length > 0) return undefined;
+  return BARE_FLAG_GREETINGS[selector];
+}
+
 /** Extract text from a message, preferring the formatted AST (preserves links) over plain text. */
 function richTextFromMessage(msg: { text: string; formatted?: Root }): string {
   if (msg.formatted) {
@@ -319,12 +350,25 @@ export class SlackBot {
 
     const richText = richTextFromMessage(msg);
     const { selector: promptSelector, cleaned } = extractFlagSelector(richText);
-    const agentText = cleaned || richText;
+    // If flag-stripping leaves only the bot mention or nothing, the agent gets
+    // an empty text — never `--invest`. The bare-flag short-circuit below
+    // catches the empty case before we reach the agent.
+    const agentText = cleaned;
+
+    // Bare-flag short-circuit: respond with the canned persona greeting
+    // without spinning up an LLM. Guarantees the persona identifier appears
+    // and saves a ~6s round-trip + token cost.
+    const attachments = await this.resolveAttachments(thread.id, msg);
+    const greeting = bareFlagGreeting(promptSelector, cleaned, attachments.length);
+    if (greeting) {
+      log.info("bare_flag_greeting", { thread_key: threadKey, selector: promptSelector });
+      await thread.post({ markdown: greeting });
+      return;
+    }
 
     // Buffer prior thread messages as context before the mentioning message
     await this.backfillThreadHistory(thread.id, promptSelector);
 
-    const attachments = await this.resolveAttachments(thread.id, msg);
     const parts = await this.toParts(agentText, attachments);
     await this.bufferAndExecute(thread, agentText, parts, {
       messageId: stableSlackMessageId(msg),
@@ -342,7 +386,13 @@ export class SlackBot {
 
     if (msg.isMention) {
       const { selector: promptSelector, cleaned } = extractFlagSelector(text);
-      const agentText = cleaned || text;
+      const greeting = bareFlagGreeting(promptSelector, cleaned, attachments.length);
+      if (greeting) {
+        log.info("bare_flag_greeting", { thread_key: normalizeThreadKey(thread.id), selector: promptSelector, is_new_thread: false });
+        await thread.post({ markdown: greeting });
+        return;
+      }
+      const agentText = cleaned;
       const parts = await this.toParts(agentText || "Shared attachment in thread.", attachments);
       log.info("mention_received", { thread_key: normalizeThreadKey(thread.id), user_id: msg.author.userId, is_new_thread: false });
       thread.startTyping().catch(() => {});

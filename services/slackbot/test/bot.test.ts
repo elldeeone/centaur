@@ -7,6 +7,7 @@ import {
   splitSlackMessage,
   parsePromptSelectorFlag,
   extractFlagSelector,
+  bareFlagGreeting,
 } from "../src/lib/bot/bot";
 import { normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
 
@@ -745,6 +746,43 @@ describe("extractFlagSelector — returns stripped text for the agent", () => {
     const { selector, cleaned } = extractFlagSelector("looking at this co https://docsend.com/view/s/abc");
     expect(selector).toBeUndefined();
     expect(cleaned).toBe("looking at this co https://docsend.com/view/s/abc");
+  });
+});
+
+describe("bareFlagGreeting (slackbot short-circuit for bare --invest)", () => {
+  it("returns Spock greeting for bare --invest with no other content", () => {
+    const { selector, cleaned } = extractFlagSelector("--invest");
+    expect(bareFlagGreeting(selector, cleaned, 0)).toBe(
+      "Spock — Paradigm's investment agent. What are we looking at?",
+    );
+  });
+
+  it("returns greeting when only the bot mention remains after flag strip", () => {
+    // After flag strip, this leaves "<@U0AH5TRP0H0>" — should still trigger the greeting.
+    const { selector, cleaned } = extractFlagSelector("<@U0AH5TRP0H0> --invest");
+    expect(bareFlagGreeting(selector, cleaned, 0)).toBe(
+      "Spock — Paradigm's investment agent. What are we looking at?",
+    );
+  });
+
+  it("returns undefined when --invest has a payload", () => {
+    const { selector, cleaned } = extractFlagSelector("--invest hyperliquid miqs");
+    expect(bareFlagGreeting(selector, cleaned, 0)).toBeUndefined();
+  });
+
+  it("returns undefined when there are attachments (user dropped a file)", () => {
+    const { selector, cleaned } = extractFlagSelector("--invest");
+    expect(bareFlagGreeting(selector, cleaned, 1)).toBeUndefined();
+  });
+
+  it("returns undefined for non-invest flags (no canned greeting)", () => {
+    const { selector, cleaned } = extractFlagSelector("--legal");
+    expect(bareFlagGreeting(selector, cleaned, 0)).toBeUndefined();
+  });
+
+  it("returns undefined when no flag is present", () => {
+    const { selector, cleaned } = extractFlagSelector("hey");
+    expect(bareFlagGreeting(selector, cleaned, 0)).toBeUndefined();
   });
 });
 
