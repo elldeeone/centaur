@@ -1,6 +1,0 @@
-apiVersion: v2
-name: centaur-k3s
-description: K3s-first Helm chart for the trusted Centaur control plane
-type: application
-version: 0.1.0
-appVersion: "0.1.0"
