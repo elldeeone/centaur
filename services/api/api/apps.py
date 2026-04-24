@@ -395,10 +395,15 @@ class AppManager:
 
     async def recover_apps(self, pool: asyncpg.Pool) -> int:
         """Reconcile DB with running containers on API restart."""
-        client = self._get_client()
+        sandbox_backend = os.getenv("SANDBOX_BACKEND", "docker").strip().lower()
+        if sandbox_backend != "docker":
+            log.info("app_recovery_skipped", sandbox_backend=sandbox_backend)
+            return 0
+
         recovered = 0
 
         try:
+            client = self._get_client()
             containers = await client.containers.list(
                 filters=json.dumps({"label": ["centaur-app=true"]}),
             )
