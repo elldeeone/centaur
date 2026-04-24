@@ -3,6 +3,7 @@ name: Publish Images
 on:
   push:
     branches: [main]
+    tags: [v*]
     paths:
       - .github/workflows/publish-images.yml
       - services/**
@@ -71,6 +72,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Docker metadata for ${{ matrix.image }}
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/paradigmxyz/${{ matrix.image }}
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{raw}}
+            type=ref,event=pr
+            type=sha
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+        env:
+          DOCKER_METADATA_PR_HEAD_SHA: true
+
       - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@v6
         with:
@@ -78,10 +96,7 @@ jobs:
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target }}
           push: true
-          tags: ghcr.io/paradigmxyz/${{ matrix.image }}:latest
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.title=${{ matrix.image }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
