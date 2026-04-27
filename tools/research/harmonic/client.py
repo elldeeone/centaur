@@ -6,11 +6,26 @@ import httpx
 from centaur_sdk import secret
 
 
+def _clean_secret(value: str | None) -> str | None:
+    """Clean a secret value that may come from a multi-line 1Password field."""
+    if not value:
+        return value
+    value = value.strip()
+    if "\n" not in value:
+        return value or None
+    for line in value.splitlines():
+        line = line.strip()
+        if not line or line.startswith("===") or line.startswith("#"):
+            continue
+        return line
+    return None
+
+
 class HarmonicClient:
     """Client for Harmonic.AI API."""
 
     def __init__(self, api_key: str | None = None, timeout: float = 60.0):
-        self._api_key = api_key
+        self._api_key = _clean_secret(api_key)
         self.base_url = "https://api.harmonic.ai"
         self.timeout = timeout
         self._client: httpx.Client | None = None
@@ -25,7 +40,7 @@ class HarmonicClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        return secret("HARMONIC_API_KEY", "")
+        return _clean_secret(secret("HARMONIC_API_KEY", ""))
 
     def _request(
         self,
@@ -204,4 +219,6 @@ class HarmonicClient:
 
 
 def _client() -> HarmonicClient:
-    return HarmonicClient()
+    # Seed the client with the secret placeholder at load time so the firewall
+    # can replace it in-flight, matching the pattern used by other proxy-backed tools.
+    return HarmonicClient(api_key=secret("HARMONIC_API_KEY", ""))
