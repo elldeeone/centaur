@@ -53,6 +53,7 @@ services:
       context: .
       dockerfile: services/secrets/Dockerfile
     environment:
+      SECRET_MANAGER_BACKEND: ${SECRET_MANAGER_BACKEND:-onepassword}
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       OP_VAULT: ${OP_VAULT:-}
     networks:
@@ -74,6 +75,7 @@ services:
     environment:
       SECRET_MANAGER_URL: http://secrets:8100
       FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?FIREWALL_CONTROL_TOKEN must be set — generate with `openssl rand -hex 32` and store in the deployer env or GitHub Actions secrets}
+      FIREWALL_HOST_REWRITES: ${FIREWALL_HOST_REWRITES:-}
 
     networks:
       - default
