@@ -48,13 +48,14 @@ WORKDIR /home/agent
 
 ENV PATH="/home/agent/.cargo/bin:/home/agent/.local/bin:/home/agent/.foundry/bin:${PATH}"
 
+ARG FOUNDRY_VERSION=v1.7.0
 ARG AMP_CLI_VERSION=0.0.1774529752-g94f44d
 
 # ── Agent-scoped toolchains ─────────────────────────────────────────────────
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN curl -L https://foundry.paradigm.xyz | bash \
-    && /home/agent/.foundry/bin/foundryup
+    && /home/agent/.foundry/bin/foundryup --install ${FOUNDRY_VERSION}
 RUN set -eux; \
     amp_platform="$(case "$(dpkg --print-architecture)" in \
       amd64) echo linux-x64 ;; \
