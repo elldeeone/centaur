@@ -51,4 +51,20 @@ describe("Slack markdown rendering", () => {
       { type: "section", text: { type: "mrkdwn", text: "- One" } },
     ]);
   });
+
+  it("renders separate paragraphs as separate Slack section blocks", () => {
+    const rendered = renderMarkdownForSlack([
+      "First paragraph.",
+      "",
+      "Second paragraph.",
+      "",
+      "Third paragraph.",
+    ].join("\n"));
+
+    expect(rendered.blocks).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "First paragraph." } },
+      { type: "section", text: { type: "mrkdwn", text: "Second paragraph." } },
+      { type: "section", text: { type: "mrkdwn", text: "Third paragraph." } },
+    ]);
+  });
 });

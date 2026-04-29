@@ -259,34 +259,24 @@ function astToSlackBlocks(ast: Root): SlackBlock[] | null {
   const shouldUseBlocks = ast.children.some((node) => {
     const content = node as Content;
     return isHeadingNode(content) || isTableNode(content);
-  });
+  }) || ast.children.length > 1;
   if (!shouldUseBlocks) return null;
 
   const blocks: SlackBlock[] = [];
-  const textBuffer: string[] = [];
   let usedNativeTable = false;
-
-  const flushText = () => {
-    const text = textBuffer.join("\n\n").trim();
-    textBuffer.length = 0;
-    if (!text) return;
-    pushMrkdwnSections(blocks, text);
-  };
 
   for (const child of ast.children) {
     const node = child as Content;
     if (isHeadingNode(node)) {
-      flushText();
       pushMrkdwnSections(blocks, nodeToMrkdwn(node));
       continue;
     }
 
     if (!isTableNode(node)) {
-      textBuffer.push(nodeToMrkdwn(node));
+      pushMrkdwnSections(blocks, nodeToMrkdwn(node));
       continue;
     }
 
-    flushText();
     if (usedNativeTable) {
       blocks.push({
         type: "section",
@@ -302,7 +292,6 @@ function astToSlackBlocks(ast: Root): SlackBlock[] | null {
     usedNativeTable = true;
   }
 
-  flushText();
   return blocks;
 }
 
