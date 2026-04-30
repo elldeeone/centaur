@@ -223,8 +223,6 @@ function render() {
   renderHead();
   renderBody();
   syncUrl();
-  const toggle = $("#centaur-toggle");
-  toggle.style.display = (state.view === "teams" || state.view === "users") ? "" : "none";
 }
 
 const BASE_PATH = "/apps/usage";
@@ -378,11 +376,6 @@ function init() {
       applyWindow();
       render();
     });
-  });
-
-  $("#show-centaur").addEventListener("change", (e) => {
-    state.hideCentaur = !e.target.checked;
-    render();
   });
 
   document.addEventListener("click", (e) => {
