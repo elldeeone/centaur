@@ -43,8 +43,9 @@ const TEAM_COLS = [
   { key: "members",     label: "Members",  num: true,  w: "7%" },
   { key: "threads",     label: "Sessions",  num: true,  w: "7.5%" },
   { key: "tokens",      label: "Tokens",   num: true,  w: "7%", fmt: "compact" },
-  { key: "threads_per_member", label: "S/M", num: true, w: "5.5%" },
-  { key: "member_list", label: "Members",  num: false, w: "56.5%", noSort: true, cls: "member-list" },
+  { key: "threads_per_member", label: "S/M", num: true, w: "5%" },
+  { key: "tokens_per_member", label: "T/M", num: true, w: "5%", fmt: "compact" },
+  { key: "member_list", label: "Members",  num: false, w: "52%", noSort: true, cls: "member-list" },
 ];
 
 const SKILL_COLS = [
@@ -370,6 +371,7 @@ function init() {
     for (const t of DATA.teams) {
       t.tokens = teamTokens[t.team] || 0;
       t.threads_per_member = t.members > 0 ? Math.round(t.threads / t.members * 10) / 10 : 0;
+      t.tokens_per_member = t.members > 0 ? Math.round(t.tokens / t.members) : 0;
     }
   }
 
