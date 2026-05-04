@@ -1,6 +1,6 @@
 """Workflow: weekly investment pipeline digest.
 
-Runs every Sunday at 6pm PT. Reads the past week's messages from
+Runs every Sunday at 8pm PT. Reads the past week's messages from
 #investment-sourcing and the current pipeline Google Doc, then posts
 a two-part summary:
 
@@ -22,7 +22,7 @@ from api.runtime_control import ControlPlaneError
 from api.workflow_engine import WorkflowContext
 
 WORKFLOW_NAME = "investment_pipeline_weekly"
-CRON = "0 18 * * 0"
+CRON = "0 20 * * 0"
 SLACK_CHANNEL = "investing"
 SOURCE_CHANNEL = "investment-sourcing"
 
