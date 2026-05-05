@@ -37,6 +37,7 @@ _RECOVERY_COMMANDS = frozenset(
     }
 )
 _RECOVERY_NORMALIZE_RE = re.compile(r"[^a-z0-9\s]+")
+_SLACK_ID_MENTION_RE = re.compile(r"^<@[WU][A-Z0-9]+>\s*[:,;-]?\s*(.*)$", re.IGNORECASE)
 _RECOVERY_CONTEXT_PREFIX = "Previous unresolved user request from this thread:\n"
 
 
@@ -71,15 +72,12 @@ def _normalize_recovery_command(text: str) -> str:
     if normalized in _RECOVERY_COMMANDS:
         return normalized
 
-    # Slack retries often start with a direct mention of the bot before the
-    # actual retry command, e.g. "@Centaur AI again" or "<@U123> retry".
+    # Slack app_mention event text uses ID mentions such as "<@U123> retry".
+    # Strip only that protocol shape so display-name prose stays conversational.
     stripped = text.lstrip()
-    if not stripped.startswith(("@", "<@")):
-        return normalized
-
-    tokens = normalized.split()
-    for start in range(1, len(tokens)):
-        candidate = " ".join(tokens[start:])
+    match = _SLACK_ID_MENTION_RE.match(stripped)
+    if match:
+        candidate = " ".join(_RECOVERY_NORMALIZE_RE.sub(" ", match.group(1).lower()).split())
         if candidate in _RECOVERY_COMMANDS:
             return candidate
 

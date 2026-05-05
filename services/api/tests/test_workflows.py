@@ -133,10 +133,7 @@ def test_recovery_command_paraphrases_are_recognized():
         "reread the thread",
         "go again",
         "do it again",
-        "@U0AH5TRP0H0 again",
         "<@U0AH5TRP0H0> again",
-        "@Centaur AI again",
-        "@Centaur AI, please retry",
         "<@U0AH5TRP0H0> please continue",
     ]
     for text in paraphrases_observed_in_prod:
@@ -150,8 +147,16 @@ def test_recovery_command_paraphrases_are_recognized():
         "look at the root cause of this bug",
         "let's go again to the office",
         "do it again but with the new params",
+        "@U0AH5TRP0H0 again",
+        "@Centaur AI again",
+        "@Centaur AI, please retry",
         "@Centaur AI continue editing the document",
+        "@Centaur AI thanks again",
+        "@Centaur AI hey can you continue",
+        "@U0AH5TRP0H0 thanks again",
         "@U0AH5TRP0H0 do it again but with the new params",
+        "<@U0AH5TRP0H0> thanks again",
+        "<@U0AH5TRP0H0> hey can you continue",
         "<@U0AH5TRP0H0> look at the root cause of this bug",
     ]
     for text in not_recovery:
@@ -261,7 +266,7 @@ async def test_slack_thread_turn_hydrates_retry_with_last_substantive_user_ask(d
 
 
 @pytest.mark.asyncio
-async def test_slack_thread_turn_hydrates_mention_prefixed_again(db_pool):
+async def test_slack_thread_turn_hydrates_slack_id_mention_prefixed_again(db_pool):
     from api.workflow_engine import WorkflowContext
     from api.workflows.slack_thread_turn import Input, handler
 
@@ -292,7 +297,7 @@ async def test_slack_thread_turn_hydrates_mention_prefixed_again(db_pool):
         await handler(
             Input(
                 thread_key=thread_key,
-                parts=[{"type": "text", "text": "@Centaur AI again"}],
+                parts=[{"type": "text", "text": "<@U0AH5TRP0H0> again"}],
                 message_id="msg-current",
             ),
             ctx,
@@ -307,7 +312,7 @@ async def test_slack_thread_turn_hydrates_mention_prefixed_again(db_pool):
                 "Draft the partner update and include the shipping risks."
             ),
         },
-        {"type": "text", "text": "@Centaur AI again"},
+        {"type": "text", "text": "<@U0AH5TRP0H0> again"},
     ]
 
 
