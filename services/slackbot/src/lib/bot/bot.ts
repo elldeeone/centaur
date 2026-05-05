@@ -357,6 +357,22 @@ function splitSlackBlocks(blocks: SlackBlocks): SlackBlocks[] {
   return blocks.length ? [blocks] : [];
 }
 
+function shouldFallbackSlackStreamError(error: unknown): boolean {
+  const classified = classifySlackError(error);
+  if (
+    !classified.retryable
+    && (classified.errorClass === "invalid_destination" || classified.errorClass === "restricted_destination")
+  ) {
+    return true;
+  }
+
+  const errMsg = classified.message;
+  return errMsg.includes("message_not_in_streaming_state")
+    || errMsg.includes("msg_too_long")
+    || errMsg.includes("streaming_mode_mismatch")
+    || errMsg.includes("cannot_provide_both_markdown_text_and_chunks");
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────
 
 export interface BotThread {
@@ -773,19 +789,24 @@ export class SlackBot {
           deliveredToSlack = true;
         }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const classified = classifySlackError(err);
 
         // Slack killed the streaming state before we called stop() (long-running turn),
         // or the accumulated streamed text exceeded Slack's message length limit.
+        // Some destinations also reject Slack's AI streaming APIs even though
+        // plain chat.postMessage delivery still succeeds.
         // Fall back to posting a plain message with whatever result we accumulated,
         // or poll the API for the final result if we don't have one yet.
-        if (
-          errMsg.includes("message_not_in_streaming_state")
-          || errMsg.includes("msg_too_long")
-          || errMsg.includes("streaming_mode_mismatch")
-          || errMsg.includes("cannot_provide_both_markdown_text_and_chunks")
-        ) {
-          log.warn("slack_stream_fallback", { thread_key: threadKey, error: errMsg, execution_id: executionId });
+        if (shouldFallbackSlackStreamError(err)) {
+          log.warn("slack_stream_fallback", {
+            thread_key: threadKey,
+            error: classified.message,
+            error_class: classified.errorClass,
+            error_code: classified.code,
+            status: classified.status,
+            retryable: classified.retryable,
+            execution_id: executionId,
+          });
           let converted = await convertDashboardBlocks((tracker.resultText || tracker.lastAssistantText).trim(), { renderChart: this.chartRenderer });
           let fallback = rewriteSlackFileLinks(converted.markdown, tracker.repoContext);
           let footer = buildResponseFooter(tracker.agentThreadId, tracker.repoContext?.gitCommit);
@@ -797,17 +818,30 @@ export class SlackBot {
             footer = buildResponseFooter(polled.agentThreadId, polled.repoContext?.gitCommit);
           }
 
-          if (fallback) {
-            const chunks = splitMarkdownForSlackMessages(`${fallback}${footer}`);
-            for (let i = 0; i < chunks.length; i += 1) {
-              const files = i === chunks.length - 1 && converted.files.length ? converted.files : undefined;
-              await thread.post({ markdown: chunks[i], ...(files ? { files } : {}) });
+          try {
+            if (fallback) {
+              const chunks = splitMarkdownForSlackMessages(`${fallback}${footer}`);
+              for (let i = 0; i < chunks.length; i += 1) {
+                const files = i === chunks.length - 1 && converted.files.length ? converted.files : undefined;
+                await thread.post({ markdown: chunks[i], ...(files ? { files } : {}) });
+              }
+              deliveredToSlack = true;
+            } else if (this.viewerUrl) {
+              const viewerLink = `${this.viewerUrl}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
+              await thread.post({ markdown: `Agent completed. [View full output](${viewerLink})` });
+              deliveredToSlack = true;
             }
-            deliveredToSlack = true;
-          } else if (this.viewerUrl) {
-            const viewerLink = `${this.viewerUrl}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
-            await thread.post({ markdown: `Agent completed. [View full output](${viewerLink})` });
-            deliveredToSlack = true;
+          } catch (fallbackErr) {
+            const fallbackClassified = classifySlackError(fallbackErr);
+            log.warn("slack_stream_fallback_post_failed", {
+              thread_key: threadKey,
+              execution_id: executionId,
+              error: fallbackClassified.message,
+              error_class: fallbackClassified.errorClass,
+              error_code: fallbackClassified.code,
+              status: fallbackClassified.status,
+              retryable: fallbackClassified.retryable,
+            });
           }
           if (deliveredToSlack) {
             await this.ackFinalDelivery(executionId, threadKey, { requireLease: false });
@@ -815,9 +849,17 @@ export class SlackBot {
           return;
         }
 
-        log.error("execute_error", { thread_key: threadKey, error: errMsg, execution_id: executionId });
+        log.error("execute_error", {
+          thread_key: threadKey,
+          error: classified.message,
+          error_class: classified.errorClass,
+          error_code: classified.code,
+          status: classified.status,
+          retryable: classified.retryable,
+          execution_id: executionId,
+        });
         try {
-          await thread.post({ markdown: `Agent request failed: ${errMsg}` });
+          await thread.post({ markdown: `Agent request failed: ${classified.message}` });
         } catch (postErr) {
           log.error("error_post_failed", { thread_key: threadKey, error: postErr instanceof Error ? postErr.message : String(postErr) });
         }
@@ -1451,9 +1493,25 @@ export class SlackBot {
       const { channel, threadTs } = splitThreadKey(slackDeliveryThreadId(threadKey, delivery));
       await this.slack.setAssistantTitle(channel, threadTs, title.slice(0, 60));
     } catch (err) {
+      const classified = classifySlackError(err);
+      if (!classified.retryable && classified.errorClass === "restricted_destination") {
+        log.info("set_title_skipped", {
+          thread_key: threadKey,
+          error: classified.message,
+          error_class: classified.errorClass,
+          error_code: classified.code,
+          status: classified.status,
+          retryable: classified.retryable,
+        });
+        return;
+      }
       log.warn("set_title_failed", {
         thread_key: threadKey,
-        error: err instanceof Error ? err.message : String(err),
+        error: classified.message,
+        error_class: classified.errorClass,
+        error_code: classified.code,
+        status: classified.status,
+        retryable: classified.retryable,
       });
     }
   }

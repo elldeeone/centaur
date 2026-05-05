@@ -12,6 +12,8 @@ import {
 } from "../src/lib/bot/bot";
 import { normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
 import { CentaurClient } from "@centaur/api-client";
+import { log } from "../src/lib/logger";
+import { SlackApiCallError } from "../src/lib/slack/errors";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -589,6 +591,78 @@ describe("execute streams structured progress immediately", () => {
         "| 8:00 | Breakfast |",
       ].join("\n"),
     });
+  });
+
+  it.each([
+    "user_not_found",
+    "restricted_action_thread_locked",
+    "no_permission",
+  ])("falls back to plain Slack posts when streaming rejects %s", async (errorCode) => {
+    const mockClient = {
+      execute: vi.fn().mockResolvedValue({ execution_id: `exe-fallback-${errorCode}` }),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const bot = new SlackBot(mockClient as any);
+
+    vi.spyOn(bot as any, "streamExecution").mockImplementation((async function* (
+      _threadKey: string,
+      _executionId: string,
+      tracker: { resultText: string },
+    ) {
+      tracker.resultText = "Final answer from fallback";
+      yield { type: "markdown_text", text: "Working..." };
+    }) as any);
+    const ackSpy = vi.spyOn(bot as any, "ackFinalDelivery").mockResolvedValue(undefined);
+
+    const plainPosts: Array<{ markdown: string }> = [];
+    const thread = {
+      id: "C123456:1770000000.000300",
+      post: vi.fn(async (content: AsyncIterable<unknown> | { markdown: string }) => {
+        if (typeof (content as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function") {
+          throw new SlackApiCallError("chat.startStream", errorCode, { ok: false, error: errorCode });
+        }
+        plainPosts.push(content as { markdown: string });
+        return { id: "m-fallback", edit: async () => {} };
+      }),
+    };
+
+    await (bot as any).execute(thread, thread.id, {
+      assignmentGeneration: 9,
+      userId: "U123456",
+      teamId: "T123456",
+    });
+
+    expect(thread.post).toHaveBeenCalledTimes(2);
+    expect(plainPosts).toEqual([{ markdown: "Final answer from fallback" }]);
+    expect(ackSpy).toHaveBeenCalledWith(`exe-fallback-${errorCode}`, thread.id, { requireLease: false });
+  });
+
+  it("skips assistant title warnings for restricted destinations", async () => {
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const slack = {
+      setAssistantTitle: vi.fn().mockRejectedValue(new SlackApiCallError(
+        "assistant.threads.setTitle",
+        "restricted_action_thread_locked",
+        { ok: false, error: "restricted_action_thread_locked" },
+      )),
+    };
+    const bot = new SlackBot({} as any, "", slack as any);
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    await (bot as any).setAssistantTitle("C123456:1770000000.000400", {}, "Final answer from fallback");
+
+    expect(slack.setAssistantTitle).toHaveBeenCalledOnce();
+    expect(infoSpy).toHaveBeenCalledWith("set_title_skipped", expect.objectContaining({
+      error_class: "restricted_destination",
+      error_code: "restricted_action_thread_locked",
+      retryable: false,
+    }));
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });
 
