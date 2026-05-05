@@ -384,7 +384,7 @@ curl -s -X DELETE https://svc-ai.dayno.xyz/apps/<name> -H "X-Api-Key: $CENTAUR_A
 
 Tools, skills, and workflows go live by landing on the `main` branch of `paradigmxyz/centaur`. They **hot-reload within seconds** — no restart needed.
 
-**You do NOT need a GitHub account.** Use the Centaur API to trigger an agent that handles the git flow for you.
+**You do NOT need a GitHub account.** Use the Centaur API to trigger an agent that handles the git flow with local validation and PR gates.
 
 ### How to deploy
 
@@ -401,11 +401,11 @@ SPAWN=$(curl -s -X POST https://svc-ai.dayno.xyz/agent/spawn \
   -d "{\"thread_key\":\"${THREAD_KEY}\",\"harness\":\"amp\"}")
 AG=$(echo "$SPAWN" | python3 -c "import sys,json; print(json.load(sys.stdin)['assignment_generation'])")
 
-# 2. Message — describe what to deploy (paste code, or describe it)
+# 2. Message — describe what to add (paste code, or describe it)
 curl -s -X POST https://svc-ai.dayno.xyz/agent/message \
   -H "Content-Type: application/json" \
   -H "X-Api-Key: $CENTAUR_API_KEY" \
-  -d "{\"thread_key\":\"${THREAD_KEY}\",\"assignment_generation\":${AG},\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"Add a new tool called hackernews to tools/hackernews/ in paradigmxyz/centaur. Here is client.py: ... Create the pyproject.toml too. Then open a PR and merge it.\"}]}"
+  -d "{\"thread_key\":\"${THREAD_KEY}\",\"assignment_generation\":${AG},\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"Add a new tool called hackernews to tools/hackernews/ in paradigmxyz/centaur. Here is client.py: ... Create the pyproject.toml too. Run the smallest relevant local validation, then open a PR.\"}]}"
 
 # 3. Execute
 EXECUTE=$(curl -s -X POST https://svc-ai.dayno.xyz/agent/execute \
@@ -419,14 +419,37 @@ curl -s -N "https://svc-ai.dayno.xyz/agent/threads/${THREAD_KEY}/events?executio
   -H "X-Api-Key: $CENTAUR_API_KEY"
 ```
 
-Or use the bundled helper: `scripts/centaur-run.sh "Add a tool called hackernews to paradigmxyz/centaur. <code>. Open PR and merge."`
+Or use the bundled helper: `scripts/centaur-run.sh "Add a tool called hackernews to paradigmxyz/centaur. <code>. Validate locally and open a PR."`
 
 ### What the agent does
 
 1. `git-branch paradigmxyz/centaur` → writable clone
 2. Writes your files to the correct directory
-3. `git commit` → `git push` → `gh pr create` → `gh pr merge`
-4. Hot-reload picks it up — live in seconds
+3. Inspects status and performs only the next missing shipping step: local validation → commit → push → PR
+4. Merges or deploys only after a PR exists, CI is green, and the user explicitly asked to merge or deploy
+5. After merge, tools, skills, and workflows hot-reload within seconds
+
+### Explicit PR / deploy follow-ups
+
+If the user follows up with "open the PR", "ship it", "merge this", "deploy it", or "set that up as a PR and deploy", treat that as a request to execute the next shipping step, not as a request to restate the build work, only when the phrase clearly refers to the same-thread/current-artifact Centaur build context. If the artifact or PR is ambiguous, ask which branch, PR, app, tool, skill, or workflow they mean.
+
+1. Start with the current ship status: say whether a branch, commit, PR, CI result, merge, or deploy already exists.
+2. Inspect the repo state before acting. If the work only exists in a read-only checkout, run `git-branch paradigmxyz/centaur`; if there is no diff to commit, say that explicitly.
+3. Perform only the next missing shipping step for the requested outcome. Do not skip ahead: validate before the first push, push before opening a PR, and open a PR before any merge or deploy.
+4. Before pushing, run the smallest relevant local validation for the changed artifact and report it:
+   - tool: import or targeted method check, plus any narrow test if one exists
+   - skill: frontmatter/Markdown sanity check and re-read the changed instructions
+   - workflow: syntax/import check or targeted workflow test
+   - web app: build or local smoke check for the touched route
+5. For "merge this": if an existing PR is already in context, inspect that PR and its checks; if no PR exists yet, create or open the PR as the next step and report that merge is gated on CI.
+6. Merge or deploy only when all three gates are true: the PR exists, CI is green, and the user explicitly asked to merge or deploy. If CI is pending or failing, stop and report the status.
+7. If the user explicitly asked to deploy and the gates pass, do the deploy step that matches the artifact:
+   - tool / skill / workflow: merge the PR so `main` hot-reloads it
+   - web app: create or restart the app and report the resulting URL or status
+8. If any step is blocked, stop at that exact step and name the blocker plainly: no writable clone, no diff to commit, missing GitHub permission, failing local validation, missing deploy credential, pending/failing CI, or unsupported deploy surface.
+9. Do not answer a shipping follow-up by summarizing the implementation that already happened.
+
+Treat only explicit ship-now requests in the current Centaur build context as execution requests. If the user asks "how do I deploy this?", "what would the PR look like?", or "can you explain the rollout?", answer with guidance instead of taking action.
 
 ### Deploy checklist
 
@@ -448,12 +471,12 @@ Or use the bundled helper: `scripts/centaur-run.sh "Add a tool called hackernews
 | Deploy a web app | `POST /apps` with `name`, `repo_url`, `port` |
 | Start a workflow | `POST /workflows/runs` with `workflow_name`, `input` |
 | Check workflow status | `GET /workflows/runs/<run_id>` |
-| Deploy code (tool/skill/workflow) | Trigger an agent via the API and tell it to commit + merge |
+| Deploy code (tool/skill/workflow) | Trigger an agent via the API and tell it to validate locally and open a PR; explicitly ask it to merge only after CI is green |
 
 ## FAQ
 
 **Do I need a GitHub account?**
-No. Trigger a Centaur agent via the API and tell it to deploy your code. The agent has `gh` CLI access and handles the entire git flow.
+No. Trigger a Centaur agent via the API and tell it to validate locally and open a PR. If you want it merged, explicitly ask after the PR exists and CI is green.
 
 **Can I build without an API key for the external service?**
 Yes — many APIs are free/public (Hacker News, DeFi Llama, CoinDesk, Google News, Polymarket). For paid APIs, bring your own key or ask in `#hackathon2026`.
@@ -462,7 +485,7 @@ Yes — many APIs are free/public (Hacker News, DeFi Llama, CoinDesk, Google New
 Yes. Add them to `pyproject.toml` under `dependencies`. They install automatically.
 
 **What if I break something?**
-You won't — tools/skills/workflows run in isolation. And we can always roll back. Ship it!
+Tools, skills, and workflows run in isolation, and PRs give us a review/CI checkpoint before anything lands on `main`.
 
 **How do I see what Centaur already has?**
 Hit `GET /tools` to see 60+ tools. Check `.agents/skills/` for existing skills. Check `workflows/` for existing workflows.
