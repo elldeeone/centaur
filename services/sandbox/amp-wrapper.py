@@ -55,11 +55,24 @@ def _amp_base_cmd() -> list[str]:
 
 
 AMP_BASE = _amp_base_cmd()
+WRAPPER_HEARTBEAT_SUBTYPE = "wrapper_heartbeat"
 
 
 def emit(line: str) -> None:
     sys.stdout.write(line + "\n")
     sys.stdout.flush()
+
+
+def emit_json(payload: dict) -> None:
+    emit(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+
+
+def emit_wrapper_heartbeat(phase: str) -> None:
+    emit_json({
+        "type": "system",
+        "subtype": WRAPPER_HEARTBEAT_SUBTYPE,
+        "phase": phase,
+    })
 
 
 def is_end_turn(evt: dict) -> bool:
@@ -324,13 +337,16 @@ def main() -> None:
     crashes = 0
     code = 0
     next_cmd = first_cmd
+    next_phase = "startup_continue" if startup_tid else "startup"
 
     while True:
+        emit_wrapper_heartbeat(next_phase)
         result = run(next_cmd)
         next_cmd = AMP_BASE
 
         while result.chain_tid:
             crashes = 0
+            emit_wrapper_heartbeat("handoff_continue")
             result = run(
                 AMP_BASE + ["threads", "continue", result.chain_tid],
                 stdin_data=CONTINUE_MSG,
@@ -343,6 +359,7 @@ def main() -> None:
                 if result.resume_tid
                 else AMP_BASE
             )
+            next_phase = "interrupt_continue" if result.resume_tid else "interrupt_restart"
             continue
 
         if result.code == 0:
@@ -357,7 +374,7 @@ def main() -> None:
             code = result.code
             break
 
-        emit(json.dumps({
+        emit_json({
             "type": "error",
             "error": {
                 "message": (
@@ -365,7 +382,8 @@ def main() -> None:
                     f"restarting ({crashes}/{MAX_CRASH_RESTARTS})"
                 )
             },
-        }))
+        })
+        next_phase = "crash_restart"
 
     sys.exit(code)
 
