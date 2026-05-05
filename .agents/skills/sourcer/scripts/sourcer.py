@@ -281,6 +281,80 @@ def _change_log_rows(entries: list[str]) -> list[dict[str, str]]:
     ]
 
 
+def _is_duplicate_tab_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return ("already exists" in message or "duplicate" in message) and (
+        "sheet" in message or "tab" in message
+    )
+
+
+def _write_count(payload: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = payload.get(key)
+        number = _coerce_number(value)
+        if number is not None:
+            return int(number)
+    return None
+
+
+def _check_write_counts(
+    result: Any,
+    *,
+    label: str,
+    body_row_count: int,
+    header_count: int,
+) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        _fail(f"{label} write returned an unexpected response: {result!r}")
+
+    expected_rows = body_row_count + 1
+    expected_cells = expected_rows * header_count
+    updated_rows = _write_count(result, "updated_rows", "updatedRows")
+    updated_cells = _write_count(result, "updated_cells", "updatedCells")
+
+    if updated_rows != expected_rows:
+        _fail(
+            f"{label} write updated {updated_rows} rows; expected {expected_rows}. "
+            "Re-run publish after checking the tab."
+        )
+    if updated_cells is None or updated_cells < expected_cells:
+        _fail(
+            f"{label} write updated {updated_cells} cells; expected at least {expected_cells}. "
+            "Re-run publish after checking the tab."
+        )
+
+    return result
+
+
+def _write_table_checked(
+    client: "ToolClient",
+    *,
+    spreadsheet_id: str,
+    sheet_title: str,
+    headers: list[str],
+    rows: list[dict[str, Any]],
+    start_cell: str,
+    label: str,
+) -> dict[str, Any]:
+    result = client.call(
+        "gsuite",
+        "sheets_write_table",
+        {
+            "spreadsheet_id": spreadsheet_id,
+            "sheet_title": sheet_title,
+            "headers": headers,
+            "rows": rows,
+            "start_cell": start_cell,
+        },
+    )
+    return _check_write_counts(
+        result,
+        label=label,
+        body_row_count=len(rows),
+        header_count=len(headers),
+    )
+
+
 class ToolClient:
     def __init__(self, api_url: str, api_key: str | None):
         self.api_url = api_url.rstrip("/")
@@ -408,6 +482,9 @@ def _command_publish(args: argparse.Namespace) -> int:
     if spreadsheet_id is not None and not args.tab_name:
         _fail("--tab-name is required when appending to an existing spreadsheet.")
 
+    if spreadsheet_id is not None and not change_log_entries:
+        _fail("--change-log-entry is required at least once when appending to an existing spreadsheet.")
+
     tab_name = args.tab_name or "Candidates"
     table_start_cell = _candidate_table_start_cell(change_log_entries)
 
@@ -418,6 +495,7 @@ def _command_publish(args: argparse.Namespace) -> int:
         "created_new_sheet": spreadsheet_id is None,
         "tab_name": tab_name,
         "change_log": change_log_entries,
+        "change_log_entry_count": len(change_log_entries),
         "table_start_cell": table_start_cell,
         "count": len(prepared),
         "top_candidates": [candidate["name"] for candidate in prepared[:5]],
@@ -431,42 +509,47 @@ def _command_publish(args: argparse.Namespace) -> int:
     if spreadsheet_id is None:
         created = client.call("gsuite", "sheets_create", {"title": args.title})
         spreadsheet_id = _extract_spreadsheet_id(created)
+        existing_tab_reused = False
     else:
         created = {"spreadsheet_id": spreadsheet_id}
+        existing_tab_reused = False
 
     if spreadsheet_id is None:
         _fail("Spreadsheet creation did not return an ID.")
 
     if args.spreadsheet_id is not None or tab_name != "Sheet1":
-        client.call(
-            "gsuite",
-            "sheets_add_tab",
-            {"spreadsheet_id": spreadsheet_id, "title": tab_name},
-        )
+        try:
+            client.call(
+                "gsuite",
+                "sheets_add_tab",
+                {"spreadsheet_id": spreadsheet_id, "title": tab_name},
+            )
+        except RuntimeError as exc:
+            if not (args.spreadsheet_id is not None and _is_duplicate_tab_error(exc)):
+                raise
+            existing_tab_reused = True
 
+    change_log_write = None
     if change_log_entries:
-        client.call(
-            "gsuite",
-            "sheets_write_table",
-            {
-                "spreadsheet_id": spreadsheet_id,
-                "sheet_title": tab_name,
-                "headers": CHANGE_LOG_HEADERS,
-                "rows": _change_log_rows(change_log_entries),
-                "start_cell": "A1",
-            },
+        change_log_rows = _change_log_rows(change_log_entries)
+        change_log_write = _write_table_checked(
+            client,
+            spreadsheet_id=spreadsheet_id,
+            sheet_title=tab_name,
+            headers=CHANGE_LOG_HEADERS,
+            rows=change_log_rows,
+            start_cell="A1",
+            label="Change log",
         )
 
-    client.call(
-        "gsuite",
-        "sheets_write_table",
-        {
-            "spreadsheet_id": spreadsheet_id,
-            "sheet_title": tab_name,
-            "headers": HEADERS,
-            "rows": rows,
-            "start_cell": table_start_cell,
-        },
+    candidate_table_write = _write_table_checked(
+        client,
+        spreadsheet_id=spreadsheet_id,
+        sheet_title=tab_name,
+        headers=HEADERS,
+        rows=rows,
+        start_cell=table_start_cell,
+        label="Candidate table",
     )
     if args.share_with:
         client.call(
@@ -481,6 +564,9 @@ def _command_publish(args: argparse.Namespace) -> int:
                 **manifest,
                 "spreadsheet_id": spreadsheet_id,
                 "url": _extract_sheet_url(created, spreadsheet_id),
+                "existing_tab_reused": existing_tab_reused,
+                "change_log_write": change_log_write,
+                "candidate_table_write": candidate_table_write,
             },
             indent=2,
         )

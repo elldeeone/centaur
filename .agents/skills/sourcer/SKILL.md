@@ -40,7 +40,7 @@ Fresh slate:
 Refined slate:
 - Preserve the existing spreadsheet.
 - Add a new tab for the revised results.
-- Write a short change log above the candidate table explaining what changed in the rerank or reslate.
+- Write a short change log above the candidate table explaining what changed in the rerank or reslate. When publishing with `--spreadsheet-id`, include at least one `--change-log-entry`.
 
 ## Tooling Rules
 
@@ -235,6 +235,7 @@ uv run .agents/skills/sourcer/scripts/sourcer.py publish \
 ```
 
 The script computes the weighted score, sorts the candidates, and either creates a new Google Sheet or appends a new tab to the existing spreadsheet with the change log above the candidate table.
+If a refined publish is interrupted after the tab is created, rerun the same command with the same `--tab-name`; the script treats the existing tab as a replay and rewrites the change log and candidate table.
 
 Use `--top-n <count>` if you want to cap the exported set.
 
