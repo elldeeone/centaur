@@ -542,7 +542,14 @@ class KubernetesExecutorBackend(SandboxBackend):
         await self._delete_pod(pod_name)
         await self._create_prompt_secret(secret_name, persona)
         await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
-        await self._wait_ready(pod_name)
+        try:
+            await self._wait_ready(pod_name)
+        except Exception:
+            with contextlib.suppress(Exception):
+                await self._delete_pod(pod_name)
+            with contextlib.suppress(Exception):
+                await self._delete_prompt_secret(secret_name)
+            raise
 
         session = SandboxSession(
             sandbox_id=pod_name,

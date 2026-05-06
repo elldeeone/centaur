@@ -90,7 +90,8 @@
       "type": "object",
       "properties": {
         "runtimeClassName": { "type": "string" },
-        "reposPath": { "type": "string" }
+        "reposPath": { "type": "string" },
+        "resources": { "type": "object" }
       }
     },
     "repoCache": {

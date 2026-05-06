@@ -358,6 +358,45 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_create_cleans_up_pod_and_prompt_secret_when_readiness_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    backend._core = fake_core
+
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setattr("api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._container_env",
+        lambda *_args, **_kwargs: ["CENTAUR_API_URL=http://api.internal:8000"],
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes._build_harness_cmd", lambda *_args: ["amp-wrapper"])
+    monkeypatch.setattr("api.sandbox.kubernetes._image", lambda: "centaur-agent:test")
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fake_wait_ready(_pod_name: str) -> float:
+        raise TimeoutError("sandbox readiness timed out after 60s")
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+
+    with pytest.raises(TimeoutError, match="readiness timed out"):
+        await backend.create("slack:C123:123.456", "amp", "amp")
+
+    pod_name = fake_core.created_pods[0][1]["metadata"]["name"]
+    secret_name = fake_core.created_secrets[0][1]["metadata"]["name"]
+
+    assert fake_core.deleted_pods[-1] == ("centaur-sandbox", pod_name, 5)
+    assert fake_core.deleted_secrets[-1] == ("centaur-sandbox", secret_name)
+
+
+@pytest.mark.asyncio
 async def test_create_mounts_repo_cache_host_path(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = KubernetesExecutorBackend()
     fake_core = FakeCoreApi()

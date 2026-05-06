@@ -105,6 +105,11 @@ sandbox:
     pullPolicy: IfNotPresent
   runtimeClassName: ""
   reposPath: ""
+  resources:
+    limits: {}
+    requests:
+      cpu: 100m
+      memory: 512Mi
 
 repoCache:
   enabled: false

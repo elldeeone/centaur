@@ -1,4 +1,5 @@
 {{- $reposPath := .Values.sandbox.reposPath -}}
+{{- $apiExtraEnv := .Values.api.extraEnv | default dict -}}
 {{- if and .Values.repoCache.enabled (not $reposPath) -}}
 {{- $reposPath = .Values.repoCache.hostPath -}}
 {{- end -}}
@@ -558,6 +559,26 @@ spec:
               value: {{ include "centaur.trustedCaSecretName" . | quote }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+{{- with .Values.sandbox.resources.limits }}
+{{- if and .cpu (not (hasKey $apiExtraEnv "KUBERNETES_SANDBOX_CPU_LIMIT")) }}
+            - name: KUBERNETES_SANDBOX_CPU_LIMIT
+              value: {{ .cpu | quote }}
+{{- end }}
+{{- if and .memory (not (hasKey $apiExtraEnv "KUBERNETES_SANDBOX_MEMORY_LIMIT")) }}
+            - name: KUBERNETES_SANDBOX_MEMORY_LIMIT
+              value: {{ .memory | quote }}
+{{- end }}
+{{- end }}
+{{- with .Values.sandbox.resources.requests }}
+{{- if and .cpu (not (hasKey $apiExtraEnv "KUBERNETES_SANDBOX_CPU_REQUEST")) }}
+            - name: KUBERNETES_SANDBOX_CPU_REQUEST
+              value: {{ .cpu | quote }}
+{{- end }}
+{{- if and .memory (not (hasKey $apiExtraEnv "KUBERNETES_SANDBOX_MEMORY_REQUEST")) }}
+            - name: KUBERNETES_SANDBOX_MEMORY_REQUEST
+              value: {{ .memory | quote }}
+{{- end }}
+{{- end }}
 {{- if .Values.sandbox.runtimeClassName }}
             - name: KUBERNETES_SANDBOX_RUNTIME_CLASS_NAME
               value: {{ .Values.sandbox.runtimeClassName | quote }}
