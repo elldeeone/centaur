@@ -131,7 +131,12 @@ def decode_jsonb(value: Any, fallback: Any) -> Any:
 def _matches_raw_harness_auth_failure(*values: str | None) -> bool:
     expected = _RAW_HARNESS_AUTH_SIGNATURE.casefold()
     for value in values:
-        if isinstance(value, str) and value.strip().casefold() == expected:
+        if not isinstance(value, str):
+            continue
+        normalized = " ".join(value.strip().casefold().split())
+        if normalized == expected.casefold():
+            return True
+        if "unauthorized" in normalized and "access token" in normalized:
             return True
     return False
 
@@ -1550,6 +1555,17 @@ async def _requeue_execution_after_raw_harness_auth_failure(
             update_result=update_result,
         )
         return False
+    await pool.execute(
+        "UPDATE agent_message_requests SET delivered_execution_id = NULL "
+        "WHERE thread_key = $1 AND delivered_execution_id = $2",
+        thread_key,
+        execution_id,
+    )
+    await pool.execute(
+        "UPDATE sandbox_sessions SET last_delivered_id = NULL, updated_at = NOW() "
+        "WHERE thread_key = $1",
+        thread_key,
+    )
     await append_execution_state(
         pool,
         execution_id=execution_id,

@@ -868,7 +868,6 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
         execution_id,
         thread_key,
     )
-
     row = {
         "execution_id": execution_id,
         "thread_key": thread_key,
@@ -961,6 +960,21 @@ async def test_worker_requeues_raw_harness_auth_error_once_on_fresh_runtime(db_p
         "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
         execution_id,
         thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_message_requests ("
+        "thread_key, message_id, assignment_generation, request_hash, event_json, "
+        "metadata, delivered_execution_id"
+        ") VALUES ($1, 'msg-auth', 1, 'hash-msg-auth', '{}'::jsonb, '{}'::jsonb, $2)",
+        thread_key,
+        execution_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, updated_at, last_delivered_id"
+        ") VALUES ($1, $2, 'amp', 'amp', 'running', NOW(), NOW(), 'msg-auth')",
+        thread_key,
+        initial_runtime_id,
     )
 
     row = {
@@ -1058,6 +1072,18 @@ async def test_worker_requeues_raw_harness_auth_error_once_on_fresh_runtime(db_p
             "fresh_runtime": True,
             "last_error": "Unauthorized Check your access token.",
         }
+        delivered_message = await db_pool.fetchrow(
+            "SELECT delivered_execution_id FROM agent_message_requests "
+            "WHERE thread_key = $1 AND message_id = 'msg-auth'",
+            thread_key,
+        )
+        assert delivered_message is not None
+        assert delivered_message["delivered_execution_id"] is None
+        cursor = await db_pool.fetchval(
+            "SELECT last_delivered_id FROM sandbox_sessions WHERE thread_key = $1",
+            thread_key,
+        )
+        assert cursor is None
 
         outbox = await db_pool.fetchrow(
             "SELECT state, final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",
@@ -1223,6 +1249,106 @@ async def test_worker_sanitizes_raw_harness_auth_failure_after_retry(db_pool):
     )
     assert final_payload["error_text"] == "Unauthorized Check your access token."
     stop_session_mock.assert_awaited_once_with(thread_key)
+
+
+@pytest.mark.asyncio
+async def test_worker_classifies_embedded_raw_harness_auth_failure(db_pool):
+    from api.runtime_control import _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    runtime_id = f"rt-auth-{uuid.uuid4().hex[:8]}"
+    retry_metadata = {
+        "control_plane_retry": {
+            "reason": "harness_auth",
+            "attempt": 1,
+            "max_attempts": 1,
+            "fresh_runtime": True,
+            "last_error": "Unauthorized Check your access token.",
+        }
+    }
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, hard_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-auth-final', 'hash-auth-final', 'running', "
+        "'{}'::jsonb, $3::jsonb, NOW() + INTERVAL '10 minutes')",
+        execution_id,
+        thread_key,
+        json.dumps(retry_metadata),
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
+        execution_id,
+        thread_key,
+    )
+
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "status": "running",
+        "delivery": {},
+        "metadata": retry_metadata,
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+        "created_at": dt.datetime.now(dt.timezone.utc),
+        "claimed_at": dt.datetime.now(dt.timezone.utc),
+    }
+    session = SandboxSession(
+        sandbox_id=runtime_id,
+        thread_key=thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    async def _auth_failure_stream(*_args, **_kwargs):
+        yield {
+            "data": json.dumps(
+                {
+                    "type": "turn.done",
+                    "result": "Harness failed: Unauthorized\nCheck your access token.",
+                    "is_error": True,
+                }
+            )
+        }
+
+    with (
+        patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
+        patch(
+            "api.runtime_control.inject_stdin",
+            new=AsyncMock(return_value={"ok": True, "injected": True}),
+        ),
+        patch(
+            "api.runtime_control.get_backend",
+            return_value=SimpleNamespace(attach=AsyncMock()),
+        ),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch("api.runtime_control._stream_stdout", _auth_failure_stream),
+        patch("api.runtime_control.stop_session", AsyncMock()),
+    ):
+        await _process_execution(db_pool, row)
+
+    execution = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, result_text FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "failed_permanent"
+    assert execution["terminal_reason"] == "harness_auth_failed"
+    assert "temporary runtime startup issue" in execution["result_text"]
 
 
 @pytest.mark.asyncio
