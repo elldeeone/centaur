@@ -1335,7 +1335,7 @@ async def _mark_execution_terminal(
         "result_text = $3, error_text = $4, completed_at = $6, "
         "worker_id = NULL, worker_lease_expires_at = NULL, updated_at = NOW() "
         "WHERE execution_id = $5 "
-        "RETURNING started_at, assignment_generation, metadata",
+        "RETURNING started_at, assignment_generation, metadata, delivery",
         status,
         terminal_reason,
         result_text,
