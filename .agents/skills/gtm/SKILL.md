@@ -1,6 +1,6 @@
 ---
 name: gtm
-description: "Portfolio intelligence for Paradigm. Use when asked about meetings, portfolio companies, relationship intros, competitive intel, coverage, health scorecards, meeting prep, company lookups, token prices, market data, or any GTM workflow. Triggers on: 'about', 'coverage', 'health', 'intro', 'who is', 'summarize', 'brief', 'upcoming', 'followups', 'search', 'price of', 'news on', 'trending', 'competitive', 'sectors', 'catch me up', 'draft-intro', 'pipeline', 'recent', 'digest'."
+description: "Portfolio intelligence for Paradigm. Use when asked about meetings, portfolio companies, relationship intros, competitive intel, coverage, health scorecards, general meeting prep, company lookups, token prices, market data, or any GTM workflow. Do not use for explicit LP briefing memo asks or same-day LP meeting prep; route those to LP-meeting-prep or lp_meeting_brief_batch. Triggers on: 'about', 'coverage', 'health', 'intro', 'who is', 'summarize', 'brief', 'upcoming', 'followups', 'search', 'price of', 'news on', 'trending', 'competitive', 'sectors', 'catch me up', 'draft-intro', 'pipeline', 'recent', 'digest'."
 ---
 
 # GTM Skill — Portfolio Intelligence for Paradigm
@@ -20,6 +20,18 @@ Axiom, Blast, Blur, Brink, Celestia, Chaos Labs, Codec, Compound, Cosmos, Cozy F
 This is the COMPLETE, AUTHORITATIVE list. Never say "I don't have a portfolio list." If a company is NOT on this list, it is NOT a portfolio company.
 
 ## Commands
+
+## LP Brief Routing
+
+- If the ask explicitly requests an LP briefing memo, an LP prep memo, same-day LP meeting prep, or multiple LP briefs for one day, do not answer from the generic GTM flow.
+- If the `LP-meeting-prep` skill is available, use it for the memo itself.
+- If the user wants a date-based or conference-day batch of LP briefs, use the `lp_meeting_brief_batch` workflow.
+- If `LP-meeting-prep` is unavailable, use this verified fallback checklist before writing anything polished:
+  1. Inspect the live tool surface first with `call discover gsuite`, `call discover slack`, and `call discover attio` before claiming those systems were checked.
+  2. Query each system you mention. Never say Slack, Gmail, calendar, or Attio had no extra context unless the corresponding lookup succeeded.
+  3. If a tool is unavailable, errors, or the deployment lacks access, say that plainly as `not checked` or `unavailable` instead of implying coverage.
+  4. Still produce a useful memo from verified public org facts, but keep missing internal context explicitly labeled.
+  5. Prefer truthful gaps over speculative synthesis. A sparse memo is acceptable; an invented systems-coverage claim is not.
 
 ### Portfolio Intelligence
 
