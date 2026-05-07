@@ -578,23 +578,37 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
                 if msg.get("timestamp") and int(msg.get("reply_count") or 0) > 0
             }
             for thread_ts in sorted(thread_roots):
-                replies_page = client._get_etl_thread_replies_page(
-                    channel_id,
-                    thread_ts=thread_ts,
-                    limit=limit,
-                    oldest=oldest,
-                    latest=inp.latest,
-                    inclusive=True,
-                )
-                replies = [
-                    reply
-                    for reply in replies_page.get("messages", [])
-                    if str(reply.get("timestamp") or "") != thread_ts
-                ]
-                reply_rows = [_message_row(reply, run_id, thread_ts) for reply in replies]
+                reply_cursor = None
+                seen_reply_cursors: set[str] = set()
                 counts["threads_fetched"] += 1
-                counts["replies_fetched"] += len(reply_rows)
-                counts["replies_upserted"] += await _upsert_messages(ctx._pool, reply_rows)
+                while True:
+                    replies_page = client._get_etl_thread_replies_page(
+                        channel_id,
+                        thread_ts=thread_ts,
+                        limit=limit,
+                        cursor=reply_cursor,
+                        oldest=oldest,
+                        latest=inp.latest,
+                        inclusive=True,
+                    )
+                    replies = [
+                        reply
+                        for reply in replies_page.get("messages", [])
+                        if str(reply.get("timestamp") or "") != thread_ts
+                    ]
+                    reply_rows = [_message_row(reply, run_id, thread_ts) for reply in replies]
+                    counts["replies_fetched"] += len(reply_rows)
+                    counts["replies_upserted"] += await _upsert_messages(ctx._pool, reply_rows)
+
+                    next_reply_cursor = replies_page.get("next_cursor")
+                    if not replies_page.get("has_more") or not next_reply_cursor:
+                        break
+                    if next_reply_cursor in seen_reply_cursors:
+                        raise RuntimeError(
+                            f"Slack returned a repeated reply cursor for thread {thread_ts}"
+                        )
+                    seen_reply_cursors.add(next_reply_cursor)
+                    reply_cursor = str(next_reply_cursor)
 
             await _update_checkpoint_success(
                 ctx._pool,

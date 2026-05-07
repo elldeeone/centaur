@@ -27,12 +27,14 @@ class FakeSlackClient:
         users: list[dict[str, Any]] | None = None,
         messages: list[dict[str, Any]] | None = None,
         replies: dict[str, list[dict[str, Any]]] | None = None,
+        reply_pages: dict[str, list[dict[str, Any]]] | None = None,
         sync_state: dict[str, Any] | None = None,
     ) -> None:
         self.channels = channels or []
         self.users = users or []
         self.messages = messages or []
         self.replies = replies or {}
+        self.reply_pages = reply_pages or {}
         self.sync_state = sync_state or {
             "cursor": None,
             "watermark": "3000000.000000",
@@ -115,6 +117,18 @@ class FakeSlackClient:
             "latest": latest,
             "inclusive": inclusive,
         })
+        if thread_ts in self.reply_pages:
+            page = self.reply_pages[thread_ts].pop(0)
+            messages = page.get("messages", [])
+            return {
+                "channel_id": channel,
+                "thread_ts": thread_ts,
+                "messages": messages,
+                "count": len(messages),
+                "has_more": bool(page.get("has_more")),
+                "next_cursor": page.get("next_cursor"),
+            }
+
         messages = self.replies.get(thread_ts, [])
         return {
             "channel_id": channel,
@@ -419,6 +433,55 @@ async def test_syncs_user_token_public_channels(
     assert json.loads(run["channels_requested"])[0]["channel_id"] == "C_PUBLIC"
     assert json.loads(run["channels_skipped"]) == []
     assert json.loads(run["metadata"])["slack_access_mode"] == "user_token"
+
+
+@pytest.mark.asyncio
+async def test_syncs_all_thread_reply_pages_before_advancing_checkpoint(db_pool, monkeypatch):
+    from workflows import slack_sync
+
+    second_reply = {
+        **_reply_message(),
+        "timestamp": "3000002.000000",
+        "text": "second reply page",
+    }
+    fake = FakeSlackClient(
+        channels=[_public_channel()],
+        messages=[_root_message()],
+        reply_pages={
+            "3000000.000000": [
+                {
+                    "messages": [_root_message(), _reply_message()],
+                    "has_more": True,
+                    "next_cursor": "cursor-2",
+                },
+                {
+                    "messages": [second_reply],
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            ],
+        },
+    )
+    ctx = FakeCtx(db_pool)
+    monkeypatch.setenv("SLACK_ETL_CHANNEL_ALLOWLIST", "ai-agent")
+
+    with patch.object(slack_sync, "_client", return_value=fake):
+        result = await slack_sync.handler(slack_sync.Input(), ctx)
+
+    assert result["status"] == "completed"
+    assert result["replies_upserted"] == 2
+    assert [call["cursor"] for call in fake.reply_calls] == [None, "cursor-2"]
+    assert await db_pool.fetchval(
+        "SELECT COUNT(*) FROM slack_sync_messages WHERE parent_message_ts = '3000000.000000'",
+    ) == 2
+
+    checkpoint = await db_pool.fetchrow(
+        "SELECT watermark_ts, last_error FROM slack_sync_checkpoints "
+        "WHERE channel_id = 'C_PUBLIC'",
+    )
+    assert checkpoint is not None
+    assert checkpoint["watermark_ts"] == "3000000.000000"
+    assert checkpoint["last_error"] == ""
 
 
 @pytest.mark.asyncio
