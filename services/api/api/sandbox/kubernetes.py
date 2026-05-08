@@ -144,6 +144,10 @@ def _secret_env_name() -> str:
     return value
 
 
+def _bootstrap_secret_name() -> str:
+    return (os.getenv("KUBERNETES_BOOTSTRAP_SECRET_NAME") or "").strip()
+
+
 def _secret_env_key(name: str) -> str:
     return f"{os.getenv('KUBERNETES_SECRET_ENV_PREFIX', '')}{name}"
 
@@ -686,6 +690,14 @@ class KubernetesExecutorBackend(SandboxBackend):
         proxy_pod_name = _proxy_pod_name(sandbox_id)
         secret_name = _secret_env_name()
         env_secret_ref = {"secretRef": {"name": secret_name}}
+        env_from = [env_secret_ref]
+        bootstrap_secret_name = _bootstrap_secret_name()
+        if (
+            os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
+            == "onepassword"
+            and bootstrap_secret_name
+        ):
+            env_from.append({"secretRef": {"name": bootstrap_secret_name}})
         secret_key_refs = {
             "FIREWALL_CONTROL_TOKEN": _secret_env_key("FIREWALL_CONTROL_TOKEN"),
             "SECRETS_AUTH_TOKEN": _secret_env_key("SECRETS_AUTH_TOKEN"),
@@ -797,7 +809,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                                     },
                                 }
                             ],
-                            "envFrom": [env_secret_ref],
+                            "envFrom": env_from,
                             "ports": [
                                 {"containerPort": _proxy_port(), "name": "proxy"},
                                 {
@@ -846,7 +858,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                             "image": _proxy_manager_image(),
                             "imagePullPolicy": _proxy_manager_image_pull_policy(),
                             "env": manager_env,
-                            "envFrom": [env_secret_ref],
+                            "envFrom": env_from,
                             "ports": [
                                 {
                                     "containerPort": _proxy_manager_port(),

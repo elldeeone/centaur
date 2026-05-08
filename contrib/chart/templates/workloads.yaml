@@ -504,6 +504,10 @@ spec:
               value: {{ include "centaur.secretEnvName" . | quote }}
             - name: KUBERNETES_SECRET_ENV_PREFIX
               value: {{ .Values.secretManager.envPrefix | quote }}
+{{- if .Values.secrets.bootstrapSecretName }}
+            - name: KUBERNETES_BOOTSTRAP_SECRET_NAME
+              value: {{ .Values.secrets.bootstrapSecretName | quote }}
+{{- end }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
             - name: KUBERNETES_IRON_PROXY_IMAGE

@@ -121,6 +121,7 @@ class FakeWsApiClient:
 def _default_per_sandbox_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
     monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.delenv("KUBERNETES_BOOTSTRAP_SECRET_NAME", raising=False)
 
 
 def test_pod_resources_uses_default_limits_when_unset(
@@ -530,9 +531,15 @@ async def test_create_builds_per_sandbox_proxy_resources(
     assert (
         proxy_pod["spec"]["containers"][0]["readinessProbe"]["failureThreshold"] == 30
     )
+    assert proxy_pod["spec"]["containers"][0]["envFrom"] == [
+        {"secretRef": {"name": "centaur-infra-env"}}
+    ]
     assert (
         proxy_pod["spec"]["containers"][1]["image"] == "centaur-firewall-manager:test"
     )
+    assert proxy_pod["spec"]["containers"][1]["envFrom"] == [
+        {"secretRef": {"name": "centaur-infra-env"}}
+    ]
     assert (
         proxy_pod["spec"]["containers"][1]["readinessProbe"]["httpGet"]["path"]
         == "/health/ready"
@@ -553,6 +560,33 @@ async def test_create_builds_per_sandbox_proxy_resources(
         "centaur.ai/iron-proxy": "true",
         "centaur.ai/sandbox-id": session.sandbox_id,
     }
+
+
+@pytest.mark.asyncio
+async def test_per_sandbox_proxy_uses_bootstrap_secret_for_onepassword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    backend._core = fake_core
+    monkeypatch.setenv("KUBERNETES_BOOTSTRAP_SECRET_NAME", "centaur-bootstrap")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    await backend._create_proxy_pod("sandbox-pod")
+
+    proxy_pod = fake_core.created_pods[0][1]
+    assert proxy_pod["spec"]["containers"][0]["envFrom"] == [
+        {"secretRef": {"name": "centaur-infra-env"}},
+        {"secretRef": {"name": "centaur-bootstrap"}},
+    ]
+    assert proxy_pod["spec"]["containers"][1]["envFrom"] == [
+        {"secretRef": {"name": "centaur-infra-env"}},
+        {"secretRef": {"name": "centaur-bootstrap"}},
+    ]
 
 
 @pytest.mark.asyncio
