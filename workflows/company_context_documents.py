@@ -18,7 +18,7 @@ from api.workflow_engine import WorkflowContext
 
 WORKFLOW_NAME = "company_context_documents"
 
-DEFAULT_SYNC_INTERVAL_HOURS = 4
+DEFAULT_SYNC_INTERVAL_SECONDS = 4 * 60 * 60
 DEFAULT_WATERMARK_OVERLAP_SECONDS = 60
 MIN_THREAD_MESSAGES = 5
 FALSE_ENV_VALUES = {"0", "false", "no", "off"}
@@ -55,11 +55,9 @@ def _env_flag_enabled(name: str, default: bool = True) -> bool:
 SCHEDULE = {
     "schedule_id": "company_context_documents",
     "interval_seconds": _positive_int(
-        os.getenv("COMPANY_CONTEXT_DOCUMENTS_INTERVAL_HOURS"),
-        DEFAULT_SYNC_INTERVAL_HOURS,
-    )
-    * 60
-    * 60,
+        os.getenv("COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS"),
+        DEFAULT_SYNC_INTERVAL_SECONDS,
+    ),
     "enabled": (
         _env_flag_enabled("SLACK_ETL_ENABLED", default=True)
         and _env_flag_enabled("COMPANY_CONTEXT_DOCUMENTS_ENABLED", default=True)

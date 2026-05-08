@@ -492,6 +492,18 @@ spec:
             - name: SLACK_SYNC_INTERVAL_SECONDS
               value: {{ .Values.api.slackSyncIntervalSeconds | quote }}
 {{- end }}
+{{- if not (hasKey $apiExtraEnv "SLACK_SYNC_LOOKBACK_DAYS") }}
+            - name: SLACK_SYNC_LOOKBACK_DAYS
+              value: {{ .Values.api.slackSyncLookbackDays | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "SLACK_SYNC_THREAD_LOOKBACK_DAYS") }}
+            - name: SLACK_SYNC_THREAD_LOOKBACK_DAYS
+              value: {{ .Values.api.slackSyncThreadLookbackDays | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS") }}
+            - name: COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS
+              value: {{ .Values.api.companyContextDocumentsIntervalSeconds | quote }}
+{{- end }}
 {{- if not (hasKey $apiExtraEnv "SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS") }}
             - name: SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS
               value: {{ .Values.api.slackEtlExcludedChannelPatterns | quote }}

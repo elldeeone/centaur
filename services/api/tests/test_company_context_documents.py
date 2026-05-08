@@ -32,7 +32,7 @@ async def _clear_company_context_tables(db_pool):
 def test_schedule_defaults_to_four_hour_interval(monkeypatch):
     monkeypatch.delenv("SLACK_ETL_ENABLED", raising=False)
     monkeypatch.delenv("COMPANY_CONTEXT_DOCUMENTS_ENABLED", raising=False)
-    monkeypatch.delenv("COMPANY_CONTEXT_DOCUMENTS_INTERVAL_HOURS", raising=False)
+    monkeypatch.delenv("COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS", raising=False)
 
     from workflows import company_context_documents
 
@@ -49,14 +49,14 @@ def test_schedule_defaults_to_four_hour_interval(monkeypatch):
 def test_schedule_respects_env_overrides(monkeypatch):
     monkeypatch.setenv("SLACK_ETL_ENABLED", "true")
     monkeypatch.setenv("COMPANY_CONTEXT_DOCUMENTS_ENABLED", "false")
-    monkeypatch.setenv("COMPANY_CONTEXT_DOCUMENTS_INTERVAL_HOURS", "2")
+    monkeypatch.setenv("COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS", "300")
 
     from workflows import company_context_documents
 
     reloaded = importlib.reload(company_context_documents)
 
     assert reloaded.SCHEDULE["enabled"] is False
-    assert reloaded.SCHEDULE["interval_seconds"] == 7200
+    assert reloaded.SCHEDULE["interval_seconds"] == 300
 
 
 async def _seed_slack_basics(db_pool) -> None:

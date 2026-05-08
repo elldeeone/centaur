@@ -67,7 +67,11 @@
             "clusterDomain": { "type": "string" },
             "tailnetFqdnAnnotation": { "type": "string" }
           }
-        }
+        },
+        "slackSyncIntervalSeconds": { "type": "integer" },
+        "slackSyncLookbackDays": { "type": "integer" },
+        "slackSyncThreadLookbackDays": { "type": "integer" },
+        "companyContextDocumentsIntervalSeconds": { "type": "integer" }
       }
     },
     "overlay": {

@@ -55,6 +55,9 @@ api:
   warmPoolEnabled: false
   slackEtlEnabled: true
   slackSyncIntervalSeconds: 14400
+  slackSyncLookbackDays: 30
+  slackSyncThreadLookbackDays: 3
+  companyContextDocumentsIntervalSeconds: 14400
   slackEtlExcludedChannelPatterns: ""
   victoriaMetricsPushEnabled: false
   startupProbe:
