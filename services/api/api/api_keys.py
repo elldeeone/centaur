@@ -335,16 +335,20 @@ def check_scope(key_info: APIKeyInfo, required: str, resource: str = "") -> bool
     """Check if a key's scopes permit the requested action.
 
     Scope format: "*" (wildcard), "admin", "agent", "agent:execute",
-    "tools:*", "tools:<name>", "threads", "threads:read".
+    "tools:*", "tools:<name>", "workflows", "workflows:*",
+    "workflows:<name>", "threads", "threads:read".
 
-    A bare category scope (e.g. "agent") grants all sub-actions.
+    A bare category scope (e.g. "agent") grants all sub-actions. Resource-
+    qualified categories (``tools``, ``workflows``) accept either a wildcard
+    (``tools:*`` / ``workflows:*``) or an exact resource match
+    (``workflows:my_workflow``).
     """
     scopes = key_info.scopes
 
     if "*" in scopes:
         return True
 
-    if ":" in required and not required.startswith("tools:"):
+    if ":" in required and not required.startswith(("tools:", "workflows:")):
         category, action = required.split(":", 1)
     else:
         category = required
@@ -355,6 +359,14 @@ def check_scope(key_info: APIKeyInfo, required: str, resource: str = "") -> bool
             if scope == "tools:*":
                 return True
             if scope.startswith("tools:") and resource == scope[6:]:
+                return True
+        return False
+
+    if category == "workflows":
+        for scope in scopes:
+            if scope in ("workflows", "workflows:*"):
+                return True
+            if scope.startswith("workflows:") and resource == scope[len("workflows:") :]:
                 return True
         return False
 

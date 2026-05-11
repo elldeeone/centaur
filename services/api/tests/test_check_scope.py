@@ -77,3 +77,41 @@ class TestEmptyScopes:
         assert check_scope(key, "agent") is False
         assert check_scope(key, "agent:execute") is False
         assert check_scope(key, "tools", resource="slack") is False
+        assert check_scope(key, "workflows", resource="muesli_meeting_ingest") is False
+
+
+class TestWorkflowScopes:
+    def test_workflows_star_grants_any_workflow(self):
+        key = _key(["workflows:*"])
+        assert check_scope(key, "workflows", resource="muesli_meeting_ingest") is True
+        assert check_scope(key, "workflows", resource="agent_turn") is True
+
+    def test_bare_workflows_grants_any_workflow(self):
+        key = _key(["workflows"])
+        assert check_scope(key, "workflows", resource="muesli_meeting_ingest") is True
+        assert check_scope(key, "workflows", resource="other") is True
+
+    def test_named_workflow_grants_only_that_workflow(self):
+        key = _key(["workflows:muesli_meeting_ingest"])
+        assert check_scope(key, "workflows", resource="muesli_meeting_ingest") is True
+        assert check_scope(key, "workflows", resource="agent_turn") is False
+
+    def test_named_workflow_does_not_grant_admin_or_tools(self):
+        key = _key(["workflows:muesli_meeting_ingest"])
+        assert check_scope(key, "admin") is False
+        assert check_scope(key, "agent:execute") is False
+        assert check_scope(key, "tools", resource="slack") is False
+
+    def test_star_grants_workflows(self):
+        key = _key(["*"])
+        assert check_scope(key, "workflows", resource="anything") is True
+
+    def test_workflows_scope_does_not_match_blank_resource_for_narrow_keys(self):
+        key = _key(["workflows:muesli_meeting_ingest"])
+        assert check_scope(key, "workflows", resource="") is False
+
+    def test_workflows_wildcard_matches_blank_resource(self):
+        key = _key(["workflows:*"])
+        assert check_scope(key, "workflows", resource="") is True
+        key = _key(["workflows"])
+        assert check_scope(key, "workflows", resource="") is True

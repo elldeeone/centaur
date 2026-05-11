@@ -37,12 +37,23 @@ async def create_api_key(request: Request, body: CreateKeyRequest) -> dict:
     """Create a new API key. The plaintext key is returned ONCE."""
     from api.api_keys import create_key
 
-    valid_scope_prefixes = ("*", "admin", "agent", "threads", "tools:")
+    valid_scope_prefixes = (
+        "*",
+        "admin",
+        "agent",
+        "threads",
+        "tools:",
+        "workflows",
+        "workflows:",
+    )
     for scope in body.scopes:
         if not any(scope == p or scope.startswith(p) for p in valid_scope_prefixes):
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid scope: {scope}. Must be one of: *, admin, agent, threads, tools:<name>",
+                detail=(
+                    f"Invalid scope: {scope}. Must be one of: *, admin, agent, "
+                    "threads, tools:<name>, workflows, workflows:<name>"
+                ),
             )
 
     pool = request.app.state.db_pool
