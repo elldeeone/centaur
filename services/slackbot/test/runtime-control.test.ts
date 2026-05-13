@@ -377,6 +377,28 @@ describe("SlackBot runtime control", () => {
     expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-new", undefined);
   });
 
+  it("posts exactly one visible response for a completed mention", async () => {
+    const client = createImmediateStreamClient();
+    const bot = new SlackBot(client as any);
+    const runtime = createThread();
+
+    await bot.onSubscribedMessage(runtime.thread, userMessage("follow-up", {
+      id: "1700000000.000004",
+      isMention: true,
+    }));
+
+    const visibleText = [
+      streamText(runtime.streamedChunks),
+      ...runtime.postedMarkdown,
+    ].join("\n");
+    expect(client.startWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(runtime.postCount).toBe(1);
+    expect(visibleText).toContain("done");
+    expect(visibleText).not.toContain("Agent request failed");
+    expect(client.markFinalDelivered).toHaveBeenCalledTimes(1);
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-new", undefined);
+  });
+
   it("uses the stored terminal result when the event stream reconnects after completion", async () => {
     const client = createImmediateStreamClient();
     client.streamEvents = vi.fn(() => (async function* () {
@@ -394,7 +416,9 @@ describe("SlackBot runtime control", () => {
     }));
 
     expect(client.getExecution).toHaveBeenCalledWith("exe-new");
+    expect(runtime.postCount).toBe(1);
     expect(streamText(runtime.streamedChunks)).toContain("stored answer");
+    expect(runtime.postedMarkdown.join("\n")).not.toContain("Agent request failed");
   });
 
   it("logs expected Slack streaming fallbacks at info level", async () => {
@@ -774,6 +798,128 @@ describe("SlackBot runtime control", () => {
         ].join("\n"),
       },
     );
+  });
+
+  it("converts dashboard blocks before posting final delivery", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-dashboard",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: {
+            status: "completed",
+            result_text: [
+              "```dashboard",
+              "title: Deployment Summary",
+              "layout: single",
+              "---",
+              "type: kpi-card",
+              "label: Checks",
+              "value: 3",
+              "format: number",
+              "```",
+            ].join("\n"),
+          },
+        },
+      ],
+    }));
+    const postMessage = vi.fn(async () => ({ id: "msg-final" }));
+    const slack = createSlackAdapter({ postMessage });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    const payload = postMessage.mock.calls[0][1] as { markdown: string };
+    expect(payload.markdown).toContain("*Deployment Summary*");
+    expect(payload.markdown).toContain("*Checks:* 3");
+    expect(payload.markdown).not.toContain("```dashboard");
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-dashboard", expect.any(String));
+  });
+
+  it("posts rendered dashboard chart files with final delivery", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-chart",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: {
+            status: "completed",
+            result_text: [
+              "Chart attached:",
+              "",
+              "```dashboard",
+              "title: Latency",
+              "layout: single",
+              "---",
+              "type: line-chart",
+              "title: p95 latency",
+              "data:",
+              "  [2]{time,ms}:",
+              "    9am,110",
+              "    10am,125",
+              "```",
+            ].join("\n"),
+          },
+        },
+      ],
+    }));
+    const postMessage = vi.fn(async () => ({ id: "msg-final" }));
+    const slack = createSlackAdapter({ postMessage });
+    const bot = new SlackBot(client as any, "", slack);
+    (bot as any).chartRenderer = vi.fn(async () => Buffer.from("chart-png"));
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    const payload = postMessage.mock.calls[0][1] as { markdown: string; files?: Array<{ filename: string; data: Buffer }> };
+    expect(payload.markdown).toContain("Chart attached:");
+    expect(payload.markdown).toContain("*Latency*");
+    expect(payload.markdown).not.toContain("```dashboard");
+    expect(payload.markdown).not.toContain("chart — view in Thread Viewer");
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files?.[0].filename).toBe("p95-latency.png");
+    expect(payload.files?.[0].data.toString()).toBe("chart-png");
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-chart", expect.any(String));
+  });
+
+  it("splits long final deliveries into ordered Slack parts and acks once", async () => {
+    const client = createImmediateStreamClient();
+    const longResult = Array.from(
+      { length: 55 },
+      (_unused, index) => `Paragraph ${index}.`,
+    ).join("\n\n");
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-long-final",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: {
+            status: "completed",
+            result_text: longResult,
+          },
+        },
+      ],
+    }));
+    const postMessage = vi.fn(async () => ({ id: "msg-final" }));
+    const slack = createSlackAdapter({ postMessage });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    const markdowns = postMessage.mock.calls.map((call) => (call[1] as { markdown: string }).markdown);
+    expect(markdowns).toHaveLength(2);
+    expect(markdowns[0]).toMatch(/^Part 1\/2\n\n/);
+    expect(markdowns[1]).toMatch(/^Part 2\/2\n\n/);
+    expect(markdowns.join("\n")).toContain("Paragraph 0.");
+    expect(markdowns.join("\n")).toContain("Paragraph 54.");
+    expect(client.markFinalDelivered).toHaveBeenCalledTimes(1);
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-long-final", expect.any(String));
   });
 
   it("uses explicit Slack delivery destination for workflow final deliveries", async () => {

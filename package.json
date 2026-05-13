@@ -3,6 +3,6 @@
   "private": true,
   "packageManager": "pnpm@10.28.1",
   "scripts": {
-    "e2e:test": "pnpm --filter @centaur/e2e test"
+    "e2e:test": "pnpm --filter centaur-slackbot exec vitest run test/runtime-control.test.ts test/slack-stream.test.ts test/slack-markdown.test.ts test/dashboard-to-slack.test.ts test/bot.test.ts test/attachment-refetch.test.ts && pnpm --filter @centaur/e2e test"
   }
 }

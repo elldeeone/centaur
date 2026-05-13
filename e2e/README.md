@@ -1,21 +1,30 @@
 # Centaur E2E Tests
 
-This directory contains service-neutral system tests for the Centaur stack.
-The tests talk to a real API deployment, which creates real sandbox pods and
-drives a real harness. They intentionally do not live under `services/api` or
-`services/slackbot` because they validate product-level behavior across
-multiple services.
+This is the top-level E2E layer for Centaur product behavior. It should cover
+the user-facing surfaces and the service paths behind them: clients, workflows,
+agent execution, sandbox/harness behavior, tools, delivery, formatting,
+attachments, and recovery.
 
-## Run against an existing local stack
+Use [TESTING_MATRIX.md](./TESTING_MATRIX.md) before adding or changing coverage.
 
-Bring Centaur up first, then run the E2E package:
+## Run the E2E suite
+
+Bring Centaur up first, then run the suite from the repo root:
 
 ```bash
 just up
 pnpm install
+pnpm run e2e:test
+```
+
+## Run against an existing local stack
+
+If the stack is already running, point the suite at it:
+
+```bash
 CENTAUR_API_URL=http://localhost:8000 \
 SLACKBOT_API_KEY=<your-local-slackbot-api-key> \
-pnpm --filter @centaur/e2e test
+pnpm run e2e:test
 ```
 
 If the API is only reachable from inside Kubernetes, port-forward it first:
@@ -62,5 +71,5 @@ CENTAUR_E2E_KIND_CLUSTER=my-centaur-e2e e2e/deploy/run-kind.sh
 
 ## CI
 
-`.github/workflows/e2e-amp.yml` runs the same tests in kind. It requires the
+`.github/workflows/e2e.yml` runs the same tests in kind. It requires the
 GitHub Actions secret `AMP_API_KEY`.

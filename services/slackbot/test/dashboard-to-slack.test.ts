@@ -137,6 +137,48 @@ describe("convertDashboardBlocks", () => {
     expect(result).toContain("*Val:* 100");
   });
 
+  it("converts multiple dashboard fences in one answer", async () => {
+    const input = [
+      "Before",
+      "",
+      "```dashboard",
+      "title: First",
+      "layout: single",
+      "---",
+      "type: kpi-card",
+      "label: Passed",
+      "value: 12",
+      "format: number",
+      "```",
+      "",
+      "Middle",
+      "",
+      "```dashboard",
+      "title: Second",
+      "layout: single",
+      "---",
+      "type: data-table",
+      "columns: check:text,status:text",
+      "data:",
+      "  [1]{check,status}:",
+      "    markdown,ok",
+      "```",
+      "",
+      "After",
+    ].join("\n");
+
+    const result = await expectMarkdown(input);
+    expect(result).toContain("Before");
+    expect(result).toContain("*First*");
+    expect(result).toContain("*Passed:* 12");
+    expect(result).toContain("Middle");
+    expect(result).toContain("*Second*");
+    expect(result).toContain("| Check | Status |");
+    expect(result).toContain("| markdown | ok |");
+    expect(result).toContain("After");
+    expect(result).not.toContain("```dashboard");
+  });
+
   it("leaves unparseable dashboard blocks as-is", async () => {
     const input = "```dashboard\nthis is not valid\n```";
     expect(await expectMarkdown(input)).toBe(input);

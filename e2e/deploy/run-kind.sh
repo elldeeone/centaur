@@ -234,6 +234,12 @@ sleep 2
 wait_for_warm_pool
 
 cd "$ROOT"
-CENTAUR_API_URL="http://localhost:${API_PORT}" \
-SLACKBOT_API_KEY="$SLACKBOT_API_KEY" \
-pnpm --filter @centaur/e2e exec vitest run "$@"
+if [[ "$#" -gt 0 ]]; then
+  CENTAUR_API_URL="http://localhost:${API_PORT}" \
+  SLACKBOT_API_KEY="$SLACKBOT_API_KEY" \
+  pnpm --filter @centaur/e2e exec vitest run "$@"
+else
+  CENTAUR_API_URL="http://localhost:${API_PORT}" \
+  SLACKBOT_API_KEY="$SLACKBOT_API_KEY" \
+  pnpm run e2e:test
+fi

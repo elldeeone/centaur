@@ -1,4 +1,4 @@
-name: Amp E2E
+name: Centaur E2E
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - .github/workflows/e2e-amp.yml
+      - .github/workflows/e2e.yml
       - e2e/**
       - contrib/chart/**
       - services/**
@@ -17,14 +17,14 @@ on:
       - package.json
 
 concurrency:
-  group: e2e-amp-${{ github.workflow }}-${{ github.ref }}
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  slackbot-api-sandbox-amp:
+  centaur-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -37,7 +37,7 @@ jobs:
 
       - name: Skip when AMP_API_KEY is unavailable
         if: ${{ env.AMP_API_KEY == '' }}
-        run: echo "AMP_API_KEY is not configured; skipping live Amp E2E."
+        run: echo "AMP_API_KEY is not configured; skipping live E2E."
 
       - uses: actions/setup-node@v4
         if: ${{ env.AMP_API_KEY != '' }}
@@ -109,7 +109,7 @@ jobs:
         if: ${{ env.AMP_API_KEY != '' }}
         env:
           CENTAUR_API_URL: http://localhost:8000
-        run: pnpm --filter @centaur/e2e test
+        run: pnpm run e2e:test
 
       - name: Dump diagnostics on failure
         if: failure()

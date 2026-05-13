@@ -108,6 +108,35 @@ describe("Slack markdown rendering", () => {
     ]);
   });
 
+  it("renders mixed final answers into markdown, table, and footer blocks", () => {
+    const rendered = renderMarkdownForSlack([
+      "# Summary",
+      "",
+      "```python",
+      "print('ok')",
+      "```",
+      "",
+      "| Check | Status |",
+      "| --- | --- |",
+      "| formatting | ok |",
+      "",
+      "[View in Amp](https://ampcode.com/threads/T-mixed) · `amp threads continue T-mixed` · `abcdef12`",
+    ].join("\n"));
+
+    expect(rendered.blocks?.map((block) => block.type)).toEqual([
+      "markdown",
+      "markdown",
+      "table",
+      "rich_text",
+    ]);
+    expect(rendered.blocks?.[1]).toEqual({
+      type: "markdown",
+      text: "```python\nprint('ok')\n```",
+    });
+    expect(rendered.blocks?.[2]).toEqual(expect.objectContaining({ type: "table" }));
+    expect(rendered.blocks?.[3]).toEqual(expect.objectContaining({ type: "rich_text" }));
+  });
+
   it("packs Slack markdown messages up to the block budget", () => {
     const markdown = Array.from({ length: 55 }, (_, i) => `Paragraph ${i}.`).join("\n\n");
 
