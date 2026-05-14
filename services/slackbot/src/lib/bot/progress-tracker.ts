@@ -33,6 +33,11 @@ export class ProgressTracker {
   lastAssistantText = "";
   /** Explicit result from turn.done. Takes priority over lastAssistantText. */
   resultText = "";
+  /** Terminal execution state, used to distinguish real empty results from aborted streams. */
+  terminalStatus = "";
+  terminalReason = "";
+  terminalResultText = "";
+  terminalErrorText = "";
   /** Agent thread ID (Amp session ID from system.init). */
   agentThreadId = "";
   /** Overflow chunks when the final text exceeds Slack's message limit. */
@@ -120,6 +125,24 @@ export class ProgressTracker {
     if (source.repo_name || source.repoName) this.repoContext.repoName = source.repo_name || source.repoName;
     if (source.git_ref || source.gitRef) this.repoContext.gitRef = source.git_ref || source.gitRef;
     if (source.git_commit || source.gitCommit) this.repoContext.gitCommit = source.git_commit || source.gitCommit;
+  }
+
+  observeTerminal(source: {
+    status?: unknown;
+    terminalReason?: unknown;
+    resultText?: unknown;
+    errorText?: unknown;
+  }): void {
+    this.terminalStatus = typeof source.status === "string" ? source.status.trim() : "";
+    this.terminalReason = typeof source.terminalReason === "string"
+      ? source.terminalReason.trim()
+      : "";
+    this.terminalResultText = typeof source.resultText === "string"
+      ? source.resultText.trim()
+      : "";
+    this.terminalErrorText = typeof source.errorText === "string"
+      ? source.errorText.trim()
+      : "";
   }
 
   // ── Event handlers ─────────────────────────────────────────────────────

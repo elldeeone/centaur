@@ -751,9 +751,9 @@ describe("execute streams structured progress immediately", () => {
     warnSpy.mockRestore();
   });
 
-  it("logs and alerts when a live stream completes with empty final text", async () => {
+  it("does not alert when a live stream ends before a completed terminal result", async () => {
     const mockClient = {
-      execute: vi.fn().mockResolvedValue({ execution_id: "exe-empty-live" }),
+      execute: vi.fn().mockResolvedValue({ execution_id: "exe-nonterminal-empty-live" }),
     };
 
     const { SlackBot } = await import("../src/lib/bot/bot");
@@ -770,7 +770,128 @@ describe("execute streams structured progress immediately", () => {
       _executionId: string,
       tracker: { agentThreadId: string },
     ) {
+      tracker.agentThreadId = "T-nonterminal-empty-live";
+      yield { type: "plan_update", title: "Completed" };
+    }) as any);
+    vi.spyOn(bot as any, "ackFinalDelivery").mockResolvedValue(undefined);
+    vi.spyOn(bot as any, "setAssistantTitle").mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
+
+    const thread = {
+      id: "C123456:1770000000.001000",
+      post: vi.fn(async (content: AsyncIterable<unknown>) => {
+        for await (const _chunk of content) { /* drain */ }
+        return {
+          id: "1770000000.001001",
+          streamMessageTs: "1770000000.001001",
+          edit: async () => {},
+        };
+      }),
+    };
+
+    try {
+      await (bot as any).execute(thread, thread.id, {
+        assignmentGeneration: 7,
+        userId: "U123456",
+        teamId: "T123456",
+      });
+
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        "slack_empty_bot_message_detected",
+        expect.anything(),
+      );
+      expect(alertPost).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("does not alert when a live stream ends with a cancelled terminal result", async () => {
+    const mockClient = {
+      execute: vi.fn().mockResolvedValue({ execution_id: "exe-cancelled-live" }),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const alertPost = vi.fn(async (_threadId: string, _message: { markdown: string }) => ({ id: "alert-1" }));
+    const bot = new SlackBot(
+      mockClient as any,
+      "",
+      { postMessage: alertPost } as any,
+      "C_ENG_CENTAUR_ALERTS",
+    );
+
+    vi.spyOn(bot as any, "streamExecution").mockImplementation((async function* (
+      _threadKey: string,
+      _executionId: string,
+      tracker: { agentThreadId: string; observeTerminal: (source: unknown) => void },
+    ) {
+      tracker.agentThreadId = "T-cancelled-live";
+      tracker.observeTerminal({
+        status: "cancelled",
+        terminalReason: "cancel_requested",
+        resultText: "",
+        errorText: "cancel_requested",
+      });
+      yield { type: "plan_update", title: "Cancelled" };
+    }) as any);
+    vi.spyOn(bot as any, "ackFinalDelivery").mockResolvedValue(undefined);
+    vi.spyOn(bot as any, "setAssistantTitle").mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
+
+    const thread = {
+      id: "C123456:1770000000.001010",
+      post: vi.fn(async (content: AsyncIterable<unknown>) => {
+        for await (const _chunk of content) { /* drain */ }
+        return {
+          id: "1770000000.001011",
+          streamMessageTs: "1770000000.001011",
+          edit: async () => {},
+        };
+      }),
+    };
+
+    try {
+      await (bot as any).execute(thread, thread.id, {
+        assignmentGeneration: 7,
+        userId: "U123456",
+        teamId: "T123456",
+      });
+
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        "slack_empty_bot_message_detected",
+        expect.anything(),
+      );
+      expect(alertPost).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("logs and alerts when a live stream reaches a completed terminal result with empty output", async () => {
+    const mockClient = {
+      execute: vi.fn().mockResolvedValue({ execution_id: "exe-empty-live" }),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const alertPost = vi.fn(async (_threadId: string, _message: { markdown: string }) => ({ id: "alert-1" }));
+    const bot = new SlackBot(
+      mockClient as any,
+      "",
+      { postMessage: alertPost } as any,
+      "C_ENG_CENTAUR_ALERTS",
+    );
+
+    vi.spyOn(bot as any, "streamExecution").mockImplementation((async function* (
+      _threadKey: string,
+      _executionId: string,
+      tracker: { agentThreadId: string; observeTerminal: (source: unknown) => void },
+    ) {
       tracker.agentThreadId = "T-empty-live";
+      tracker.observeTerminal({
+        status: "completed",
+        resultText: "",
+        errorText: "",
+      });
       yield { type: "plan_update", title: "Completed" };
     }) as any);
     vi.spyOn(bot as any, "ackFinalDelivery").mockResolvedValue(undefined);
@@ -802,7 +923,9 @@ describe("execute streams structured progress immediately", () => {
         agent_thread_id: "T-empty-live",
         delivery_path: "live_stream",
         stream_message_ts: "1770000000.001001",
+        status: "completed",
         result_length: 0,
+        error_text_length: 0,
         rendered_markdown_length: 0,
         delivered_to_slack: true,
       }));

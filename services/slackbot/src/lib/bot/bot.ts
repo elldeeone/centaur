@@ -287,6 +287,15 @@ function isEmptyCompletedTerminalResult(opts: {
   return status === "completed" && !terminalReason && !resultText && !errorText;
 }
 
+function isEmptyCompletedLiveStreamResult(tracker: ProgressTracker): boolean {
+  return isEmptyCompletedTerminalResult({
+    status: tracker.terminalStatus,
+    terminalReason: tracker.terminalReason,
+    resultText: tracker.terminalResultText,
+    errorText: tracker.terminalErrorText,
+  });
+}
+
 /** Return a generic prompt for bare `--<persona>` mentions with no other content.
  *
  * Skipped for harness flags (`--codex`, `--amp`, ...) because those switch the
@@ -1049,14 +1058,17 @@ export class SlackBot {
       }
 
       const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
-      if (!finalText && deliveredToSlack) {
+      if (!finalText && deliveredToSlack && isEmptyCompletedLiveStreamResult(tracker)) {
         await this.reportEmptyBotMessage({
           deliveryPath: "live_stream",
           threadKey,
           executionId,
           agentThreadId: tracker.agentThreadId || undefined,
           streamMessageTs: streamedReply?.streamMessageTs || streamedReply?.id,
+          status: tracker.terminalStatus,
+          terminalReason: tracker.terminalReason,
           resultLength: 0,
+          errorTextLength: tracker.terminalErrorText.length,
           renderedMarkdownLength: 0,
           deliveredToSlack,
         });
@@ -1178,6 +1190,12 @@ export class SlackBot {
       const terminalReason = typeof data.terminal_reason === "string"
         ? data.terminal_reason.trim()
         : "";
+      tracker.observeTerminal({
+        status,
+        terminalReason,
+        resultText: result,
+        errorText: error,
+      });
       tracker.observeRepoContext(repoContextFromExecutionRecord(data));
       tracker.agentThreadId = agentThreadIdFromRecord(data) || tracker.agentThreadId;
       tracker.resultText = renderTerminalResultCopy({
@@ -1314,10 +1332,17 @@ export class SlackBot {
             tracker.agentThreadId = agentThreadIdFromRecord(payload) || tracker.agentThreadId;
             const result = String(payload.result || "").trim();
             const errorText = String(payload.error || "").trim();
+            const isError = Boolean(payload.is_error);
+            tracker.observeTerminal({
+              status: isError ? "failed_permanent" : "completed",
+              terminalReason: payload.terminal_reason,
+              resultText: result,
+              errorText,
+            });
             const rendered = renderTerminalResultCopy({
               resultText: result,
               errorText,
-              isError: payload.is_error,
+              isError,
             });
             if (rendered) tracker.resultText = rendered;
             terminal = true;
@@ -1329,6 +1354,12 @@ export class SlackBot {
             tracker.agentThreadId = agentThreadIdFromRecord(payload) || tracker.agentThreadId;
             tracker.observeRepoContext(normalizeRepoContext(payload.repo_context));
             if (["completed", "failed_permanent", "cancelled"].includes(status)) {
+              tracker.observeTerminal({
+                status,
+                terminalReason: payload.terminal_reason,
+                resultText: payload.result_text,
+                errorText: payload.error_text,
+              });
               const rendered = renderTerminalResultCopy({
                 status,
                 terminalReason: payload.terminal_reason,
