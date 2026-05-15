@@ -192,6 +192,15 @@ spec:
         - protocol: TCP
           port: 5432
 {{- end }}
+{{- if .Values.slackbot.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "slackbot") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 3001
+{{- end }}
     - to:
         - podSelector:
             matchLabels:
@@ -234,6 +243,9 @@ spec:
     - Egress
   ingress:
     - from:
+        - podSelector:
+            matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "api") | nindent 14 }}
 {{- range $ingressSourceNamespaces }}
         - namespaceSelector:
             matchLabels:
