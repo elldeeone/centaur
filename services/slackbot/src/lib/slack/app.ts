@@ -898,6 +898,7 @@ export class BoltSlackApp {
     if (event.type !== "message" && event.type !== "app_mention") return;
     if (isIgnoredMessageSubtype(event.subtype)) return;
     if (event.user === this.adapter.getBotUserId()) return;
+    if (event.bot_id) return;
 
     const isPolicyTouchpoint = Boolean(event.channel === POLICY_TOUCHPOINT_CHANNEL_ID && POLICY_TOUCHPOINT_PATTERN.test(event.text || ""));
     const isDirectMessage = event.channel_type === "im";
@@ -944,6 +945,7 @@ export class BoltSlackApp {
     if (event.type !== "message" && event.type !== "app_mention") return false;
     if (isIgnoredMessageSubtype(event.subtype)) return false;
     if (event.user === this.adapter.getBotUserId()) return false;
+    if (event.bot_id) return false;
     return event.type === "app_mention"
       || event.channel_type === "im"
       || Boolean(event.channel === POLICY_TOUCHPOINT_CHANNEL_ID && POLICY_TOUCHPOINT_PATTERN.test(event.text || ""))

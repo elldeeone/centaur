@@ -893,6 +893,7 @@ async def thread_events(
 
     async def _iter_events():
         cursor = max(0, after_event_id)
+        emitted_rows = False
         while True:
             if await request.is_disconnected():
                 break
@@ -919,6 +920,8 @@ async def thread_events(
                 if execution_id:
                     snapshot = await get_execution_terminal_snapshot(pool, execution_id)
                     if snapshot and snapshot["event_json"].get("thread_key") == thread_key:
+                        if emitted_rows:
+                            return
                         payload = snapshot["event_json"]
                         snapshot_id = max(cursor, int(snapshot["event_id"]))
                         yield ServerSentEvent(
@@ -931,6 +934,7 @@ async def thread_events(
                 continue
 
             for row in rows:
+                emitted_rows = True
                 cursor = int(row["event_id"])
                 payload = row["event_json"]
                 if isinstance(payload, str):

@@ -1072,15 +1072,19 @@ class ToolManager:
             )
             return json.dumps(validation_error)
 
-        # Resolve real secrets for tools that declare them
+        # Resolve placeholder secrets for tools that declare them. Required
+        # secrets gate availability elsewhere; optional secrets should still be
+        # present in ToolContext when declared so tool code can choose to use
+        # them.
         ctx = lt.ctx
-        if lt.secrets:
-            resolved = await _resolve_secrets(lt.secrets)
+        all_secrets = lt.all_secrets
+        if all_secrets:
+            resolved = await _resolve_secrets(all_secrets)
             log.info(
                 "tool_secrets_resolved",
                 tool=tool_name,
                 keys=list(resolved.keys()),
-                declared=[s.name for s in lt.secrets],
+                declared=[s.name for s in all_secrets],
             )
             if resolved:
                 ctx = ToolContext(

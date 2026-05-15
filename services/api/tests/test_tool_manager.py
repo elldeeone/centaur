@@ -6,6 +6,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
 
+import httpx
+import pytest
+from fastapi import FastAPI
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.tool_manager import (  # noqa: E402
@@ -14,6 +18,7 @@ from api.tool_manager import (  # noqa: E402
     _normalize_for_serialization,
     _tool_arg_validation_error,
     _to_toon,
+    ToolManager,
     ToolMethod,
 )
 
@@ -262,3 +267,276 @@ class TestLifecycleMethods:
     def test_regular_method_not_excluded(self):
         assert "search" not in _LIFECYCLE_METHODS
         assert "get" not in _LIFECYCLE_METHODS
+
+
+# ---------------------------------------------------------------------------
+# Integrated ToolManager behavior
+# ---------------------------------------------------------------------------
+
+
+class _NullBackend:
+    async def get(self, key: str) -> str | None:
+        return None
+
+    async def list_keys(self) -> list[str]:
+        return []
+
+    def get_sync(self, key: str) -> str | None:
+        return None
+
+
+def _write_tool(
+    tools_dir: Path,
+    name: str,
+    client_code: str,
+    *,
+    description: str = "Fake test tool",
+    secrets: list[str] | None = None,
+    optional_secrets: list[str] | None = None,
+) -> Path:
+    tool_dir = tools_dir / name
+    tool_dir.mkdir(parents=True)
+    tool_dir.joinpath("pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                f'name = "{name}"',
+                'version = "0.1.0"',
+                f'description = "{description}"',
+                "",
+                "[tool.ai-v2]",
+                'module = "client.py"',
+                'hosts = ["api.example.com"]',
+                f"secrets = {secrets or []!r}",
+                f"optional_secrets = {optional_secrets or []!r}",
+                "",
+            ]
+        )
+    )
+    tool_dir.joinpath("client.py").write_text(client_code)
+    return tool_dir
+
+
+def _write_persona(tools_dir: Path, name: str) -> Path:
+    persona_dir = tools_dir / name
+    persona_dir.mkdir(parents=True)
+    persona_dir.joinpath("pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                f'name = "{name}"',
+                'version = "0.1.0"',
+                'description = "A fake persona"',
+                "",
+                "[tool.ai-v2]",
+                'type = "persona"',
+                'engine = "codex"',
+                'default_repo = "/workspace/repo"',
+                'prompt = "PROMPT.md"',
+                "",
+            ]
+        )
+    )
+    persona_dir.joinpath("PROMPT.md").write_text("Persona prompt body")
+    persona_dir.joinpath("run.py").write_text("print('custom executor')\n")
+    return persona_dir
+
+
+FAKE_TOOL_CLIENT = """
+from centaur_sdk import secret
+
+
+class FakeClient:
+    def __init__(self, source="base"):
+        self.source = source
+
+    def sync_echo(self, text: str) -> dict:
+        return {"mode": "sync", "text": text, "source": self.source}
+
+    async def async_echo(self, text: str) -> dict:
+        return {"mode": "async", "text": text, "source": self.source}
+
+    def secret_values(self) -> dict:
+        return {
+            "required": secret("REQ_TOKEN"),
+            "optional": secret("OPT_TOKEN", default="missing"),
+        }
+
+    def _private(self):
+        return "hidden"
+
+    def close(self):
+        return "lifecycle"
+
+    @property
+    def computed(self):
+        return "not a method"
+
+
+def _client():
+    return FakeClient(source="base")
+"""
+
+
+OVERLAY_TOOL_CLIENT = FAKE_TOOL_CLIENT.replace(
+    'FakeClient(source="base")',
+    'FakeClient(source="overlay")',
+)
+
+
+def test_discover_loads_fake_tools_with_shadowing_personas_and_failures(tmp_path: Path):
+    base_tools = tmp_path / "base"
+    overlay_tools = tmp_path / "overlay"
+
+    _write_tool(base_tools, "alpha", FAKE_TOOL_CLIENT, description="Base alpha")
+    _write_tool(
+        overlay_tools,
+        "alpha",
+        OVERLAY_TOOL_CLIENT,
+        description="Overlay alpha",
+        secrets=["REQ_TOKEN"],
+        optional_secrets=["OPT_TOKEN"],
+    )
+    _write_tool(
+        overlay_tools,
+        "broken",
+        'raise RuntimeError("broken import")\n',
+        description="Broken tool",
+    )
+    _write_persona(overlay_tools, "code-reviewer")
+
+    manager = ToolManager([base_tools, overlay_tools])
+    loaded = manager.discover()
+
+    assert [tool.name for tool in loaded] == ["alpha"]
+    assert manager.tools["alpha"].description == "Overlay alpha"
+    assert [secret.name for secret in manager.tools["alpha"].secrets] == ["REQ_TOKEN"]
+    assert [secret.name for secret in manager.tools["alpha"].optional_secrets] == [
+        "OPT_TOKEN"
+    ]
+    assert {method.method_name for method in manager.tools["alpha"].methods} == {
+        "async_echo",
+        "secret_values",
+        "sync_echo",
+    }
+    assert manager.load_failures == [{"name": "broken", "error": "broken import"}]
+
+    persona = manager.get_persona("code-reviewer")
+    assert persona is not None
+    assert persona.description == "A fake persona"
+    assert persona.engine == "codex"
+    assert persona.default_repo == "/workspace/repo"
+    assert persona.prompt_content == "Persona prompt body"
+    assert persona.has_custom_executor is True
+    assert "code-reviewer" not in manager.tools
+
+
+@pytest.mark.asyncio
+async def test_call_tool_invokes_sync_and_async_methods_with_secret_placeholders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from centaur_sdk.backends import registry
+
+    monkeypatch.setattr(registry, "_backend", _NullBackend())
+    tools_dir = tmp_path / "tools"
+    _write_tool(
+        tools_dir,
+        "alpha",
+        FAKE_TOOL_CLIENT,
+        secrets=["REQ_TOKEN"],
+        optional_secrets=["OPT_TOKEN"],
+    )
+    manager = ToolManager(tools_dir)
+    manager.discover()
+
+    assert await manager.call_tool(
+        "alpha",
+        "sync_echo",
+        {"text": "hello"},
+    ) == {"mode": "sync", "text": "hello", "source": "base"}
+    assert await manager.call_tool(
+        "alpha",
+        "async_echo",
+        {"text": "hello"},
+    ) == {"mode": "async", "text": "hello", "source": "base"}
+
+    assert await manager.call_tool("alpha", "secret_values", {}) == {
+        "required": "REQ_TOKEN",
+        "optional": "OPT_TOKEN",
+    }
+    assert await manager.call_tool_raw("alpha", "secret_values", {}) == {
+        "required": "REQ_TOKEN",
+        "optional": "OPT_TOKEN",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_rest_router_lists_describes_and_invokes_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from centaur_sdk.backends import registry
+
+    monkeypatch.setattr(registry, "_backend", _NullBackend())
+    tools_dir = tmp_path / "tools"
+    _write_tool(
+        tools_dir,
+        "alpha",
+        FAKE_TOOL_CLIENT,
+        description="REST alpha",
+        secrets=["REQ_TOKEN"],
+        optional_secrets=["OPT_TOKEN"],
+    )
+    manager = ToolManager(tools_dir)
+    manager.discover()
+    app = FastAPI()
+    app.include_router(manager.create_rest_router())
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        list_response = await client.get("/tools")
+        assert list_response.status_code == 200
+        assert list_response.json() == {
+            "alpha": {
+                "description": "REST alpha",
+                "methods": ["async_echo", "secret_values", "sync_echo"],
+            }
+        }
+
+        describe_response = await client.get("/tools/alpha")
+        assert describe_response.status_code == 200
+        description = describe_response.json()
+        assert description["tool"] == "alpha"
+        assert description["description"] == "REST alpha"
+        assert [method["name"] for method in description["methods"]] == [
+            "async_echo",
+            "secret_values",
+            "sync_echo",
+        ]
+
+        call_response = await client.post(
+            "/tools/alpha/sync_echo",
+            json={"text": "from rest"},
+        )
+        assert call_response.status_code == 200
+        assert call_response.json() == {
+            "tool": "alpha",
+            "method": "sync_echo",
+            "result": {"mode": "sync", "text": "from rest", "source": "base"},
+        }
+
+        secret_response = await client.post("/tools/alpha/secret_values", json={})
+        assert secret_response.status_code == 200
+        assert secret_response.json() == {
+            "tool": "alpha",
+            "method": "secret_values",
+            "result": {"required": "REQ_TOKEN", "optional": "OPT_TOKEN"},
+        }
+
+        missing_response = await client.post("/tools/alpha/missing", json={})
+        assert missing_response.status_code == 200
+        assert missing_response.json()["result"] == (
+            '{"error": "Method \'missing\' not found in tool \'alpha\'", '
+            '"available_methods": ["async_echo", "secret_values", "sync_echo"]}'
+        )
