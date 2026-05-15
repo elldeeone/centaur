@@ -2291,13 +2291,12 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
         if user_id:
             record_execution_by_user(user_id, harness, status)
         nonlocal slackbot_text_sent, slackbot_done
-        if slackbot_session_id:
+        if slackbot_session_id and not slackbot_done:
             if result_text.strip() and not slackbot_text_sent:
                 await slackbot_client.session_text(slackbot_session_id, result_text)
                 slackbot_text_sent = True
-            if not slackbot_done:
-                await slackbot_client.session_done(slackbot_session_id, harness_thread_id or None)
-                slackbot_done = True
+            await slackbot_client.session_done(slackbot_session_id, harness_thread_id or None)
+            slackbot_done = True
         await _mark_execution_terminal(
             pool,
             execution_id=execution_id,
@@ -2439,7 +2438,12 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                     if isinstance(harness_result, dict):
                         harness_thread_id = str(harness_result.get("threadId") or harness_thread_id)
                         slackbot_done = bool(harness_result.get("done"))
-                        if slack_event.get("type") == "assistant":
+                        if slack_event.get("type") in {
+                            "assistant",
+                            "item.agentMessage.delta",
+                            "result",
+                            "turn.done",
+                        }:
                             slackbot_text_sent = True
             observations.raw_event_count += 1
             await append_execution_event(
