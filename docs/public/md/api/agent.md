@@ -20,7 +20,7 @@ Assign (or reuse) a runtime for a thread. Returns the current `assignment_genera
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `thread_key` | string | Yes | Unique identifier for the conversation thread. |
-| `harness` | string | No | Agent harness to use. Default: `"amp"`. Options: `amp`, `claude-code`, `codex`. |
+| `harness` | string | No | Agent harness to use. Default: `"codex"`. Options: `codex`, `amp`, `claude-code`, `pi-mono`. |
 
 ### Response
 

@@ -29,7 +29,7 @@ secret value or a provider-native secret reference to Iron Proxy.
 | Codex | `codex` | `--codex` | `OPENAI_API_KEY` | `api.openai.com` |
 | pi-mono | `pi-mono` | `--pi` | `ANTHROPIC_API_KEY` | `api.anthropic.com` |
 
-Amp is the default harness. Claude Code and Codex are already installed in the
+Codex is the default harness. Amp, Claude Code, and pi-mono are already installed in the
 sandbox image. The API accepts the harness on `POST /agent/spawn` and
 `POST /agent/execute`.
 

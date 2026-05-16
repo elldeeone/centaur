@@ -1,7 +1,12 @@
 import { describe, expect, it, mock } from 'bun:test'
 import { normalizeSlackEnvelope } from './normalize'
 
-const client = { token: 'xoxb-test-token' } as any
+const client = {
+  token: 'xoxb-test-token',
+  conversations: {
+    replies: mock(async () => ({ ok: true, messages: [] }))
+  }
+} as any
 
 describe('normalizeSlackEnvelope', () => {
   it('ignores message file_share carrier events', async () => {
@@ -91,5 +96,112 @@ describe('normalizeSlackEnvelope', () => {
     } finally {
       globalThis.fetch = originalFetch
     }
+  })
+
+  it('backfills prior Slack thread messages for mid-thread mentions', async () => {
+    const replies = mock(async () => ({
+      ok: true,
+      messages: [
+        {
+          type: 'message',
+          user: 'U111',
+          channel: 'C123',
+          ts: '1778875060.000100',
+          text: 'Earlier market context'
+        },
+        {
+          type: 'message',
+          user: 'UBOT',
+          channel: 'C123',
+          bot_id: 'B123',
+          ts: '1778875065.000100',
+          text: 'Prior Centaur answer'
+        },
+        {
+          type: 'message',
+          user: 'U123',
+          channel: 'C123',
+          ts: '1778875070.942789',
+          text: '<@UBOT> --invest pick this up'
+        }
+      ]
+    }))
+
+    const normalized = await normalizeSlackEnvelope({
+      envelope: {
+        type: 'event_callback',
+        team_id: 'T123',
+        event_id: 'Ev-thread-mention',
+        event: {
+          type: 'app_mention',
+          user: 'U123',
+          channel: 'C123',
+          channel_type: 'channel',
+          thread_ts: '1778875060.000100',
+          ts: '1778875070.942789',
+          text: '<@UBOT> --invest pick this up'
+        }
+      },
+      botUserId: 'UBOT',
+      client: {
+        token: 'xoxb-test-token',
+        conversations: { replies }
+      } as any
+    })
+
+    expect(replies).toHaveBeenCalledWith({
+      channel: 'C123',
+      ts: '1778875060.000100',
+      limit: 200,
+      cursor: undefined
+    })
+    expect(normalized?.history_messages).toEqual([
+      {
+        message_id: 'slack:T123:C123:1778875060.000100',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Earlier market context' }],
+        user_id: 'U111',
+        metadata: { platform: 'slack', history_backfill: true }
+      },
+      {
+        message_id: 'slack:T123:C123:1778875065.000100',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'Prior Centaur answer' }],
+        user_id: 'UBOT',
+        metadata: { platform: 'slack', history_backfill: true }
+      }
+    ])
+  })
+
+  it('keeps mention handoff actionable when Slack thread history fetch fails', async () => {
+    const replies = mock(async () => {
+      throw new Error('ratelimited')
+    })
+
+    const normalized = await normalizeSlackEnvelope({
+      envelope: {
+        type: 'event_callback',
+        team_id: 'T123',
+        event_id: 'Ev-thread-mention-no-history',
+        event: {
+          type: 'app_mention',
+          user: 'U123',
+          channel: 'C123',
+          channel_type: 'channel',
+          thread_ts: '1778875060.000100',
+          ts: '1778875070.942789',
+          text: '<@UBOT> --invest pick this up'
+        }
+      },
+      botUserId: 'UBOT',
+      client: {
+        token: 'xoxb-test-token',
+        conversations: { replies }
+      } as any
+    })
+
+    expect(normalized?.is_mention).toBe(true)
+    expect(normalized?.parts).toEqual([{ type: 'text', text: '--invest pick this up' }])
+    expect(normalized?.history_messages).toBeUndefined()
   })
 })

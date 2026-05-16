@@ -447,24 +447,28 @@ async def _flush_pending(thread_key: str, last_delivered_id: str | None) -> list
     """Fetch messages from chat_messages that haven't been delivered yet.
 
     Persistent harness sessions already retain their own assistant context, so
-    we only replay user/system messages from durable storage.
+    we only replay user/system messages from durable storage. The exception is
+    assistant messages imported as Slack history backfill for a new persona
+    assignment; those rows are needed because the new sandbox has no prior
+    assistant context.
 
-    If last_delivered_id is NULL, returns all non-assistant messages.
+    If last_delivered_id is NULL, returns all replayable messages.
     Otherwise returns non-assistant messages created after the cursor's
     created_at.
     """
     pool = _get_pool()
+    role_filter = "(role <> 'assistant' OR metadata->>'history_backfill' = 'true')"
     if last_delivered_id is None:
         rows = await pool.fetch(
             "SELECT id, role, parts, user_id, metadata, created_at "
-            "FROM chat_messages WHERE thread_key = $1 AND role <> 'assistant' ORDER BY created_at",
+            f"FROM chat_messages WHERE thread_key = $1 AND {role_filter} ORDER BY created_at",
             thread_key,
         )
     else:
         rows = await pool.fetch(
             "SELECT id, role, parts, user_id, metadata, created_at "
             "FROM chat_messages WHERE thread_key = $1 "
-            "AND role <> 'assistant' "
+            f"AND {role_filter} "
             "AND created_at > (SELECT created_at FROM chat_messages WHERE id = $2) "
             "ORDER BY created_at",
             thread_key,
@@ -481,11 +485,19 @@ def _flushed_to_messages(flushed_rows: list[dict]) -> list[dict]:
         parts = row.get("parts", [])
         if isinstance(parts, str):
             parts = json.loads(parts)
+        metadata = row.get("metadata") or {}
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
         user_id = row.get("user_id")
         messages.append(
             {
                 "role": row.get("role", "user"),
                 "parts": parts,
+                "history_backfill": (
+                    metadata.get("history_backfill") is True
+                    if isinstance(metadata, dict)
+                    else False
+                ),
                 **({"user_id": user_id} if user_id else {}),
             }
         )

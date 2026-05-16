@@ -368,6 +368,20 @@ class TestMessagesToContentBlocks:
             {"type": "text", "text": "[Your previous response]: I said this"},
         ]
 
+    def test_assistant_history_backfill_uses_centaur_label(self):
+        """Imported Slack assistant history may belong to another persona/session."""
+        msgs = [
+            {
+                "role": "assistant",
+                "history_backfill": True,
+                "parts": [{"type": "text", "text": "Prior default-session answer"}],
+            },
+        ]
+        result = messages_to_content_blocks(msgs)
+        assert result == [
+            {"type": "text", "text": "[Previous Centaur response]: Prior default-session answer"},
+        ]
+
     def test_assistant_non_text_parts_passthrough(self):
         """Non-text parts in assistant messages pass through unchanged."""
         msgs = [

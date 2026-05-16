@@ -29,6 +29,13 @@ export type NormalizedSlackEvent = {
   thread_ts: string
   is_mention: boolean
   parts: NormalizedPart[]
+  history_messages?: Array<{
+    message_id: string
+    role?: 'user' | 'assistant'
+    parts: NormalizedPart[]
+    user_id?: string
+    metadata?: Record<string, unknown>
+  }>
   slack: {
     event_id?: string
     event_ts?: string

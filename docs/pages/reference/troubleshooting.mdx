@@ -38,7 +38,7 @@ External clients should use DB-backed API keys with the narrowest useful scopes.
 
 ### Which harness should I use first?
 
-Use Amp first unless your deployment has standardized on another harness. The API value is `amp`, and Slack prompts can route with `--amp`. Add Claude Code or Codex after the default harness is working.
+Use Codex first unless your deployment has standardized on another harness. The API value is `codex`, and Slack prompts can route with `--codex`. Add Amp or Claude Code after the default harness is working.
 
 ### Where should secrets live?
 

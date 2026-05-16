@@ -140,6 +140,9 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
         role = message.get("role", "user")
         user_id = message.get("user_id")
         parts = message.get("parts", [])
+        assistant_label = (
+            "Previous Centaur response" if message.get("history_backfill") else "Your previous response"
+        )
         attributed = False
         for part in parts:
             ptype = part.get("type")
@@ -148,7 +151,7 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
                     blocks.append(
                         {
                             "type": "text",
-                            "text": f"[Your previous response]: {part['text']}",
+                            "text": f"[{assistant_label}]: {part['text']}",
                         }
                     )
                 else:

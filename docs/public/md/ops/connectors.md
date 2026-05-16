@@ -15,9 +15,9 @@ happens. Use this as the operator checklist for a new deployment.
 | Slack app | Slack mentions and assistant threads | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` |
 | Centaur API key for Slackbot | Slackbot to API calls | `SLACKBOT_API_KEY` |
 | GitHub | Repo clone, branch, PR, and API work | `GITHUB_TOKEN` |
-| Amp | Default harness | `AMP_API_KEY` |
+| Codex | Default harness | `OPENAI_API_KEY` |
+| Amp | Optional Amp harness | `AMP_API_KEY` |
 | Claude Code | Anthropic-backed harness | `ANTHROPIC_API_KEY` |
-| Codex | OpenAI-backed harness | `OPENAI_API_KEY` |
 | 1Password | Default shared secret backend | `OP_SERVICE_ACCOUNT_TOKEN`, `OP_VAULT` |
 | AWS/GCP secret store | KMS-backed production secret storage | Provider sync into Kubernetes Secret or provider-native backend |
 | Tool-specific APIs | Custom tools | Tool-defined `secret("NAME")` keys |

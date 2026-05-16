@@ -44,6 +44,11 @@ async def test_create_slack_thread_turn_workflow_eager_start(
                     "user_id": "U123",
                 },
                 {
+                    "message_id": "slack:assistant-prior",
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "prior assistant context"}],
+                },
+                {
                     "message_id": "slack:current",
                     "parts": [{"type": "text", "text": "duplicate current should be skipped"}],
                     "user_id": "U123",
@@ -108,11 +113,14 @@ async def test_create_slack_thread_turn_workflow_eager_start(
     )
     assert cp_row is not None
     assert cp_row["execution_id"] == "exe-workflow-1"
-    assert append_message_mock.await_count == 2
+    assert append_message_mock.await_count == 3
     assert append_message_mock.await_args_list[0].kwargs["message_id"] == "slack:prior"
     assert append_message_mock.await_args_list[0].kwargs["metadata"]["history_backfill"] is True
-    assert append_message_mock.await_args_list[1].kwargs["message_id"] == "slack:current"
-    assert append_message_mock.await_args_list[1].kwargs["metadata"]["user_id"] == "U123"
+    assert append_message_mock.await_args_list[0].kwargs["event"]["message"]["role"] == "user"
+    assert append_message_mock.await_args_list[1].kwargs["message_id"] == "slack:assistant-prior"
+    assert append_message_mock.await_args_list[1].kwargs["event"]["message"]["role"] == "assistant"
+    assert append_message_mock.await_args_list[2].kwargs["message_id"] == "slack:current"
+    assert append_message_mock.await_args_list[2].kwargs["metadata"]["user_id"] == "U123"
     assert enqueue_execution_mock.await_args.kwargs["metadata"]["user_id"] == "U123"
 
 
@@ -163,6 +171,87 @@ def test_recovery_command_paraphrases_are_recognized():
         assert not _is_recovery_turn([{"type": "text", "text": text}]), (
             f"Did not expect recovery hydration for utterance: {text!r}"
         )
+
+
+@pytest.mark.parametrize(
+    ("text", "selector", "cleaned"),
+    [
+        ("--invest hyperliquid miqs", "invest", "hyperliquid miqs"),
+        ("--INVEST hyperliquid miqs", "invest", "hyperliquid miqs"),
+        ("\u2014invest hyperliquid miqs", "invest", "hyperliquid miqs"),
+        ("\u2013invest hyperliquid miqs", "invest", "hyperliquid miqs"),
+        ("`--invest` hyperliquid miqs", "invest", "hyperliquid miqs"),
+        ("`--invest hyperliquid miqs`", "invest", "hyperliquid miqs"),
+        ("--claude review this", "claude-code", "review this"),
+        ("--pi analyze this", "pi-mono", "analyze this"),
+        ("please use --opus and review this", None, "please use and review this"),
+        ("please use --model opus and review this", None, "please use and review this"),
+        ("please use `--model opus` and review this", None, "please use and review this"),
+    ],
+)
+def test_prompt_selector_extraction_handles_slack_flag_shapes(text, selector, cleaned):
+    from api.workflows.slack_thread_turn import _extract_prompt_selector_from_text
+
+    assert _extract_prompt_selector_from_text(
+        text,
+        known_selectors={"invest", "claude-code", "pi-mono"},
+    ) == (selector, cleaned)
+
+
+def test_prompt_selector_extraction_preserves_unknown_flags():
+    from api.workflows.slack_thread_turn import _extract_prompt_selector_from_text
+
+    text = "--rpc-url https://example.test --installed"
+    assert _extract_prompt_selector_from_text(
+        text,
+        known_selectors={"invest"},
+    ) == (None, text)
+
+
+def test_bare_persona_flag_gets_intro_prompt():
+    from api.workflows.slack_thread_turn import _extract_prompt_selector
+
+    extracted = _extract_prompt_selector(
+        [{"type": "text", "text": "`--invest`"}],
+        explicit_selector=None,
+        known_selectors={"invest"},
+    )
+
+    assert extracted.selector == "invest"
+    assert extracted.parts == [
+        {
+            "type": "text",
+            "text": (
+                "Briefly introduce yourself using your active persona instructions and ask "
+                "what we should work on."
+            ),
+        },
+    ]
+
+
+def test_prompt_switch_context_note_only_for_mid_thread_selector():
+    from api.workflows.slack_thread_turn import _with_prompt_switch_context_note
+
+    parts = [{"type": "text", "text": "pick this up"}]
+    history = [{"message_id": "slack:prior", "parts": [{"type": "text", "text": "prior"}]}]
+
+    assert _with_prompt_switch_context_note(parts, selector=None, history_messages=history) == parts
+    assert _with_prompt_switch_context_note(parts, selector="invest", history_messages=[]) == parts
+    assert _with_prompt_switch_context_note(
+        parts,
+        selector="invest",
+        history_messages=history,
+    ) == [
+        {
+            "type": "text",
+            "text": (
+                "You are being invoked mid-thread with a new active persona. Use the "
+                "preceding Slack thread history as context, then answer the latest user "
+                "request in that persona."
+            ),
+        },
+        {"type": "text", "text": "pick this up"},
+    ]
 
 
 def test_workflow_idempotency_hash_ignores_history_messages():
@@ -381,6 +470,280 @@ async def test_slack_thread_turn_recovery_filters_by_user_and_cursor(db_pool):
     provenance = metadata.get("recovery_hydration") or {}
     assert provenance["hydrated_from_user_id"] == user_a
     assert provenance["hydrated_from_message_id"] == f"msg:{thread_key}:alice-original"
+
+
+@pytest.mark.asyncio
+async def test_slack_thread_turn_derives_prompt_selector_and_releases_assignment(db_pool):
+    from api.workflow_engine import WorkflowContext
+    from api.workflows.slack_thread_turn import Input, handler
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    do_agent_turn_mock = AsyncMock(return_value={"ok": True, "execution_id": "exe-1"})
+    release_assignment_mock = AsyncMock(return_value={"ok": True, "released": True})
+
+    with (
+        patch("api.workflow_engine.do_agent_turn", new=do_agent_turn_mock),
+        patch(
+            "api.workflows.slack_thread_turn._known_prompt_selectors",
+            return_value={"invest"},
+        ),
+        patch("api.runtime_control.release_assignment", new=release_assignment_mock),
+    ):
+        await handler(
+            Input(
+                thread_key=thread_key,
+                parts=[{"type": "text", "text": "--invest hyperliquid miqs"}],
+                history_messages=[
+                    {
+                        "message_id": "slack:prior",
+                        "parts": [{"type": "text", "text": "prior market context"}],
+                    },
+                ],
+                message_id="slack:current",
+            ),
+            ctx,
+        )
+
+    release_assignment_mock.assert_awaited_once_with(
+        db_pool,
+        thread_key=thread_key,
+        release_id="prompt-switch:slack:current",
+        cancel_inflight=True,
+    )
+    assert do_agent_turn_mock.await_args.kwargs["prompt_selector"] == "invest"
+    assert do_agent_turn_mock.await_args.kwargs["parts"] == [
+        {
+            "type": "text",
+            "text": (
+                "You are being invoked mid-thread with a new active persona. Use the "
+                "preceding Slack thread history as context, then answer the latest user "
+                "request in that persona."
+            ),
+        },
+        {"type": "text", "text": "hyperliquid miqs"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prompt_switch_retry_still_hydrates_prior_ask_from_history(db_pool):
+    from api.workflow_engine import WorkflowContext
+    from api.workflows.slack_thread_turn import Input, handler
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    do_agent_turn_mock = AsyncMock(return_value={"ok": True, "execution_id": "exe-1"})
+
+    with (
+        patch("api.workflow_engine.do_agent_turn", new=do_agent_turn_mock),
+        patch(
+            "api.workflows.slack_thread_turn._known_prompt_selectors",
+            return_value={"invest"},
+        ),
+        patch("api.runtime_control.release_assignment", new=AsyncMock()),
+    ):
+        await handler(
+            Input(
+                thread_key=thread_key,
+                parts=[{"type": "text", "text": "--invest retry"}],
+                history_messages=[
+                    {
+                        "message_id": "slack:prior",
+                        "parts": [{"type": "text", "text": "Original investment ask"}],
+                        "user_id": "U1",
+                    },
+                    {
+                        "message_id": "slack:retry",
+                        "parts": [{"type": "text", "text": "retry"}],
+                        "user_id": "U1",
+                    },
+                ],
+                message_id="slack:current",
+                user_id="U1",
+            ),
+            ctx,
+        )
+
+    assert do_agent_turn_mock.await_args.kwargs["prompt_selector"] == "invest"
+    assert do_agent_turn_mock.await_args.kwargs["parts"] == [
+        {
+            "type": "text",
+            "text": (
+                "You are being invoked mid-thread with a new active persona. Use the "
+                "preceding Slack thread history as context, then answer the latest user "
+                "request in that persona."
+            ),
+        },
+        {
+            "type": "text",
+            "text": "Previous unresolved user request from this thread:\nOriginal investment ask",
+        },
+        {"type": "text", "text": "retry"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prompt_switch_clears_old_session_replay_state(db_pool):
+    from api.workflow_engine import WorkflowContext
+    from api.workflows.slack_thread_turn import _release_for_prompt_switch
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, agent_thread_id, "
+        "last_delivered_id, inflight_turn_id, inflight_turn_input, inflight_attempts, "
+        "last_result, last_result_at"
+        ") VALUES ($1, 'sbx-old', 'codex', 'codex', 'stopped', 'old-agent-thread', "
+        "'msg-old', 'turn-old', '{}'::jsonb, 2, 'old result', NOW())",
+        thread_key,
+    )
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    release_assignment_mock = AsyncMock(return_value={"ok": True, "released": True})
+
+    with patch("api.runtime_control.release_assignment", new=release_assignment_mock):
+        await _release_for_prompt_switch(
+            ctx,
+            thread_key=thread_key,
+            message_id="slack:current",
+        )
+
+    release_assignment_mock.assert_awaited_once()
+    row = await db_pool.fetchrow(
+        "SELECT agent_thread_id, last_delivered_id, inflight_turn_id, inflight_turn_input, "
+        "inflight_attempts, last_result, last_result_at "
+        "FROM sandbox_sessions WHERE thread_key = $1",
+        thread_key,
+    )
+    assert row is not None
+    assert row["agent_thread_id"] is None
+    assert row["last_delivered_id"] is None
+    assert row["inflight_turn_id"] is None
+    assert row["inflight_turn_input"] is None
+    assert row["inflight_attempts"] == 0
+    assert row["last_result"] is None
+    assert row["last_result_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_slack_thread_turn_without_flag_keeps_default_harness_path(db_pool):
+    from api.workflow_engine import WorkflowContext
+    from api.workflows.slack_thread_turn import Input, handler
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    do_agent_turn_mock = AsyncMock(return_value={"ok": True, "execution_id": "exe-1"})
+    release_assignment_mock = AsyncMock(return_value={"ok": True, "released": True})
+
+    with (
+        patch("api.workflow_engine.do_agent_turn", new=do_agent_turn_mock),
+        patch(
+            "api.workflows.slack_thread_turn._known_prompt_selectors",
+            return_value={"invest"},
+        ),
+        patch("api.runtime_control.release_assignment", new=release_assignment_mock),
+    ):
+        await handler(
+            Input(
+                thread_key=thread_key,
+                parts=[{"type": "text", "text": "Summarize this thread"}],
+                message_id="slack:current",
+            ),
+            ctx,
+        )
+
+    release_assignment_mock.assert_not_awaited()
+    assert do_agent_turn_mock.await_args.kwargs["prompt_selector"] is None
+    assert do_agent_turn_mock.await_args.kwargs["parts"] == [
+        {"type": "text", "text": "Summarize this thread"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_slack_thread_turn_without_flag_replays_history_only_for_new_assignment(db_pool):
+    from api.workflow_engine import WorkflowContext
+    from api.workflows.slack_thread_turn import Input, handler
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    history_messages = [
+        {
+            "message_id": "slack:prior",
+            "parts": [{"type": "text", "text": "prior context"}],
+            "user_id": "U1",
+        },
+    ]
+
+    do_agent_turn_mock = AsyncMock(return_value={"ok": True, "execution_id": "exe-1"})
+    with (
+        patch("api.workflow_engine.do_agent_turn", new=do_agent_turn_mock),
+        patch("api.runtime_control.get_active_assignment", new=AsyncMock(return_value=None)),
+    ):
+        await handler(
+            Input(
+                thread_key=thread_key,
+                parts=[{"type": "text", "text": "Summarize this thread"}],
+                history_messages=history_messages,
+                message_id="slack:current",
+            ),
+            ctx,
+        )
+
+    assert do_agent_turn_mock.await_args.kwargs["history_messages"] == history_messages
+
+    do_agent_turn_mock = AsyncMock(return_value={"ok": True, "execution_id": "exe-2"})
+    with (
+        patch("api.workflow_engine.do_agent_turn", new=do_agent_turn_mock),
+        patch(
+            "api.runtime_control.get_active_assignment",
+            new=AsyncMock(return_value={"assignment_generation": 1}),
+        ),
+    ):
+        await handler(
+            Input(
+                thread_key=thread_key,
+                parts=[{"type": "text", "text": "Continue"}],
+                history_messages=history_messages,
+                message_id="slack:next",
+            ),
+            ctx,
+        )
+
+    assert do_agent_turn_mock.await_args.kwargs["history_messages"] == []
 
 
 @pytest.mark.asyncio

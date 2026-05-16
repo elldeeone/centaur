@@ -31,6 +31,42 @@ async def _insert_assignment(db_pool, thread_key: str, generation: int = 1) -> N
 
 
 @pytest.mark.asyncio
+async def test_spawn_assignment_defaults_to_codex_when_no_selector(db_pool):
+    from api.runtime_control import spawn_assignment
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}:default-codex"
+    session = SandboxSession(
+        sandbox_id=f"rt-{uuid.uuid4().hex[:8]}",
+        thread_key=thread_key,
+        harness="codex",
+        engine="codex",
+    )
+    get_or_spawn = AsyncMock(return_value=session)
+
+    with patch("api.runtime_control.get_or_spawn", new=get_or_spawn):
+        result = await spawn_assignment(
+            db_pool,
+            thread_key=thread_key,
+            spawn_id="spawn-default",
+            harness=None,
+            engine=None,
+            persona_id=None,
+            agents_md_override=None,
+        )
+
+    get_or_spawn.assert_awaited_once_with(thread_key, "codex", engine=None)
+    assert result["persona_id"] is None
+    assignment = await db_pool.fetchrow(
+        "SELECT harness, engine, persona_id FROM agent_runtime_assignments WHERE thread_key = $1",
+        thread_key,
+    )
+    assert assignment is not None
+    assert assignment["harness"] == "codex"
+    assert assignment["engine"] == "codex"
+    assert assignment["persona_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_db_insert_session_initial_state_tracks_inflight_turn(db_pool):
     from api.agent import _db_insert_session
 

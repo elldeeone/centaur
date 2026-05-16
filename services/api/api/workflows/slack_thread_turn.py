@@ -12,6 +12,26 @@ from api.workflow_engine import Delivery, WorkflowContext
 
 WORKFLOW_NAME = "slack_thread_turn"
 
+_EXECUTION_HARNESSES = frozenset({"amp", "claude-code", "codex", "pi-mono"})
+_PROMPT_FLAG_ALIASES = {
+    "claude": "claude-code",
+    "pi": "pi-mono",
+}
+_PROMPT_FLAG_SKIP = frozenset({"engine", "model", "opus", "sonnet", "haiku"})
+_PROMPT_FLAG_VALUE_SKIP = frozenset({"engine", "model"})
+_PROMPT_FLAG_RE = re.compile(
+    r"(^|\s)(`?)(--|[\u2013\u2014])([a-z][a-z0-9-]*)(?=\s|`|$)",
+    re.IGNORECASE,
+)
+_BARE_PERSONA_PROMPT = (
+    "Briefly introduce yourself using your active persona instructions and ask what "
+    "we should work on."
+)
+_PROMPT_SWITCH_CONTEXT_NOTE = (
+    "You are being invoked mid-thread with a new active persona. Use the preceding "
+    "Slack thread history as context, then answer the latest user request in that persona."
+)
+
 _RECOVERY_COMMANDS = frozenset(
     {
         "again",
@@ -41,6 +61,12 @@ _SLACK_ID_MENTION_RE = re.compile(r"^<@[WU][A-Z0-9]+>\s*[:,;-]?\s*(.*)$", re.IGN
 _RECOVERY_CONTEXT_PREFIX = "Previous unresolved user request from this thread:\n"
 
 
+@dataclass(frozen=True)
+class PromptSelectorExtraction:
+    selector: str | None
+    parts: list[dict[str, Any]]
+
+
 @dataclass
 class Input:
     thread_key: str = ""
@@ -65,6 +91,168 @@ class Input:
             "workflow input must include non-empty parts or text",
             422,
         )
+
+
+def _known_prompt_selectors() -> set[str]:
+    selectors = set(_EXECUTION_HARNESSES)
+    selectors.update(_PROMPT_FLAG_ALIASES)
+    selectors.update(_PROMPT_FLAG_ALIASES.values())
+    try:
+        from api.app import get_tool_manager
+
+        selectors.update(get_tool_manager().personas)
+    except Exception:
+        # Workflow unit tests and early startup paths may not have the app-level
+        # tool manager available. Harness selectors still work; persona
+        # selectors will be validated once the app is fully loaded.
+        pass
+    return selectors
+
+
+def _strip_ranges(text: str, ranges: list[tuple[int, int]]) -> str:
+    cleaned = text
+    for start, end in sorted(ranges, reverse=True):
+        cleaned = f"{cleaned[:start]} {cleaned[end:]}"
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _extend_value_skip(text: str, end: int) -> int:
+    match = re.match(r"\s+[A-Za-z0-9._/-]+", text[end:])
+    return end + match.end() if match else end
+
+
+def _extract_prompt_selector_from_text(
+    text: str,
+    *,
+    known_selectors: set[str],
+) -> tuple[str | None, str]:
+    """Extract persona/harness flags while leaving unknown flags in user text."""
+
+    selector: str | None = None
+    ranges: list[tuple[int, int]] = []
+    for match in _PROMPT_FLAG_RE.finditer(text):
+        leading = match.group(1) or ""
+        opening_tick = match.group(2) or ""
+        marker = match.group(3) or ""
+        flag = match.group(4).lower()
+        resolved = _PROMPT_FLAG_ALIASES.get(flag, flag)
+
+        flag_start = match.start() + len(leading) + len(opening_tick)
+        flag_end = flag_start + len(marker) + len(flag)
+        strip_start = flag_start - len(opening_tick) if opening_tick else flag_start
+        strip_end = flag_end + 1 if flag_end < len(text) and text[flag_end] == "`" else flag_end
+        if flag in _PROMPT_FLAG_VALUE_SKIP:
+            strip_end = _extend_value_skip(text, strip_end)
+        closing_tick = -1
+        if opening_tick and strip_end < len(text):
+            if text[strip_end] == "`":
+                strip_end += 1
+            else:
+                closing_tick = text.find("`", strip_end)
+
+        recognized = flag in _PROMPT_FLAG_SKIP or resolved in known_selectors or flag in known_selectors
+        if not recognized:
+            continue
+
+        ranges.append((strip_start, strip_end))
+        if closing_tick > strip_end:
+            ranges.append((closing_tick, closing_tick + 1))
+        if flag not in _PROMPT_FLAG_SKIP:
+            selector = resolved
+
+    return selector, _strip_ranges(text, ranges) if ranges else text.strip()
+
+
+def _extract_prompt_selector(
+    parts: list[dict[str, Any]],
+    *,
+    explicit_selector: str | None,
+    known_selectors: set[str] | None = None,
+) -> PromptSelectorExtraction:
+    if explicit_selector and explicit_selector.strip():
+        return PromptSelectorExtraction(explicit_selector.strip().lower(), parts)
+
+    selectors = known_selectors or _known_prompt_selectors()
+    selector: str | None = None
+    cleaned_parts: list[dict[str, Any]] = []
+    has_non_text_part = False
+
+    for part in parts:
+        if part.get("type") != "text" or not isinstance(part.get("text"), str):
+            cleaned_parts.append(part)
+            has_non_text_part = True
+            continue
+
+        part_selector, cleaned_text = _extract_prompt_selector_from_text(
+            part["text"],
+            known_selectors=selectors,
+        )
+        if part_selector:
+            selector = part_selector
+        if cleaned_text:
+            cleaned_parts.append({**part, "text": cleaned_text})
+
+    if selector and selector not in _EXECUTION_HARNESSES and not cleaned_parts and not has_non_text_part:
+        cleaned_parts.append({"type": "text", "text": _BARE_PERSONA_PROMPT})
+
+    # Do not turn a model-only hint like "--opus" into an invalid empty turn.
+    if not cleaned_parts:
+        cleaned_parts = parts
+
+    return PromptSelectorExtraction(selector, cleaned_parts)
+
+
+def _with_prompt_switch_context_note(
+    parts: list[dict[str, Any]],
+    *,
+    selector: str | None,
+    history_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not selector or not history_messages:
+        return parts
+    return [{"type": "text", "text": _PROMPT_SWITCH_CONTEXT_NOTE}, *parts]
+
+
+async def _release_for_prompt_switch(
+    ctx: WorkflowContext,
+    *,
+    thread_key: str,
+    message_id: str | None,
+) -> None:
+    from api.runtime_control import release_assignment
+
+    release_id = f"prompt-switch:{message_id or ctx.run_id}"
+    await release_assignment(
+        ctx._pool,
+        thread_key=thread_key,
+        release_id=release_id,
+        cancel_inflight=True,
+    )
+    await ctx._pool.execute(
+        "UPDATE sandbox_sessions SET "
+        "agent_thread_id = NULL, last_delivered_id = NULL, "
+        "inflight_turn_id = NULL, inflight_turn_input = NULL, inflight_attempts = 0, "
+        "last_result = NULL, last_result_at = NULL, updated_at = NOW() "
+        "WHERE thread_key = $1",
+        thread_key,
+    )
+
+
+async def _should_backfill_history(
+    ctx: WorkflowContext,
+    *,
+    thread_key: str,
+    selector: str | None,
+    history_messages: list[dict[str, Any]],
+) -> bool:
+    if not history_messages:
+        return False
+    if selector:
+        return True
+
+    from api.runtime_control import get_active_assignment
+
+    return await get_active_assignment(ctx._pool, thread_key) is None
 
 
 def _normalize_recovery_command(text: str) -> str:
@@ -249,25 +437,51 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             422,
         )
 
+    prompt_selection = _extract_prompt_selector(
+        inp.effective_parts,
+        explicit_selector=inp.prompt_selector,
+    )
+    if prompt_selection.selector:
+        await _release_for_prompt_switch(
+            ctx,
+            thread_key=thread_key,
+            message_id=inp.message_id,
+        )
+
     parts = await _hydrate_recovery_turn(
         ctx,
         thread_key=thread_key,
-        parts=inp.effective_parts,
+        parts=prompt_selection.parts,
         user_id=inp.user_id,
         message_id=inp.message_id,
         metadata=inp.metadata,
         history_messages=inp.history_messages,
+    )
+    parts = _with_prompt_switch_context_note(
+        parts,
+        selector=prompt_selection.selector,
+        history_messages=inp.history_messages,
+    )
+    history_messages = (
+        inp.history_messages
+        if await _should_backfill_history(
+            ctx,
+            thread_key=thread_key,
+            selector=prompt_selection.selector,
+            history_messages=inp.history_messages,
+        )
+        else []
     )
 
     return await do_agent_turn(
         ctx,
         thread_key=thread_key,
         parts=parts,
-        history_messages=inp.history_messages,
+        history_messages=history_messages,
         message_id=inp.message_id,
         user_id=inp.user_id,
         metadata=inp.metadata,
         delivery=inp.delivery,
-        prompt_selector=inp.prompt_selector,
+        prompt_selector=prompt_selection.selector or inp.prompt_selector,
         agents_md_override=inp.agents_md_override,
     )

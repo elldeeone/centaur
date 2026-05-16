@@ -5,5 +5,5 @@ version = "0.1.0"
 
 [tool.ai-v2]
 type = "persona"
-engine = "amp"
+engine = "codex"
 prompt = "PROMPT.md"

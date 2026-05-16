@@ -188,18 +188,22 @@ async def test_flush_pending_skips_assistant_messages(db_pool) -> None:
     thread_key = "test:thread-flush"
     user_one = "msg-1"
     assistant = "asst-1"
+    assistant_history = "asst-history-1"
     user_two = "msg-2"
 
     await db_pool.execute(
         "INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at) VALUES "
-        '($1, $4, \'user\', \'[{"type":"text","text":"first"}]\'::jsonb, \'{}\'::jsonb, '
+        '($1, $5, \'user\', \'[{"type":"text","text":"first"}]\'::jsonb, \'{}\'::jsonb, '
         " TIMESTAMPTZ '2026-01-01T00:00:00Z'), "
-        '($2, $4, \'assistant\', \'[{"type":"text","text":"reply"}]\'::jsonb, \'{}\'::jsonb, '
+        '($2, $5, \'assistant\', \'[{"type":"text","text":"reply"}]\'::jsonb, \'{}\'::jsonb, '
         " TIMESTAMPTZ '2026-01-01T00:00:01Z'), "
-        '($3, $4, \'user\', \'[{"type":"text","text":"second"}]\'::jsonb, \'{}\'::jsonb, '
+        '($3, $5, \'assistant\', \'[{"type":"text","text":"imported reply"}]\'::jsonb, '
+        '\'{"history_backfill": true}\'::jsonb, TIMESTAMPTZ \'2026-01-01T00:00:01.5Z\'), '
+        '($4, $5, \'user\', \'[{"type":"text","text":"second"}]\'::jsonb, \'{}\'::jsonb, '
         " TIMESTAMPTZ '2026-01-01T00:00:02Z')",
         user_one,
         assistant,
+        assistant_history,
         user_two,
         thread_key,
     )
@@ -209,4 +213,25 @@ async def test_flush_pending_skips_assistant_messages(db_pool) -> None:
 
         rows = await _flush_pending(thread_key, user_one)
 
-    assert [row["id"] for row in rows] == [user_two]
+    assert [row["id"] for row in rows] == [assistant_history, user_two]
+
+
+def test_flushed_history_backfill_marks_imported_assistant_context() -> None:
+    from api.agent import _flushed_to_messages
+
+    messages = _flushed_to_messages([
+        {
+            "id": "asst-history-1",
+            "role": "assistant",
+            "parts": [{"type": "text", "text": "prior answer"}],
+            "metadata": {"history_backfill": True},
+        },
+    ])
+
+    assert messages == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "text": "prior answer"}],
+            "history_backfill": True,
+        },
+    ]

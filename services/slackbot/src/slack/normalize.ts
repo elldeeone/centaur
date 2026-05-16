@@ -17,6 +17,19 @@ type SlackMessageEvent = {
   files?: SlackMessageFile[]
 }
 
+type SlackThreadMessage = {
+  type?: string
+  subtype?: string
+  user?: string
+  bot_id?: string
+  text?: string
+  ts?: string
+  blocks?: unknown[]
+  files?: SlackMessageFile[]
+}
+
+type SlackHistoryMessage = NonNullable<NormalizedSlackEvent['history_messages']>[number]
+
 export async function normalizeSlackEnvelope(opts: {
   envelope: SlackEnvelope
   botUserId?: string
@@ -44,6 +57,19 @@ export async function normalizeSlackEnvelope(opts: {
     const part = await fetchSlackFilePart(opts.client, file)
     if (part) parts.push(part)
   }
+  const isMention =
+    event.type === 'app_mention' ||
+    Boolean(opts.botUserId && (event.text ?? '').includes(`<@${opts.botUserId}>`))
+  const historyMessages = isMention
+    ? await collectThreadHistorySafely({
+        client: opts.client,
+        channel: event.channel,
+        threadTs,
+        currentTs: event.ts,
+        teamId,
+        botUserId: opts.botUserId
+      })
+    : []
 
   return {
     thread_key: `slack:${teamId}:${event.channel}:${threadTs}`,
@@ -52,10 +78,9 @@ export async function normalizeSlackEnvelope(opts: {
     user_id: event.user,
     channel_id: event.channel,
     thread_ts: threadTs,
-    is_mention:
-      event.type === 'app_mention' ||
-      Boolean(opts.botUserId && (event.text ?? '').includes(`<@${opts.botUserId}>`)),
+    is_mention: isMention,
     parts,
+    ...(historyMessages.length ? { history_messages: historyMessages } : {}),
     slack: {
       event_id: opts.envelope.event_id,
       event_ts: event.event_ts,
@@ -67,6 +92,96 @@ export async function normalizeSlackEnvelope(opts: {
 
 function isMessageLikeEvent(event: SlackMessageEvent): boolean {
   return event.type === 'message' || event.type === 'app_mention'
+}
+
+async function collectThreadHistorySafely(opts: {
+  client: WebClient
+  channel: string
+  threadTs: string
+  currentTs: string
+  teamId: string
+  botUserId?: string
+}): Promise<SlackHistoryMessage[]> {
+  try {
+    return await collectThreadHistory(opts)
+  } catch (error) {
+    console.warn('slack_thread_history_collect_failed', {
+      channel: opts.channel,
+      thread_ts: opts.threadTs,
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return []
+  }
+}
+
+async function collectThreadHistory(opts: {
+  client: WebClient
+  channel: string
+  threadTs: string
+  currentTs: string
+  teamId: string
+  botUserId?: string
+}): Promise<SlackHistoryMessage[]> {
+  if (opts.currentTs === opts.threadTs) return []
+  const history: SlackHistoryMessage[] = []
+  let cursor: string | undefined
+
+  do {
+    const response = await opts.client.conversations.replies({
+      channel: opts.channel,
+      ts: opts.threadTs,
+      limit: 200,
+      cursor
+    })
+    const messages = Array.isArray(response.messages) ? response.messages : []
+    for (const raw of messages) {
+      const message = raw as SlackThreadMessage
+      if (!message.ts || compareSlackTs(message.ts, opts.currentTs) >= 0) continue
+      const role = message.user === opts.botUserId ? 'assistant' : 'user'
+      if (role === 'user' && (!message.user || message.bot_id)) continue
+      if (message.subtype && message.subtype !== 'file_share') continue
+
+      const parts = await partsFromSlackMessage(opts.client, message, opts.botUserId)
+      if (!parts.length) continue
+      history.push({
+        message_id: `slack:${opts.teamId}:${opts.channel}:${message.ts}`,
+        role,
+        parts,
+        user_id: message.user,
+        metadata: { platform: 'slack', history_backfill: true }
+      })
+    }
+
+    const nextCursor = response.response_metadata?.next_cursor
+    cursor = typeof nextCursor === 'string' && nextCursor.trim() ? nextCursor : undefined
+  } while (cursor)
+
+  return history
+}
+
+async function partsFromSlackMessage(
+  client: WebClient,
+  message: SlackThreadMessage,
+  botUserId?: string
+): Promise<NormalizedPart[]> {
+  const text = normalizeSlackText(message.text ?? '', botUserId)
+  const richText = normalizeRichTextBlocks(message.blocks)
+  const parts: NormalizedPart[] = []
+  const textPart = [richText, text].filter(Boolean).join('\n').trim()
+  if (textPart) parts.push({ type: 'text', text: textPart })
+
+  for (const file of message.files ?? []) {
+    const part = await fetchSlackFilePart(client, file)
+    if (part) parts.push(part)
+  }
+  return parts
+}
+
+function compareSlackTs(a: string, b: string): number {
+  const left = Number(a)
+  const right = Number(b)
+  if (Number.isFinite(left) && Number.isFinite(right)) return left - right
+  return a.localeCompare(b)
 }
 
 export function normalizeSlackText(input: string, botUserId?: string): string {

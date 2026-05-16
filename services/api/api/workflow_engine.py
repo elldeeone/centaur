@@ -1109,6 +1109,10 @@ async def do_agent_turn(
                 if not history_parts:
                     skipped += 1
                     continue
+                history_role = str(item.get("role") or "user").strip().lower()
+                if history_role not in {"user", "assistant"}:
+                    skipped += 1
+                    continue
                 raw_history_metadata = item.get("metadata")
                 history_metadata = dict(raw_history_metadata) if isinstance(
                     raw_history_metadata, dict,
@@ -1119,8 +1123,8 @@ async def do_agent_turn(
                 if history_user_id and not history_metadata.get("user_id"):
                     history_metadata["user_id"] = history_user_id
                 history_event = {
-                    "type": "user",
-                    "message": {"role": "user", "content": history_parts},
+                    "type": history_role,
+                    "message": {"role": history_role, "content": history_parts},
                 }
                 try:
                     await append_message(
