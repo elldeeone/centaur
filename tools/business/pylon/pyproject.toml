@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.usepylon.com"]
-secrets = ["PYLON_API_KEY"]
+secrets = [{type = "http", name = "PYLON_API_KEY", match_headers = ["Authorization"], hosts = ["api.usepylon.com"]}]

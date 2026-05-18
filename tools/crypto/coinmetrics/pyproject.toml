@@ -20,5 +20,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.coinmetrics.io"]
-secrets = ["COINMETRICS_API_KEY"]
+secrets = [{type = "http", name = "COINMETRICS_API_KEY", match_query = true, hosts = ["api.coinmetrics.io"]}]

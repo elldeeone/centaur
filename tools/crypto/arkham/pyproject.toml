@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.arkm.com"]
-secrets = ["ARKHAM_API_KEY"]
+secrets = [{type = "http", name = "ARKHAM_API_KEY", match_headers = ["API-Key"], hosts = ["api.arkm.com"]}]

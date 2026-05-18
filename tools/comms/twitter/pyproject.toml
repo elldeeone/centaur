@@ -18,5 +18,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.synoptic.com", "api.fxtwitter.com"]
-secrets = ["SYNOPTIC_API_KEY"]
+secrets = [{type = "http", name = "SYNOPTIC_API_KEY", match_headers = ["x-api-key"], hosts = ["api.synoptic.com"]}]

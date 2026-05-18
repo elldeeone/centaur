@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.tokenomist.ai"]
-secrets = ["TOKENOMIST_API_KEY"]
+secrets = [{type = "http", name = "TOKENOMIST_API_KEY", match_headers = ["x-api-key"], hosts = ["api.tokenomist.ai"]}]

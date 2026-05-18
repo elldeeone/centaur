@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.tokenterminal.com"]
-secrets = ["TOKEN_TERMINAL_API_KEY"]
+secrets = [{type = "http", name = "TOKEN_TERMINAL_API_KEY", match_headers = ["authorization"], hosts = ["api.tokenterminal.com"]}]

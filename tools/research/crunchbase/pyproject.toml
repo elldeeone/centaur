@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.crunchbase.com"]
-secrets = ["CRUNCHBASE_API_KEY"]
+secrets = [{type = "http", name = "CRUNCHBASE_API_KEY", match_headers = ["X-cb-user-key"], hosts = ["api.crunchbase.com"]}]

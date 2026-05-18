@@ -17,5 +17,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.telegram.org"]
-secrets = ["TELEGRAM_BOT_TOKEN"]
+secrets = [{type = "http", name = "TELEGRAM_BOT_TOKEN", match_path = true, hosts = ["api.telegram.org"]}]

@@ -20,5 +20,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["data.messari.io"]
-secrets = ["MESSARI_API_KEY"]
+secrets = [{type = "http", name = "MESSARI_API_KEY", match_headers = ["x-messari-api-key"], hosts = ["data.messari.io"]}]

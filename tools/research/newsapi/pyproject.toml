@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["newsapi.org"]
-secrets = ["NEWSAPI_KEY"]
+secrets = [{type = "http", name = "NEWSAPI_KEY", match_headers = ["X-Api-Key"], hosts = ["newsapi.org"]}]

@@ -9,11 +9,13 @@ from api.proxy_config import (
     render_proxy_yaml,
 )
 from api.tool_manager import (
+    DEFAULT_MATCH_HEADERS,
     GcpAuthSecret,
-    HeaderSecret,
+    HttpSecret,
     OAuthFieldSource,
     OAuthTokenSecret,
     PgDsnSecret,
+    SecretMode,
     _parse_secret,
     _parse_secrets,
 )
@@ -24,31 +26,137 @@ from api.tool_manager import (
 
 def test_parser_accepts_string_for_back_compat() -> None:
     secret = _parse_secret("OPENAI_API_KEY")
-    assert isinstance(secret, HeaderSecret)
+    assert isinstance(secret, HttpSecret)
     assert secret.name == "OPENAI_API_KEY"
     assert secret.secret_ref == "OPENAI_API_KEY"
     assert secret.replacer == "OPENAI_API_KEY"
+    # The legacy shim is the only path that falls back to the blanket header set.
+    assert secret.mode is SecretMode.REPLACE
+    assert secret.match_headers == DEFAULT_MATCH_HEADERS
 
 
-def test_parser_typed_header_overrides_defaults() -> None:
+def test_parser_typed_header_replace_mode() -> None:
     secret = _parse_secret(
         {
             "type": "header",
             "name": "CUSTOM_KEY",
             "replacer": "PLACEHOLDER",
             "secret_ref": "OP_REF",
+            "match_headers": ["Authorization"],
         }
     )
-    assert isinstance(secret, HeaderSecret)
+    assert isinstance(secret, HttpSecret)
+    assert secret.mode is SecretMode.REPLACE
     assert secret.replacer == "PLACEHOLDER"
     assert secret.secret_ref == "OP_REF"
+    assert secret.match_headers == ("Authorization",)
 
 
 def test_parser_typed_header_defaults_replacer_and_ref_to_name() -> None:
-    secret = _parse_secret({"type": "header", "name": "API_KEY"})
-    assert isinstance(secret, HeaderSecret)
+    secret = _parse_secret(
+        {"type": "header", "name": "API_KEY", "match_headers": ["Api-Key"]}
+    )
+    assert isinstance(secret, HttpSecret)
     assert secret.replacer == "API_KEY"
     assert secret.secret_ref == "API_KEY"
+    assert secret.match_headers == ("Api-Key",)
+
+
+def test_parser_replace_secret_accepts_query_and_path_locations() -> None:
+    secret = _parse_secret(
+        {
+            "type": "header",
+            "name": "ETHERSCAN_API_KEY",
+            "match_query": True,
+            "match_path": True,
+        }
+    )
+    assert secret.mode is SecretMode.REPLACE
+    assert secret.match_headers == ()
+    assert secret.match_query is True
+    assert secret.match_path is True
+
+
+def test_parser_replace_secret_requires_a_scan_location() -> None:
+    with pytest.raises(ValueError, match="must declare where iron-proxy scans"):
+        _parse_secret({"type": "header", "name": "API_KEY"})
+
+
+def test_parser_typed_header_rejects_empty_match_headers() -> None:
+    with pytest.raises(ValueError, match="invalid 'match_headers'"):
+        _parse_secret({"type": "header", "name": "API_KEY", "match_headers": []})
+
+
+def test_parser_replace_mode_rejects_inject_keys() -> None:
+    with pytest.raises(ValueError, match="must not declare 'inject_header'"):
+        _parse_secret(
+            {
+                "type": "header",
+                "name": "API_KEY",
+                "match_headers": ["Authorization"],
+                "inject_header": "Authorization",
+            }
+        )
+
+
+def test_parser_inject_mode_header_with_formatter() -> None:
+    secret = _parse_secret(
+        {
+            "type": "header",
+            "name": "VENDOR_TOKEN",
+            "mode": "inject",
+            "inject_header": "Authorization",
+            "inject_formatter": "Bearer {{ .Value }}",
+        }
+    )
+    assert secret.mode is SecretMode.INJECT
+    assert secret.inject_header == "Authorization"
+    assert secret.inject_formatter == "Bearer {{ .Value }}"
+    # Inject-mode secrets carry no placeholder — iron-proxy sets the value.
+    assert secret.replacer == ""
+
+
+def test_parser_inject_mode_query_param() -> None:
+    secret = _parse_secret(
+        {
+            "type": "header",
+            "name": "VENDOR_KEY",
+            "mode": "inject",
+            "inject_query_param": "api_key",
+        }
+    )
+    assert secret.mode is SecretMode.INJECT
+    assert secret.inject_query_param == "api_key"
+
+
+def test_parser_inject_mode_requires_exactly_one_target() -> None:
+    with pytest.raises(ValueError, match="exactly one of"):
+        _parse_secret({"type": "header", "name": "API_KEY", "mode": "inject"})
+
+
+def test_parser_inject_mode_rejects_replace_keys() -> None:
+    with pytest.raises(ValueError, match="must not declare 'replacer'"):
+        _parse_secret(
+            {
+                "type": "header",
+                "name": "API_KEY",
+                "mode": "inject",
+                "inject_header": "Authorization",
+                "replacer": "PLACEHOLDER",
+            }
+        )
+
+
+def test_parser_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="unknown mode"):
+        _parse_secret(
+            {
+                "type": "header",
+                "name": "API_KEY",
+                "mode": "bogus",
+                "match_headers": ["Authorization"],
+            }
+        )
 
 
 def test_parser_typed_gcp_auth() -> None:
@@ -126,10 +234,47 @@ def test_parser_mixed_array() -> None:
         ]
     )
     assert [type(s).__name__ for s in parsed] == [
-        "HeaderSecret",
+        "HttpSecret",
         "PgDsnSecret",
         "GcpAuthSecret",
     ]
+
+
+def test_parser_header_secret_carries_hosts() -> None:
+    secret = _parse_secret(
+        {
+            "type": "header",
+            "name": "API_KEY",
+            "match_headers": ["Authorization"],
+            "hosts": ["api.example.com"],
+        }
+    )
+    assert secret.hosts == ("api.example.com",)
+
+
+def test_parser_header_secret_falls_back_to_default_hosts() -> None:
+    secret = _parse_secret(
+        {"type": "header", "name": "API_KEY", "match_headers": ["Authorization"]},
+        default_hosts=("api.example.com",),
+    )
+    assert secret.hosts == ("api.example.com",)
+
+
+def test_parser_raw_string_inherits_default_hosts() -> None:
+    secret = _parse_secret("API_KEY", default_hosts=("api.example.com",))
+    assert secret.hosts == ("api.example.com",)
+
+
+def test_parser_header_secret_rejects_empty_hosts() -> None:
+    with pytest.raises(ValueError, match="invalid 'hosts'"):
+        _parse_secret(
+            {
+                "type": "header",
+                "name": "API_KEY",
+                "match_headers": ["Authorization"],
+                "hosts": [],
+            }
+        )
 
 
 # ── oauth_token parser ───────────────────────────────────────────────────────
@@ -266,9 +411,9 @@ def test_parser_oauth_token_rejects_field_invalid_for_grant() -> None:
 
 def test_pg_listen_ports_are_sequential_and_sorted_by_name() -> None:
     secrets = [
-        (PgDsnSecret("ZEBRA", "ZEBRA", "z"), ()),
-        (PgDsnSecret("ALPHA", "ALPHA", "a"), ()),
-        (PgDsnSecret("MIKE", "MIKE", "m"), ()),
+        PgDsnSecret("ZEBRA", "ZEBRA", "z"),
+        PgDsnSecret("ALPHA", "ALPHA", "a"),
+        PgDsnSecret("MIKE", "MIKE", "m"),
     ]
     ports = assign_pg_listen_ports(secrets)
     assert ports == {
@@ -280,8 +425,8 @@ def test_pg_listen_ports_are_sequential_and_sorted_by_name() -> None:
 
 def test_pg_listen_ports_deduplicates() -> None:
     secrets = [
-        (PgDsnSecret("DB", "DB", "db"), ()),
-        (PgDsnSecret("DB", "DB", "db"), ()),  # duplicate (from infra + tool)
+        PgDsnSecret("DB", "DB", "db"),
+        PgDsnSecret("DB", "DB", "db"),  # duplicate (from infra + tool)
     ]
     ports = assign_pg_listen_ports(secrets)
     assert ports == {"DB": PG_LISTEN_PORT_BASE}
@@ -295,33 +440,75 @@ def test_render_emits_header_and_gcp_auth_transforms(
 ) -> None:
     monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
     secrets = [
-        (
-            HeaderSecret("OPENAI_API_KEY", "OPENAI_API_KEY", "OPENAI_API_KEY"),
-            ("api.openai.com",),
+        HttpSecret(
+            "OPENAI_API_KEY",
+            "OPENAI_API_KEY",
+            hosts=("api.openai.com",),
+            match_headers=("Authorization",),
         ),
-        (
-            GcpAuthSecret(
-                "GCP_GCLOUD_CREDENTIAL",
-                "GCP_GCLOUD_CREDENTIAL",
-                ("storage.googleapis.com",),
-            ),
-            (),
-        ),
+        GcpAuthSecret("GCP_GCLOUD_CREDENTIAL", "GCP_GCLOUD_CREDENTIAL"),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     names = [t["name"] for t in cfg["transforms"]]
     assert names == ["allowlist", "secrets", "gcp_auth", "header_allowlist"]
     secrets_block = next(t for t in cfg["transforms"] if t["name"] == "secrets")
-    assert secrets_block["config"]["secrets"][0]["proxy_value"] == "OPENAI_API_KEY"
-    assert secrets_block["config"]["secrets"][0]["rules"] == [
-        {"host": "api.openai.com"}
+    entry = secrets_block["config"]["secrets"][0]
+    assert "inject" not in entry
+    assert entry["replace"]["proxy_value"] == "OPENAI_API_KEY"
+    assert entry["replace"]["match_headers"] == ["Authorization"]
+    assert "match_path" not in entry["replace"]
+    assert entry["rules"] == [{"host": "api.openai.com"}]
+
+
+def test_render_replace_secret_emits_query_and_path_locations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
+    secrets = [
+        HttpSecret(
+            "ETHERSCAN_API_KEY",
+            "ETHERSCAN_API_KEY",
+            hosts=("api.etherscan.io",),
+            match_query=True,
+            match_path=True,
+        ),
     ]
-    gcp_block = next(t for t in cfg["transforms"] if t["name"] == "gcp_auth")
-    assert gcp_block["config"]["rules"] == [{"host": "storage.googleapis.com"}]
+    cfg = yaml.safe_load(render_proxy_yaml(secrets))
+    secrets_block = next(t for t in cfg["transforms"] if t["name"] == "secrets")
+    entry = secrets_block["config"]["secrets"][0]
+    replace_block = entry["replace"]
+    assert replace_block["proxy_value"] == "ETHERSCAN_API_KEY"
+    # Query-only secrets carry no headers — iron-proxy always scans the query.
+    assert replace_block["match_headers"] == []
+    assert replace_block["match_path"] is True
+    assert entry["rules"] == [{"host": "api.etherscan.io"}]
+
+
+def test_render_inject_mode_header_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
+    secrets = [
+        HttpSecret(
+            "VENDOR_TOKEN",
+            "VENDOR_TOKEN",
+            mode=SecretMode.INJECT,
+            hosts=("api.vendor.com",),
+            inject_header="Authorization",
+            inject_formatter="Bearer {{ .Value }}",
+        ),
+    ]
+    cfg = yaml.safe_load(render_proxy_yaml(secrets))
+    secrets_block = next(t for t in cfg["transforms"] if t["name"] == "secrets")
+    entry = secrets_block["config"]["secrets"][0]
+    assert "replace" not in entry
+    assert entry["inject"] == {
+        "header": "Authorization",
+        "formatter": "Bearer {{ .Value }}",
+    }
+    assert entry["rules"] == [{"host": "api.vendor.com"}]
 
 
 def test_render_gcp_auth_defaults_hosts_and_scopes_when_unset() -> None:
-    secrets = [(GcpAuthSecret("GCP_GCLOUD_CREDENTIAL", "GCP_GCLOUD_CREDENTIAL"), ())]
+    secrets = [GcpAuthSecret("GCP_GCLOUD_CREDENTIAL", "GCP_GCLOUD_CREDENTIAL")]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     gcp = next(t for t in cfg["transforms"] if t["name"] == "gcp_auth")
     assert gcp["config"]["rules"] == [{"host": "*.googleapis.com"}]
@@ -332,17 +519,14 @@ def test_render_gcp_auth_defaults_hosts_and_scopes_when_unset() -> None:
 
 def test_render_gcp_auth_uses_per_secret_scopes() -> None:
     secrets = [
-        (
-            GcpAuthSecret(
-                "GSUITE_GCP_CREDENTIAL",
-                "GSUITE_GCP_CREDENTIAL",
-                ("gmail.googleapis.com",),
-                (
-                    "https://www.googleapis.com/auth/gmail.modify",
-                    "https://www.googleapis.com/auth/drive",
-                ),
+        GcpAuthSecret(
+            "GSUITE_GCP_CREDENTIAL",
+            "GSUITE_GCP_CREDENTIAL",
+            ("gmail.googleapis.com",),
+            (
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/drive",
             ),
-            (),
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
@@ -355,14 +539,8 @@ def test_render_gcp_auth_uses_per_secret_scopes() -> None:
 
 def test_render_emits_one_gcp_auth_transform_per_keyfile() -> None:
     secrets = [
-        (
-            GcpAuthSecret("WORKSPACE", "GSUITE_GCP_CREDENTIAL", ("gmail.googleapis.com",)),
-            (),
-        ),
-        (
-            GcpAuthSecret("DATA", "BIGQUERY_GCP_CREDENTIAL", ("bigquery.googleapis.com",)),
-            (),
-        ),
+        GcpAuthSecret("WORKSPACE", "GSUITE_GCP_CREDENTIAL", ("gmail.googleapis.com",)),
+        GcpAuthSecret("DATA", "BIGQUERY_GCP_CREDENTIAL", ("bigquery.googleapis.com",)),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     gcp_blocks = [t for t in cfg["transforms"] if t["name"] == "gcp_auth"]
@@ -374,8 +552,8 @@ def test_render_emits_one_gcp_auth_transform_per_keyfile() -> None:
 
 def test_render_merges_gcp_auth_hosts_for_shared_keyfile() -> None:
     secrets = [
-        (GcpAuthSecret("A", "SHARED_CREDENTIAL", ("gmail.googleapis.com",)), ()),
-        (GcpAuthSecret("B", "SHARED_CREDENTIAL", ("drive.googleapis.com",)), ()),
+        GcpAuthSecret("A", "SHARED_CREDENTIAL", ("gmail.googleapis.com",)),
+        GcpAuthSecret("B", "SHARED_CREDENTIAL", ("drive.googleapis.com",)),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     gcp_blocks = [t for t in cfg["transforms"] if t["name"] == "gcp_auth"]
@@ -399,19 +577,36 @@ _RENDER_CC_FIELDS = (
 )
 
 
+def test_render_inject_mode_query_param_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
+    secrets = [
+        HttpSecret(
+            "VENDOR_KEY",
+            "VENDOR_KEY",
+            mode=SecretMode.INJECT,
+            hosts=("api.vendor.com",),
+            inject_query_param="api_key",
+        ),
+    ]
+    cfg = yaml.safe_load(render_proxy_yaml(secrets))
+    secrets_block = next(t for t in cfg["transforms"] if t["name"] == "secrets")
+    assert secrets_block["config"]["secrets"][0]["inject"] == {
+        "query_param": "api_key"
+    }
+
+
 def test_render_emits_oauth_token_transform(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
     secrets = [
-        (
-            OAuthTokenSecret(
-                name="GOOGLE_TOKEN_JSON",
-                grant="refresh_token",
-                hosts=("gmail.googleapis.com", "www.googleapis.com"),
-                fields=_RENDER_REFRESH_FIELDS,
-            ),
-            (),
+        OAuthTokenSecret(
+            name="GOOGLE_TOKEN_JSON",
+            grant="refresh_token",
+            hosts=("gmail.googleapis.com", "www.googleapis.com"),
+            fields=_RENDER_REFRESH_FIELDS,
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
@@ -450,17 +645,14 @@ def test_render_oauth_token_field_omits_json_key_for_whole_secret(
 ) -> None:
     monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
     secrets = [
-        (
-            OAuthTokenSecret(
-                name="OAUTH_APP",
-                grant="client_credentials",
-                hosts=("api.example.com",),
-                fields=(
-                    ("client_id", OAuthFieldSource("OAUTH_CLIENT_ID")),
-                    ("client_secret", OAuthFieldSource("OAUTH_CLIENT_SECRET")),
-                ),
+        OAuthTokenSecret(
+            name="OAUTH_APP",
+            grant="client_credentials",
+            hosts=("api.example.com",),
+            fields=(
+                ("client_id", OAuthFieldSource("OAUTH_CLIENT_ID")),
+                ("client_secret", OAuthFieldSource("OAUTH_CLIENT_SECRET")),
             ),
-            (),
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
@@ -472,19 +664,13 @@ def test_render_oauth_token_field_omits_json_key_for_whole_secret(
 
 def test_render_oauth_token_merges_entries_by_token_identity() -> None:
     secrets = [
-        (
-            OAuthTokenSecret(
-                "A", "refresh_token", ("gmail.googleapis.com",),
-                _RENDER_REFRESH_FIELDS, ("scope.a",),
-            ),
-            (),
+        OAuthTokenSecret(
+            "A", "refresh_token", ("gmail.googleapis.com",),
+            _RENDER_REFRESH_FIELDS, ("scope.a",),
         ),
-        (
-            OAuthTokenSecret(
-                "B", "refresh_token", ("drive.googleapis.com",),
-                _RENDER_REFRESH_FIELDS, ("scope.b",),
-            ),
-            (),
+        OAuthTokenSecret(
+            "B", "refresh_token", ("drive.googleapis.com",),
+            _RENDER_REFRESH_FIELDS, ("scope.b",),
         ),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
@@ -501,20 +687,14 @@ def test_render_oauth_token_merges_entries_by_token_identity() -> None:
 
 def test_render_oauth_token_separate_entries_for_distinct_fields() -> None:
     secrets = [
-        (
-            OAuthTokenSecret(
-                "A", "refresh_token", ("gmail.googleapis.com",),
-                _RENDER_REFRESH_FIELDS,
-            ),
-            (),
+        OAuthTokenSecret(
+            "A", "refresh_token", ("gmail.googleapis.com",),
+            _RENDER_REFRESH_FIELDS,
         ),
-        (
-            OAuthTokenSecret(
-                "B", "refresh_token", ("drive.googleapis.com",),
-                (("client_id", OAuthFieldSource("OTHER", "client_id")),
-                 ("refresh_token", OAuthFieldSource("OTHER", "refresh_token"))),
-            ),
-            (),
+        OAuthTokenSecret(
+            "B", "refresh_token", ("drive.googleapis.com",),
+            (("client_id", OAuthFieldSource("OTHER", "client_id")),
+             ("refresh_token", OAuthFieldSource("OTHER", "refresh_token"))),
         ),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
@@ -526,15 +706,12 @@ def test_render_oauth_token_separate_entries_for_distinct_fields() -> None:
 
 def test_render_oauth_token_emits_token_endpoint_when_set() -> None:
     secrets = [
-        (
-            OAuthTokenSecret(
-                name="OAUTH_APP",
-                grant="client_credentials",
-                hosts=("api.example.com",),
-                fields=_RENDER_CC_FIELDS,
-                token_endpoint="https://login.example.com/oauth2/token",
-            ),
-            (),
+        OAuthTokenSecret(
+            name="OAUTH_APP",
+            grant="client_credentials",
+            hosts=("api.example.com",),
+            fields=_RENDER_CC_FIELDS,
+            token_endpoint="https://login.example.com/oauth2/token",
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
@@ -558,8 +735,8 @@ def test_render_emits_postgres_listeners_with_env_refs(
 ) -> None:
     monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
     secrets = [
-        (PgDsnSecret("DATABASE_URL", "DB_REF", "memo_db"), ()),
-        (PgDsnSecret("ANALYTICS_PG", "AN_REF", "analytics"), ()),
+        PgDsnSecret("DATABASE_URL", "DB_REF", "memo_db"),
+        PgDsnSecret("ANALYTICS_PG", "AN_REF", "analytics"),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     listeners = cfg["postgres"]
@@ -581,7 +758,7 @@ def test_render_postgres_upstream_dsn_uses_onepassword_source(
 ) -> None:
     monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
     monkeypatch.setenv("OP_VAULT", "ai-agents")
-    secrets = [(PgDsnSecret("DATABASE_URL", "INVESTMEMOS_PG_DSN", "memo_db"), ())]
+    secrets = [PgDsnSecret("DATABASE_URL", "INVESTMEMOS_PG_DSN", "memo_db")]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     upstream = cfg["postgres"][0]["upstream"]["dsn"]
     assert upstream["type"] == "1password"
@@ -593,12 +770,7 @@ def test_render_with_onepassword_source_emits_op_ref(
 ) -> None:
     monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "onepassword-connect")
     monkeypatch.setenv("OP_VAULT", "engineering")
-    secrets = [
-        (
-            GcpAuthSecret("GCP_GCLOUD_CREDENTIAL", "GCP_GCLOUD_CREDENTIAL"),
-            ("storage.googleapis.com",),
-        )
-    ]
+    secrets = [GcpAuthSecret("GCP_GCLOUD_CREDENTIAL", "GCP_GCLOUD_CREDENTIAL")]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     gcp = next(t for t in cfg["transforms"] if t["name"] == "gcp_auth")
     assert gcp["config"]["keyfile"]["type"] == "1password_connect"
@@ -610,18 +782,23 @@ def test_render_with_onepassword_source_emits_op_ref(
 
 def test_render_groups_header_secret_hosts_when_repeated() -> None:
     secrets = [
-        (
-            HeaderSecret("GITHUB_TOKEN", "GITHUB_TOKEN", "GITHUB_TOKEN"),
-            ("github.com", "api.github.com"),
+        HttpSecret(
+            "GITHUB_TOKEN",
+            "GITHUB_TOKEN",
+            hosts=("github.com", "api.github.com"),
+            match_headers=("Authorization",),
         ),
-        (
-            HeaderSecret("GITHUB_TOKEN", "GITHUB_TOKEN", "GITHUB_TOKEN"),
-            ("uploads.github.com",),
+        HttpSecret(
+            "GITHUB_TOKEN",
+            "GITHUB_TOKEN",
+            hosts=("uploads.github.com",),
+            match_headers=("Authorization",),
         ),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     secrets_block = next(t for t in cfg["transforms"] if t["name"] == "secrets")
     entries = secrets_block["config"]["secrets"]
+    # The same secret declared on different hosts merges into one entry.
     assert len(entries) == 1
     assert {r["host"] for r in entries[0]["rules"]} == {
         "github.com",

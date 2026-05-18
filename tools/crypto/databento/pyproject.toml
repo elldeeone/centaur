@@ -19,5 +19,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["hist.databento.com"]
-secrets = ["DATABENTO_API_KEY"]
+secrets = [{type = "http", name = "DATABENTO_API_KEY", match_headers = ["Authorization"], hosts = ["hist.databento.com"]}]

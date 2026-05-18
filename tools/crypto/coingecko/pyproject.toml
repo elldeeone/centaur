@@ -20,5 +20,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["pro-api.coingecko.com"]
-secrets = ["COINGECKO_API_KEY"]
+secrets = [{type = "http", name = "COINGECKO_API_KEY", match_headers = ["x-cg-pro-api-key"], hosts = ["pro-api.coingecko.com"]}]

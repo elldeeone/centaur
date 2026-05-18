@@ -37,18 +37,89 @@ from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
 log = structlog.get_logger()
 
 
-@dataclass(frozen=True)
-class HeaderSecret:
-    """Header-based HTTP credential injected by iron-proxy's ``secrets`` transform.
+# Headers the legacy raw-string shim lets iron-proxy scan for ``secrets``-transform
+# placeholders. Literal strings match a single header name; ``/.../`` is a regex.
+# Typed secret entries must instead name the exact headers they touch via
+# ``match_headers`` rather than fall back to this blanket set.
+DEFAULT_MATCH_HEADERS: tuple[str, ...] = (
+    "Authorization",
+    "Proxy-Authorization",
+    "Api-Key",
+    "Anthropic-Api-Key",
+    "Auth-Token",
+    "Jwt",
+    "Cookie",
+    "Apikey",
+    "AccessKey",
+    "Api-Access-Key",
+    "Api-Signature",
+    "FX-ACCESS-KEY",
+    "FX-ACCESS-SIGN",
+    "FX-ACCESS-PASSPHRASE",
+    "X-CB-ACCESS-PASSPHRASE",
+    "X-CB-ACCESS-SIGNATURE",
+    "/^x-[a-z0-9-]*(api-key|apikey|secret|token|auth|key)$/",
+)
 
-    The tool sees ``replacer`` (a placeholder token) inside the sandbox; iron-proxy
-    swaps it for the real value resolved from ``secret_ref`` (env var or 1Password
-    item) when scanning outbound request headers.
+
+class SecretMode(str, Enum):
+    """How iron-proxy's ``secrets`` transform applies an HTTP credential.
+
+    ``replace`` — the tool writes the ``replacer`` placeholder token somewhere
+    in the request (a header, the query string, or the path) and iron-proxy
+    swaps it for the resolved value.
+    ``inject`` — iron-proxy adds the credential to the request itself; the tool
+    never sees it and emits no placeholder.
+    """
+
+    REPLACE = "replace"
+    INJECT = "inject"
+
+
+@dataclass(frozen=True)
+class HttpSecret:
+    """An HTTP credential applied by iron-proxy's ``secrets`` transform.
+
+    The credential may ride in a header, the query string, or the path —
+    ``match_*`` (replace mode) and ``inject_*`` (inject mode) say exactly where.
+
+    Replace mode (the default): the tool sees ``replacer`` (a placeholder
+    token), writes it into the request, and iron-proxy swaps it for the real
+    value resolved from ``secret_ref`` (env var or 1Password item).
+    ``match_headers`` names the exact headers iron-proxy scans — each entry is a
+    literal header name or a ``/.../``-delimited regex. ``match_path`` also
+    scans the URL path. iron-proxy always scans the query string, so
+    ``match_query`` carries no extra config; it just records that the secret
+    rides in the query and lets such a secret skip ``match_headers``.
+
+    Inject mode: iron-proxy adds the credential itself and the tool never sees
+    it. Set ``inject_header`` (optionally with a Go-template ``inject_formatter``
+    such as ``Bearer {{ .Value }}``) or ``inject_query_param``.
+
+    ``hosts`` scopes the secret to the upstreams it belongs to — it becomes the
+    iron-proxy ``rules`` for this entry. Each secret carries its own hosts so a
+    tool's credentials are never offered to an unrelated upstream.
     """
 
     name: str
     secret_ref: str
-    replacer: str
+    mode: SecretMode = SecretMode.REPLACE
+    hosts: tuple[str, ...] = ()
+    # Replace mode — where iron-proxy scans for ``replacer``.
+    replacer: str = ""
+    match_headers: tuple[str, ...] = ()
+    match_path: bool = False
+    match_query: bool = False
+    # Inject mode — where iron-proxy writes the resolved credential.
+    inject_header: str = ""
+    inject_formatter: str = ""
+    inject_query_param: str = ""
+
+    def __post_init__(self) -> None:
+        # Replace-mode secrets need a placeholder; default it to the name so
+        # callers only pass ``replacer`` when it must differ from ``name``.
+        if self.mode is SecretMode.REPLACE and not self.replacer:
+            object.__setattr__(self, "replacer", self.name)
 
 
 @dataclass(frozen=True)
@@ -132,7 +203,7 @@ class OAuthTokenSecret:
     token_endpoint: str | None = None
 
 
-SecretDef = HeaderSecret | GcpAuthSecret | PgDsnSecret | OAuthTokenSecret
+SecretDef = HttpSecret | GcpAuthSecret | PgDsnSecret | OAuthTokenSecret
 
 # Per-grant credential fields: grant -> (required, optional). Field names are
 # the keys iron-proxy expects in each ``oauth_token`` token entry.
@@ -210,28 +281,178 @@ def _parse_oauth_fields(
     return tuple(sorted(parsed.items()))
 
 
-def _parse_secret(entry: Any) -> SecretDef:
+_INJECT_ONLY_KEYS: tuple[str, ...] = (
+    "inject_header",
+    "inject_formatter",
+    "inject_query_param",
+)
+_REPLACE_ONLY_KEYS: tuple[str, ...] = (
+    "replacer",
+    "match_headers",
+    "match_path",
+    "match_query",
+)
+
+
+def _parse_str_list(
+    entry: dict, key: str, *, name: str, noun: str
+) -> tuple[str, ...] | None:
+    """Validate an optional non-empty array-of-strings field; ``None`` if absent."""
+    raw = entry.get(key)
+    if raw is None:
+        return None
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or not all(isinstance(item, str) and item for item in raw)
+    ):
+        raise ValueError(
+            f"HTTP secret {name!r} has invalid {key!r} "
+            f"(expected a non-empty array of {noun}): {raw!r}"
+        )
+    return tuple(raw)
+
+
+def _parse_bool(entry: dict, key: str, *, name: str) -> bool:
+    value = entry.get(key, False)
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"HTTP secret {name!r} has invalid {key!r} (expected a boolean): {value!r}"
+        )
+    return value
+
+
+def _reject_foreign_keys(
+    entry: dict, keys: tuple[str, ...], *, name: str, mode: str
+) -> None:
+    """Raise if *entry* declares a key that belongs to the other mode."""
+    stray = [k for k in keys if k in entry]
+    if stray:
+        raise ValueError(
+            f"{mode}-mode HTTP secret {name!r} must not declare {stray[0]!r}"
+        )
+
+
+def _parse_replace_secret(
+    entry: dict, *, name: str, secret_ref: str, hosts: tuple[str, ...]
+) -> HttpSecret:
+    """Parse a replace-mode HTTP secret: a placeholder plus scan locations."""
+    _reject_foreign_keys(entry, _INJECT_ONLY_KEYS, name=name, mode="replace")
+    match_headers = (
+        _parse_str_list(entry, "match_headers", name=name, noun="header names") or ()
+    )
+    match_path = _parse_bool(entry, "match_path", name=name)
+    match_query = _parse_bool(entry, "match_query", name=name)
+    if not match_headers and not match_path and not match_query:
+        raise ValueError(
+            f"replace-mode HTTP secret {name!r} must declare where iron-proxy "
+            f"scans for it: 'match_headers', 'match_path', and/or 'match_query'"
+        )
+    replacer = entry.get("replacer", name)
+    if not isinstance(replacer, str) or not replacer:
+        raise ValueError(f"HTTP secret {name!r} has invalid 'replacer': {entry!r}")
+    return HttpSecret(
+        name=name,
+        secret_ref=secret_ref,
+        mode=SecretMode.REPLACE,
+        hosts=hosts,
+        replacer=replacer,
+        match_headers=match_headers,
+        match_path=match_path,
+        match_query=match_query,
+    )
+
+
+def _parse_inject_secret(
+    entry: dict, *, name: str, secret_ref: str, hosts: tuple[str, ...]
+) -> HttpSecret:
+    """Parse an inject-mode HTTP secret: a target iron-proxy writes itself."""
+    _reject_foreign_keys(entry, _REPLACE_ONLY_KEYS, name=name, mode="inject")
+    inject_header = entry.get("inject_header", "")
+    inject_query_param = entry.get("inject_query_param", "")
+    inject_formatter = entry.get("inject_formatter", "")
+    for key, value in (
+        ("inject_header", inject_header),
+        ("inject_query_param", inject_query_param),
+        ("inject_formatter", inject_formatter),
+    ):
+        if not isinstance(value, str):
+            raise ValueError(f"HTTP secret {name!r} has invalid {key!r}: {value!r}")
+    if bool(inject_header) == bool(inject_query_param):
+        raise ValueError(
+            f"inject-mode HTTP secret {name!r} must declare exactly one of "
+            f"'inject_header' or 'inject_query_param'"
+        )
+    if inject_formatter and not inject_header:
+        raise ValueError(
+            f"inject-mode HTTP secret {name!r} sets 'inject_formatter', which "
+            f"only applies alongside 'inject_header'"
+        )
+    return HttpSecret(
+        name=name,
+        secret_ref=secret_ref,
+        mode=SecretMode.INJECT,
+        hosts=hosts,
+        inject_header=inject_header,
+        inject_formatter=inject_formatter,
+        inject_query_param=inject_query_param,
+    )
+
+
+def _parse_http_secret(
+    entry: dict, *, name: str, secret_ref: str, default_hosts: tuple[str, ...]
+) -> HttpSecret:
+    """Parse a typed ``http`` secret entry, honoring inject/replace modes."""
+    mode_raw = entry.get("mode", SecretMode.REPLACE.value)
+    try:
+        mode = SecretMode(mode_raw)
+    except ValueError:
+        raise ValueError(
+            f"HTTP secret {name!r} has unknown mode {mode_raw!r} "
+            f"(expected 'replace' or 'inject')"
+        ) from None
+    hosts = _parse_str_list(entry, "hosts", name=name, noun="host patterns")
+    if hosts is None:
+        hosts = default_hosts
+    if mode is SecretMode.REPLACE:
+        return _parse_replace_secret(
+            entry, name=name, secret_ref=secret_ref, hosts=hosts
+        )
+    return _parse_inject_secret(entry, name=name, secret_ref=secret_ref, hosts=hosts)
+
+
+def _parse_secret(entry: Any, *, default_hosts: tuple[str, ...] = ()) -> SecretDef:
     """Normalize a single secret entry from pyproject.toml into a SecretDef.
 
-    Raw strings are accepted for back-compat: ``"FOO"`` becomes
-    ``HeaderSecret(name="FOO", secret_ref="FOO", replacer="FOO")``.
+    ``default_hosts`` is the tool-level ``hosts`` fallback for entries that do
+    not carry their own. Raw strings are accepted by a legacy shim: ``"FOO"``
+    becomes a replace-mode ``HttpSecret`` that scans every header in
+    ``DEFAULT_MATCH_HEADERS`` and inherits ``default_hosts``. Typed table entries
+    name the headers they touch via ``match_headers`` and should carry ``hosts``.
     """
     if isinstance(entry, str):
-        return HeaderSecret(name=entry, secret_ref=entry, replacer=entry)
+        return HttpSecret(
+            name=entry,
+            secret_ref=entry,
+            mode=SecretMode.REPLACE,
+            hosts=default_hosts,
+            match_headers=DEFAULT_MATCH_HEADERS,
+            replacer=entry,
+        )
     if not isinstance(entry, dict):
         raise ValueError(f"secret entry must be a string or table, got {type(entry).__name__}")
     name = entry.get("name")
     if not isinstance(name, str) or not name:
         raise ValueError(f"secret entry missing 'name': {entry!r}")
-    secret_type = entry.get("type", "header")
+    # ``header`` is a deprecated alias for ``http``, kept for back-compat.
+    secret_type = entry.get("type", "http")
     secret_ref = entry.get("secret_ref", name)
     if not isinstance(secret_ref, str) or not secret_ref:
         raise ValueError(f"secret entry has invalid 'secret_ref': {entry!r}")
-    if secret_type == "header":
-        replacer = entry.get("replacer", name)
-        if not isinstance(replacer, str) or not replacer:
-            raise ValueError(f"secret entry has invalid 'replacer': {entry!r}")
-        return HeaderSecret(name=name, secret_ref=secret_ref, replacer=replacer)
+    if secret_type in ("http", "header"):
+        return _parse_http_secret(
+            entry, name=name, secret_ref=secret_ref, default_hosts=default_hosts
+        )
     if secret_type == "gcp_auth":
         hosts = entry.get("hosts", [])
         if not isinstance(hosts, list) or not all(
@@ -305,26 +526,34 @@ def _parse_secret(entry: Any) -> SecretDef:
     raise ValueError(f"unknown secret type {secret_type!r}")
 
 
-def _parse_secrets(entries: Any) -> list[SecretDef]:
+def _parse_secrets(
+    entries: Any, *, default_hosts: tuple[str, ...] = ()
+) -> list[SecretDef]:
     if entries is None:
         return []
     if not isinstance(entries, list):
         raise ValueError("'secrets'/'optional_secrets' must be an array")
-    return [_parse_secret(e) for e in entries]
+    return [_parse_secret(e, default_hosts=default_hosts) for e in entries]
+
+
+def _is_replace_secret(secret: SecretDef) -> bool:
+    """True for HTTP secrets the tool must populate itself (replace mode)."""
+    return isinstance(secret, HttpSecret) and secret.mode is SecretMode.REPLACE
 
 
 async def _resolve_secrets(secrets: list[SecretDef]) -> dict[str, str]:
-    """Return placeholder values for header secrets.
+    """Return placeholder values for replace-mode HTTP secrets.
 
-    Only ``HeaderSecret`` entries end up in the tool's ``ToolContext`` — the
-    tool gets back the ``replacer`` token, which iron-proxy swaps for the
-    real credential at the network boundary. ``GcpAuthSecret``,
-    ``OAuthTokenSecret`` and ``PgDsnSecret`` are not exposed via context:
-    gcp_auth and oauth_token are minted and injected on the wire by
-    iron-proxy, and pg_dsn reaches the tool as an environment variable set on
-    the sandbox by the kubernetes backend.
+    Only replace-mode ``HttpSecret`` entries end up in the tool's
+    ``ToolContext`` — the tool gets back the ``replacer`` token, which iron-proxy
+    swaps for the real credential at the network boundary. Inject-mode HTTP
+    secrets are applied entirely by iron-proxy and never reach the tool.
+    ``GcpAuthSecret``, ``OAuthTokenSecret`` and ``PgDsnSecret`` are likewise not
+    exposed via context: gcp_auth and oauth_token are minted and injected on the
+    wire by iron-proxy, and pg_dsn reaches the tool as an environment variable
+    set on the sandbox by the kubernetes backend.
     """
-    return {s.name: s.replacer for s in secrets if isinstance(s, HeaderSecret)}
+    return {s.name: s.replacer for s in secrets if _is_replace_secret(s)}
 
 
 _MAX_INLINE_TOOL_BINARY_BYTES = max(
@@ -702,7 +931,6 @@ class LoadedTool:
         description: str,
         ctx: ToolContext,
         methods: list[ToolMethod],
-        hosts: list[str] | None = None,
         secrets: list[SecretDef] | None = None,
         optional_secrets: list[SecretDef] | None = None,
         timeout_s: float | None = None,
@@ -711,7 +939,6 @@ class LoadedTool:
         self.description = description
         self.ctx = ctx
         self.methods = methods
-        self.hosts: list[str] = hosts or []
         self.secrets: list[SecretDef] = secrets or []
         self.optional_secrets: list[SecretDef] = optional_secrets or []
         self.timeout_s = timeout_s
@@ -813,10 +1040,16 @@ class ToolManager:
                 tool_conf = pyproject.get("tool", {}).get("ai-v2", {})
 
                 name = tool_dir.name
-                hosts = tool_conf.get("hosts", [])
+                # Tool-level ``hosts`` is the legacy fallback for secret entries
+                # that do not carry their own; each secret should declare its.
+                default_hosts = tuple(tool_conf.get("hosts", []))
                 try:
-                    secrets = _parse_secrets(tool_conf.get("secrets"))
-                    optional_secrets = _parse_secrets(tool_conf.get("optional_secrets"))
+                    secrets = _parse_secrets(
+                        tool_conf.get("secrets"), default_hosts=default_hosts
+                    )
+                    optional_secrets = _parse_secrets(
+                        tool_conf.get("optional_secrets"), default_hosts=default_hosts
+                    )
                 except ValueError as exc:
                     log.warning(
                         "tool_invalid_secrets",
@@ -825,22 +1058,27 @@ class ToolManager:
                     )
                     continue
 
-                # Validate host patterns
-                for h in hosts:
-                    if h in ("*", "*.com", "*.org", "*.net", "*.io"):
-                        log.warning(
-                            "tool_invalid_host",
-                            tool=name,
-                            host=h,
-                            reason="catch-all domain not allowed",
-                        )
-                    elif re.match(r"^\d+\.\d+\.\d+\.\d+$", h):
-                        log.warning(
-                            "tool_invalid_host",
-                            tool=name,
-                            host=h,
-                            reason="IP addresses not allowed",
-                        )
+                # Validate the host patterns each secret is scoped to.
+                for secret in (*secrets, *optional_secrets):
+                    if not isinstance(secret, HttpSecret):
+                        continue
+                    for h in secret.hosts:
+                        if h in ("*", "*.com", "*.org", "*.net", "*.io"):
+                            log.warning(
+                                "tool_invalid_host",
+                                tool=name,
+                                secret=secret.name,
+                                host=h,
+                                reason="catch-all domain not allowed",
+                            )
+                        elif re.match(r"^\d+\.\d+\.\d+\.\d+$", h):
+                            log.warning(
+                                "tool_invalid_host",
+                                tool=name,
+                                secret=secret.name,
+                                host=h,
+                                reason="IP addresses not allowed",
+                            )
 
                 # Skip persona entries — they are loaded separately
                 if tool_conf.get("type") == "persona":
@@ -850,7 +1088,6 @@ class ToolManager:
                     "name": name,
                     "description": project.get("description", ""),
                     "module": tool_conf.get("module", "client.py"),
-                    "hosts": hosts,
                     "secrets": secrets,
                     "optional_secrets": optional_secrets,
                     "timeout_s": _resolve_timeout_s(tool_conf, tool=name),
@@ -978,33 +1215,62 @@ class ToolManager:
         )
         return loaded
 
-    # Hardcoded infrastructure entries for the injection map. Each entry is a
-    # ``HeaderSecret`` paired with the hosts iron-proxy attaches it to.
-    _INFRA_SECRETS: ClassVar[list[tuple[HeaderSecret, tuple[str, ...]]]] = [
-        (HeaderSecret("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"), ("api.anthropic.com",)),
-        (HeaderSecret("OPENAI_API_KEY", "OPENAI_API_KEY", "OPENAI_API_KEY"), ("api.openai.com",)),
-        (HeaderSecret("XAI_API_KEY", "XAI_API_KEY", "XAI_API_KEY"), ("api.x.ai",)),
-        (HeaderSecret("GEMINI_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY"), ("generativelanguage.googleapis.com",)),
-        (HeaderSecret("AMP_API_KEY", "AMP_API_KEY", "AMP_API_KEY"), ("ampcode.com",)),
-        (HeaderSecret("GITHUB_TOKEN", "GITHUB_TOKEN", "GITHUB_TOKEN"), ("github.com", "api.github.com")),
-        (HeaderSecret("SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN"), ("*.slack.com",)),
+    # Hardcoded infrastructure secrets for the injection map. Each ``HttpSecret``
+    # carries the hosts iron-proxy attaches it to.
+    _INFRA_SECRETS: ClassVar[list[HttpSecret]] = [
+        HttpSecret(
+            name="ANTHROPIC_API_KEY",
+            secret_ref="ANTHROPIC_API_KEY",
+            hosts=("api.anthropic.com",),
+            match_headers=("X-Api-Key",),
+        ),
+        HttpSecret(
+            name="OPENAI_API_KEY",
+            secret_ref="OPENAI_API_KEY",
+            hosts=("api.openai.com",),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="XAI_API_KEY",
+            secret_ref="XAI_API_KEY",
+            hosts=("api.x.ai",),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="GEMINI_API_KEY",
+            secret_ref="GEMINI_API_KEY",
+            hosts=("generativelanguage.googleapis.com",),
+            match_headers=("X-Goog-Api-Key",),
+        ),
+        HttpSecret(
+            name="AMP_API_KEY",
+            secret_ref="AMP_API_KEY",
+            hosts=("ampcode.com",),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="GITHUB_TOKEN",
+            secret_ref="GITHUB_TOKEN",
+            hosts=("github.com", "api.github.com"),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="SLACK_BOT_TOKEN",
+            secret_ref="SLACK_BOT_TOKEN",
+            hosts=("*.slack.com",),
+            match_headers=("Authorization",),
+        ),
     ]
 
-    def collect_secrets(self) -> list[tuple[SecretDef, tuple[str, ...]]]:
-        """Return all secrets (infra + tool) paired with the hosts they apply to.
+    def collect_secrets(self) -> list[SecretDef]:
+        """Return all secrets (infra + tool).
 
-        The paired host list applies to ``HeaderSecret`` only.
-        ``GcpAuthSecret`` and ``OAuthTokenSecret`` carry their own ``hosts``
-        on the secret itself, and ``PgDsnSecret`` is a TCP listener with no
-        host — all three ignore the paired list.
+        Every ``HttpSecret``, ``GcpAuthSecret`` and ``OAuthTokenSecret`` carries
+        its own ``hosts``; ``PgDsnSecret`` is a TCP listener with no host.
         """
-        out: list[tuple[SecretDef, tuple[str, ...]]] = [
-            (s, hosts) for s, hosts in self._INFRA_SECRETS
-        ]
+        out: list[SecretDef] = list(self._INFRA_SECRETS)
         for lt in self.tools.values():
-            hosts = tuple(lt.hosts)
-            for s in lt.all_secrets:
-                out.append((s, hosts))
+            out.extend(lt.all_secrets)
         return out
 
     def reload(self) -> dict[str, Any]:
@@ -1082,7 +1348,6 @@ class ToolManager:
             description=description,
             ctx=ctx,
             methods=methods,
-            hosts=manifest.get("hosts", []),
             secrets=manifest.get("secrets", []),
             optional_secrets=manifest.get("optional_secrets", []),
             timeout_s=manifest.get("timeout_s"),
@@ -1560,10 +1825,10 @@ class ToolManager:
             for name, p in pm.tools.items():
                 if not check_scope(key_info, "tools", name):
                     continue
-                required_headers = [s for s in p.secrets if isinstance(s, HeaderSecret)]
-                if required_headers:
-                    resolved = await _resolve_secrets(required_headers)
-                    if len(resolved) < len(required_headers):
+                required_secrets = [s for s in p.secrets if _is_replace_secret(s)]
+                if required_secrets:
+                    resolved = await _resolve_secrets(required_secrets)
+                    if len(resolved) < len(required_secrets):
                         continue
                 result[name] = {
                     "description": p.description,
@@ -1618,10 +1883,10 @@ class ToolManager:
             _require_tool_scope(request, tool_name)
             p = pm.tools.get(tool_name)
             if p:
-                required_headers = [s for s in p.secrets if isinstance(s, HeaderSecret)]
-                if required_headers:
-                    resolved = await _resolve_secrets(required_headers)
-                    if len(resolved) < len(required_headers):
+                required_secrets = [s for s in p.secrets if _is_replace_secret(s)]
+                if required_secrets:
+                    resolved = await _resolve_secrets(required_secrets)
+                    if len(resolved) < len(required_secrets):
                         raise HTTPException(
                             status_code=404,
                             detail=f"Tool '{tool_name}' is not available (missing secrets)",

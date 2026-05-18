@@ -542,13 +542,13 @@ class KubernetesExecutorBackend(SandboxBackend):
             if pod_name:
                 await self._delete_pod(pod_name)
 
-    def _collect_secrets(self) -> list[tuple[SecretDef, tuple[str, ...]]]:
+    def _collect_secrets(self) -> list[SecretDef]:
         from api.app import get_tool_manager
 
         return get_tool_manager().collect_secrets()
 
     def _resolved_pg_secrets(
-        self, secrets: list[tuple[SecretDef, tuple[str, ...]]]
+        self, secrets: list[SecretDef]
     ) -> list[tuple[PgDsnSecret, str]]:
         """For every distinct ``PgDsnSecret`` return ``(secret, proxy_password)``.
 
@@ -557,7 +557,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         upstream DSN itself from the source declared in proxy.yaml.
         """
         out: dict[str, tuple[PgDsnSecret, str]] = {}
-        for secret, _ in secrets:
+        for secret in secrets:
             if not isinstance(secret, PgDsnSecret):
                 continue
             if secret.name in out:
@@ -568,7 +568,7 @@ class KubernetesExecutorBackend(SandboxBackend):
     async def _create_proxy_configmap(
         self,
         sandbox_id: str,
-        secrets: list[tuple[SecretDef, tuple[str, ...]]],
+        secrets: list[SecretDef],
         pg_listen_ports: dict[str, int],
     ) -> None:
         rendered = render_proxy_yaml(

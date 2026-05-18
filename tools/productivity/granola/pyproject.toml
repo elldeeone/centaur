@@ -15,5 +15,6 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["public-api.granola.ai"]
-secrets = ["GRANOLA_API_KEY"]
+secrets = [
+    {type = "http", name = "GRANOLA_API_KEY", match_headers = ["Authorization"], hosts = ["public-api.granola.ai"]},
+]

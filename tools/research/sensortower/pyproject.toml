@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.sensortower.com"]
-secrets = ["SENSORTOWER_AUTH_TOKEN"]
+secrets = [{type = "http", name = "SENSORTOWER_AUTH_TOKEN", match_query = true, hosts = ["api.sensortower.com"]}]

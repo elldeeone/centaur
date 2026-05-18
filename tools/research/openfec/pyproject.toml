@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.open.fec.gov"]
-secrets = ["DATAGOV_API_KEY"]
+secrets = [{type = "http", name = "DATAGOV_API_KEY", match_query = true, hosts = ["api.open.fec.gov"]}]

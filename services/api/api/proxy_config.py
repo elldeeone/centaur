@@ -3,7 +3,8 @@
 Centralizes what was previously split between firewall-manager (rendering) and
 tool_manager (injection map). The API server owns iron-proxy's full config:
 
-- ``secrets`` transform — header-replacer entries per ``HeaderSecret``.
+- ``secrets`` transform — one entry per ``HttpSecret``; replace-mode entries
+  swap a placeholder, inject-mode entries set the header from ``source``.
 - ``gcp_auth`` transform — one entry per unique ``GcpAuthSecret`` keyfile,
   each scoped to that secret's ``hosts`` and OAuth2 ``scopes``. Superseded by
   ``oauth_token``; kept until tools migrate off the ``gcp_auth`` secret type.
@@ -16,6 +17,7 @@ tool_manager (injection map). The API server owns iron-proxy's full config:
 from __future__ import annotations
 
 import os
+from dataclasses import astuple, replace
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +25,12 @@ import yaml
 
 from api.tool_manager import (
     GcpAuthSecret,
-    HeaderSecret,
+    HttpSecret,
     OAuthFieldSource,
     OAuthTokenSecret,
     PgDsnSecret,
     SecretDef,
+    SecretMode,
 )
 
 
@@ -38,28 +41,6 @@ def load_base_config() -> str:
     """Read the bundled iron-proxy base config (allowlist, header_allowlist, tls, …)."""
     return BASE_CONFIG_PATH.read_text()
 
-
-# Headers iron-proxy scans for proxy_value placeholders. Literal strings match
-# a single header name; ``/.../`` is interpreted as a regex.
-DEFAULT_MATCH_HEADERS: tuple[str, ...] = (
-    "Authorization",
-    "Proxy-Authorization",
-    "Api-Key",
-    "Anthropic-Api-Key",
-    "Auth-Token",
-    "Jwt",
-    "Cookie",
-    "Apikey",
-    "AccessKey",
-    "Api-Access-Key",
-    "Api-Signature",
-    "FX-ACCESS-KEY",
-    "FX-ACCESS-SIGN",
-    "FX-ACCESS-PASSPHRASE",
-    "X-CB-ACCESS-PASSPHRASE",
-    "X-CB-ACCESS-SIGNATURE",
-    "/^x-[a-z0-9-]*(api-key|apikey|secret|token|auth|key)$/",
-)
 
 GCP_AUTH_SCOPES: tuple[str, ...] = ("https://www.googleapis.com/auth/cloud-platform",)
 GCP_AUTH_HOSTS: tuple[str, ...] = ("*.googleapis.com",)
@@ -103,51 +84,75 @@ def _build_source(secret_ref: str) -> dict[str, str]:
     return {"type": "env", "var": secret_ref}
 
 
-def assign_pg_listen_ports(
-    secrets: list[tuple[SecretDef, tuple[str, ...]]],
-) -> dict[str, int]:
+def assign_pg_listen_ports(secrets: list[SecretDef]) -> dict[str, int]:
     """Allocate listen ports for ``PgDsnSecret`` entries.
 
     Deterministic: sort by ``name`` and assign ``PG_LISTEN_PORT_BASE``,
     ``PG_LISTEN_PORT_BASE + 1``, .... Same logic in any caller produces the
     same mapping.
     """
-    names = sorted(
-        {s.name for s, _ in secrets if isinstance(s, PgDsnSecret)}
-    )
+    names = sorted({s.name for s in secrets if isinstance(s, PgDsnSecret)})
     return {name: PG_LISTEN_PORT_BASE + idx for idx, name in enumerate(names)}
 
 
+def _secret_action_block(secret: HttpSecret) -> tuple[str, dict[str, Any]]:
+    """Return the ``replace``/``inject`` block iron-proxy expects for *secret*.
+
+    Replace mode emits the ``proxy_value`` placeholder plus the scan locations
+    (``match_headers``, optional ``match_path``; iron-proxy always scans the
+    query string). Inject mode emits the target iron-proxy writes itself — a
+    header (with an optional Go-template ``formatter``) or a query parameter.
+    """
+    if secret.mode is SecretMode.REPLACE:
+        block: dict[str, Any] = {
+            "proxy_value": secret.replacer,
+            "match_headers": list(secret.match_headers),
+        }
+        if secret.match_path:
+            block["match_path"] = True
+        return "replace", block
+    if secret.inject_query_param:
+        return "inject", {"query_param": secret.inject_query_param}
+    block = {"header": secret.inject_header}
+    if secret.inject_formatter:
+        block["formatter"] = secret.inject_formatter
+    return "inject", block
+
+
 def _build_secret_transform(
-    secrets: list[tuple[SecretDef, tuple[str, ...]]],
+    secrets: list[SecretDef],
 ) -> dict[str, Any] | None:
-    """``secrets`` transform: one entry per HeaderSecret, with its host rules."""
-    by_secret: dict[tuple[str, str, str], set[str]] = {}
-    for secret, hosts in secrets:
-        if not isinstance(secret, HeaderSecret):
+    """``secrets`` transform: one entry per HttpSecret, with its host rules.
+
+    Entries are keyed by the ``HttpSecret`` minus its hosts, so two
+    declarations of the same secret on different hosts get their rules merged,
+    while genuinely distinct secrets stay separate.
+    """
+    by_secret: dict[HttpSecret, set[str]] = {}
+    for secret in secrets:
+        if not isinstance(secret, HttpSecret):
             continue
-        key = (secret.name, secret.secret_ref, secret.replacer)
-        by_secret.setdefault(key, set()).update(hosts)
+        key = replace(secret, hosts=())
+        by_secret.setdefault(key, set()).update(secret.hosts)
 
     if not by_secret:
         return None
 
     entries = []
-    for (name, secret_ref, replacer), host_set in sorted(by_secret.items()):
-        rules = [{"host": h} for h in sorted(host_set)]
+    for secret, host_set in sorted(by_secret.items(), key=lambda kv: astuple(kv[0])):
+        action, block = _secret_action_block(secret)
         entries.append(
             {
-                "source": _build_source(secret_ref),
-                "proxy_value": replacer,
-                "match_headers": list(DEFAULT_MATCH_HEADERS),
-                "rules": rules,
+                "source": _build_source(secret.secret_ref),
+                action: block,
+                "rules": [{"host": h} for h in sorted(host_set)],
             }
         )
     return {"name": "secrets", "config": {"secrets": entries}}
 
 
 def _build_gcp_auth_transforms(
-    secrets: list[tuple[SecretDef, tuple[str, ...]]],
+    secrets: list[SecretDef],
 ) -> list[dict[str, Any]]:
     """``gcp_auth`` transforms: one per unique ``GcpAuthSecret`` keyfile.
 
@@ -159,7 +164,7 @@ def _build_gcp_auth_transforms(
     with no ``scopes``, to ``GCP_AUTH_SCOPES``.
     """
     by_ref: dict[str, dict[str, set[str]]] = {}
-    for secret, _ in secrets:
+    for secret in secrets:
         if not isinstance(secret, GcpAuthSecret):
             continue
         agg = by_ref.setdefault(secret.secret_ref, {"hosts": set(), "scopes": set()})
@@ -196,7 +201,7 @@ def _build_field_source(field: OAuthFieldSource) -> dict[str, Any]:
 
 
 def _build_oauth_token_transform(
-    secrets: list[tuple[SecretDef, tuple[str, ...]]],
+    secrets: list[SecretDef],
 ) -> dict[str, Any] | None:
     """``oauth_token`` transform: one ``tokens`` entry per ``OAuthTokenSecret``.
 
@@ -209,7 +214,7 @@ def _build_oauth_token_transform(
         tuple[str, tuple[tuple[str, OAuthFieldSource], ...], str | None],
         dict[str, set[str]],
     ] = {}
-    for secret, _ in secrets:
+    for secret in secrets:
         if not isinstance(secret, OAuthTokenSecret):
             continue
         key = (secret.grant, secret.fields, secret.token_endpoint)
@@ -249,12 +254,12 @@ def _build_oauth_token_transform(
 
 
 def _build_postgres_listeners(
-    secrets: list[tuple[SecretDef, tuple[str, ...]]],
+    secrets: list[SecretDef],
     pg_listen_ports: dict[str, int],
 ) -> list[dict[str, Any]]:
     """Top-level ``postgres:`` list: one listener per unique PgDsnSecret."""
     by_name: dict[str, PgDsnSecret] = {}
-    for secret, _ in secrets:
+    for secret in secrets:
         if isinstance(secret, PgDsnSecret):
             by_name.setdefault(secret.name, secret)
 
@@ -282,7 +287,7 @@ def _build_postgres_listeners(
 
 
 def render_proxy_yaml(
-    secrets: list[tuple[SecretDef, tuple[str, ...]]],
+    secrets: list[SecretDef],
     base_config: str | None = None,
     *,
     pg_listen_ports: dict[str, int] | None = None,
@@ -291,7 +296,7 @@ def render_proxy_yaml(
 
     ``base_config`` is the seed config from ``services/iron-proxy/iron-proxy.yaml``
     (allowlist, header_allowlist, dns, proxy, management, tls, log). Managed
-    transforms (``secrets``, ``gcp_auth``) are inserted before
+    transforms (``secrets``, ``gcp_auth``, ``oauth_token``) are inserted before
     ``header_allowlist``; existing managed entries are replaced. The top-level
     ``postgres:`` list is overwritten.
     """

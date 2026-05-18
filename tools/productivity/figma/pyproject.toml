@@ -16,5 +16,6 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.figma.com"]
-secrets = ["FIGMA_ACCESS_TOKEN"]
+secrets = [
+    {type = "http", name = "FIGMA_ACCESS_TOKEN", match_headers = ["X-Figma-Token"], hosts = ["api.figma.com"]},
+]

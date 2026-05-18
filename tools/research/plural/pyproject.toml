@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["v3.openstates.org"]
-secrets = ["PLURAL_API_KEY"]
+secrets = [{type = "http", name = "PLURAL_API_KEY", match_headers = ["X-API-KEY"], hosts = ["v3.openstates.org"]}]

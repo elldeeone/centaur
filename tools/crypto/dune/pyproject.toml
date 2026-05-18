@@ -20,5 +20,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.dune.com"]
-secrets = ["DUNE_API_KEY"]
+secrets = [{type = "http", name = "DUNE_API_KEY", match_headers = ["X-Dune-API-Key"], hosts = ["api.dune.com"]}]

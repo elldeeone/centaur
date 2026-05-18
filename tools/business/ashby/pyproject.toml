@@ -17,5 +17,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.ashbyhq.com"]
-secrets = ["ASHBY_API_KEY"]
+secrets = [{type = "http", name = "ASHBY_API_KEY", match_headers = ["Authorization"], hosts = ["api.ashbyhq.com"]}]

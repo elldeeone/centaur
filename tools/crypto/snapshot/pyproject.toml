@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["hub.snapshot.org"]
-secrets = ["SNAPSHOT_API_KEY"]
+secrets = [{type = "http", name = "SNAPSHOT_API_KEY", match_headers = ["x-api-key"], hosts = ["hub.snapshot.org"]}]

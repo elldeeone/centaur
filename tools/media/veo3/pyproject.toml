@@ -17,5 +17,6 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["generativelanguage.googleapis.com"]
-secrets = ["GOOGLE_API_KEY"]
+secrets = [
+    {type = "http", name = "GOOGLE_API_KEY", match_headers = ["x-goog-api-key"], hosts = ["generativelanguage.googleapis.com"]},
+]

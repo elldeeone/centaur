@@ -21,4 +21,7 @@ build-backend = "hatchling.build"
 [tool.ai-v2]
 module = "client.py"
 hosts = []
-secrets = ["GRAFANA_URL", "GRAFANA_API_KEY"]
+secrets = [
+    "GRAFANA_URL",
+    {type = "http", name = "GRAFANA_API_KEY", match_headers = ["Authorization"]},
+]

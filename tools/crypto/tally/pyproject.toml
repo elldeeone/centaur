@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["api.tally.xyz"]
-secrets = ["TALLY_API_KEY"]
+secrets = [{type = "http", name = "TALLY_API_KEY", match_headers = ["Api-Key"], hosts = ["api.tally.xyz"]}]

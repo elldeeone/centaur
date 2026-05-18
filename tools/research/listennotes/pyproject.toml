@@ -16,5 +16,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["listen-api.listennotes.com"]
-secrets = ["LISTENNOTES_KEY"]
+secrets = [{type = "http", name = "LISTENNOTES_KEY", match_headers = ["X-ListenAPI-Key"], hosts = ["listen-api.listennotes.com"]}]

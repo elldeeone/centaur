@@ -20,5 +20,4 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["eodhd.com"]
-secrets = ["EODHD_API_KEY"]
+secrets = [{type = "http", name = "EODHD_API_KEY", match_query = true, hosts = ["eodhd.com"]}]
