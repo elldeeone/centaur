@@ -6,7 +6,6 @@
     "dev": "vocs dev",
     "prebuild": "bash scripts/build-md.sh && bash scripts/build-brand-zip.sh && bun run scripts/build-og.ts",
     "build": "vocs build",
-    "build:static": "node scripts/build-static-deploy.mjs",
     "preview": "vocs preview",
     "cf:dev": "npm run build && wrangler dev",
     "deploy": "wrangler deploy"
