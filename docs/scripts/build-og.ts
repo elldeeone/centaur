@@ -236,7 +236,10 @@ function wrapText(text: string, maxChars: number, maxLines: number): string[] {
 const LEFT_X = 81
 const EYEBROW_BASELINE_Y = 94.18
 const DEFAULT_TITLE_BASELINE_Y = 270
-const TITLE_LINE_H = 89
+// 5% tighter than the previous 89px so the 99px serif title sits more
+// confidently on its own as a 2-line block (Bodoni Moda is wide enough
+// to handle the negative leading without colliding).
+const TITLE_LINE_H = 84
 const DESC_LINE_H = 47
 const TITLE_TO_DESC_BASELINE_GAP = 73
 // Description text occupies the left ~67% of the canvas (x=81..~820 after
@@ -245,6 +248,11 @@ const TITLE_TO_DESC_BASELINE_GAP = 73
 // last description baseline is free to extend down to ~y=540 without
 // visually crashing into the logo.
 const DESC_BASELINE_MAX_Y = 540
+// For the worst-case 5-line description, anchor the last baseline at the
+// centaur silhouette's bottom edge (~y=586 minus ~11px descender space)
+// instead of top-packing. This pulls the whole title/desc block downward
+// so the title doesn't float lonely near the eyebrow on the densest cards.
+const DESC_BASELINE_BOTTOM_Y = 575
 
 function computeStackY(nTitle: number, nDesc: number) {
   const titleStackHeight = Math.max(0, nTitle - 1) * TITLE_LINE_H
@@ -252,9 +260,15 @@ function computeStackY(nTitle: number, nDesc: number) {
     nDesc > 0 ? TITLE_TO_DESC_BASELINE_GAP + Math.max(0, nDesc - 1) * DESC_LINE_H : 0
 
   let firstTitleBaseline = DEFAULT_TITLE_BASELINE_Y
-  const projectedLastDescBaseline = firstTitleBaseline + titleStackHeight + descStackHeight
-  if (nDesc > 0 && projectedLastDescBaseline > DESC_BASELINE_MAX_Y) {
-    firstTitleBaseline -= projectedLastDescBaseline - DESC_BASELINE_MAX_Y
+  if (nDesc === 5) {
+    // Densest case: bottom-align the last description baseline with the
+    // centaur silhouette so the title/desc group settles low on the card.
+    firstTitleBaseline = DESC_BASELINE_BOTTOM_Y - descStackHeight - titleStackHeight
+  } else {
+    const projectedLastDescBaseline = firstTitleBaseline + titleStackHeight + descStackHeight
+    if (nDesc > 0 && projectedLastDescBaseline > DESC_BASELINE_MAX_Y) {
+      firstTitleBaseline -= projectedLastDescBaseline - DESC_BASELINE_MAX_Y
+    }
   }
 
   const titleBaselines = Array.from(
