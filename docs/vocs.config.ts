@@ -31,9 +31,8 @@ export default defineConfig({
     dark: '/brand/mark-white.svg',
   },
   // Top-left site logo: full lockup on docs routes (the sidebar / topNav
-  // gets enough space to carry the wordmark). Landing already hides the
-  // topNav logo via .vocs_DesktopTopNav_logoWrapper { display: none } so
-  // the lockup is only visible on docs pages.
+  // gets enough space to carry the wordmark). The landing page hides Vocs's
+  // topNav entirely and renders its own lockup in the hero.
   logoUrl: {
     light: '/brand/lockup-black.svg',
     dark: '/brand/lockup-white.svg',
@@ -59,7 +58,9 @@ export default defineConfig({
   // the build script: route /a/b -> /og/a_b.png, / -> /og/index.png. The
   // absolute URL form (baseUrl prefix) is required for Slack/Twitter/
   // Discord previews to resolve the image — relative paths fail in
-  // every major unfurl previewer.
+  // every major unfurl previewer. New routes added under pages/ (e.g.
+  // operate/slack-etl) get picked up automatically the next time the
+  // prebuild script runs — no manual map maintenance required.
   ogImageUrl: (path: string, { baseUrl }: { baseUrl: string }) => {
     const key = path.replace(/\/$/, '') || '/'
     const slug = key === '/' ? 'index' : key.replace(/^\//, '').replace(/\//g, '_')
@@ -105,6 +106,7 @@ export default defineConfig({
     boostDocument(documentId) {
       if (documentId.includes('what-is-centaur')) return 4.5
       if (documentId.includes('quickstart')) return 4
+      if (documentId.includes('operate/')) return 3.8
       if (documentId.includes('extend/')) return 3.8
       if (documentId.includes('secrets/')) return 3.8
       if (documentId.includes('security')) return 3.6
