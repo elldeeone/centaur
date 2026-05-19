@@ -127,12 +127,6 @@
   font-display: swap;
 }
 
-/* Lockup is wider per em than the standalone mark — keep the topNav
- * tidy by dropping the rendered height a touch. */
-.vocs_NavLogo_logoImage {
-  height: 26px;
-}
-
 /*
  * Sidebar active state: Vocs bumps font-weight to medium on the active
  * item, which causes a horizontal layout shift in the link text (the
@@ -174,15 +168,6 @@
 .vocs_DocsLayout[data-layout="landing"] .vocs_DocsLayout_gutterTopCurtain,
 .vocs_DocsLayout[data-layout="landing"] [class*="vocs:fixed"][class*="vocs:h-topNav"],
 [data-layout="landing"][data-v-topnav] [class*="vocs:fixed"][class*="vocs:h-topNav"] {
-  display: none;
-}
-
-/*
- * Landing owns its own links in the hero. Hide Vocs's desktop and mobile
- * top navigation there so docs routes keep the normal navigation chrome.
- */
-.vocs_DocsLayout[data-layout="landing"] .vocs_DocsLayout_gutterTop,
-[data-layout="landing"] > div[class*="vocs:fixed"][class*="vocs:h-topNav"] {
   display: none;
 }
 
@@ -303,9 +288,9 @@ body,
 }
 
 .centaur-home h1 {
-  font-family: var(--centaur-display);
-  font-weight: 400;
-  letter-spacing: 0.012em;
+  font-family: var(--centaur-manual-display);
+  font-weight: 500;
+  letter-spacing: 0;
 }
 
 :root,
@@ -408,10 +393,12 @@ body,
   color: #f7f7f2;
   display: flex;
   flex-direction: column;
+  font-family: var(--centaur-manual-display);
   justify-content: flex-start;
+  letter-spacing: 0;
   min-height: 100dvh;
   overflow: hidden;
-  padding: clamp(72px, 9dvh, 120px) 24px clamp(56px, 8dvh, 104px);
+  padding: clamp(86px, 12dvh, 156px) 24px clamp(56px, 8dvh, 104px);
   position: relative;
 }
 
@@ -421,24 +408,24 @@ body,
 
 .home-hero {
   align-items: center;
-  display: flex;
-  flex-direction: column;
-  gap: clamp(54px, 6.5dvh, 84px);
+  display: grid;
+  gap: clamp(34px, 4vw, 72px);
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
   margin: 0 auto;
-  max-width: 1320px;
+  max-width: 1440px;
   min-height: auto;
   position: relative;
-  text-align: center;
+  text-align: left;
   width: 100%;
   z-index: 1;
 }
 
 .home-copy {
-  align-items: center;
+  align-items: flex-start;
   display: flex;
   flex-direction: column;
-  margin: 0 auto;
-  max-width: 1160px;
+  margin: 0;
+  max-width: 600px;
   min-width: 0;
 }
 
@@ -462,21 +449,21 @@ a.home-lockup-link {
 
 .home-hero h1 {
   color: #f7f7f2;
-  font-size: 4.25rem;
+  font-size: 4rem;
   font-weight: 400;
-  letter-spacing: 0.012em;
+  letter-spacing: 0;
   line-height: 1.02;
   margin: 0;
-  max-width: 980px;
+  max-width: 600px;
+  text-wrap: balance;
 }
 
 .home-actions {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  font-family: var(--centaur-serif);
   gap: 12px;
-  justify-content: center;
+  justify-content: flex-start;
   letter-spacing: 0;
   margin-top: 34px;
 }
@@ -524,7 +511,7 @@ a.home-lockup-link {
   border-radius: 8px;
   color: #f7f7f2;
   display: inline-flex;
-  font-family: var(--centaur-serif);
+  font-family: inherit;
   font-size: 0.875rem;
   font-weight: 400;
   gap: 7px;
@@ -553,7 +540,7 @@ a.home-lockup-link {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
-  justify-content: center;
+  justify-content: flex-start;
   margin-top: 52px;
 }
 
@@ -571,7 +558,7 @@ a.home-lockup-link {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 18px;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .home-brand {
@@ -597,21 +584,55 @@ a.home-lockup-link {
 }
 
 .home-thread-demo {
-  margin: 0 auto;
-  max-width: 1280px;
+  justify-self: stretch;
+  margin: 0;
+  max-width: none;
   min-width: 0;
   width: 100%;
 }
 
 .home-overview {
   margin: clamp(36px, 4.5dvh, 56px) auto 0;
-  max-width: 1280px;
+  max-width: 1440px;
   text-align: left;
   width: 100%;
 }
 
 .home-media-section {
   margin-top: clamp(32px, 4dvh, 44px);
+}
+
+.home-media-grid {
+  display: grid;
+  gap: clamp(28px, 4vw, 56px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: clamp(32px, 4dvh, 44px) auto 0;
+  max-width: 1440px;
+  width: 100%;
+}
+
+.home-media-grid .home-media-section {
+  margin: 0;
+  max-width: none;
+}
+
+.home-media-grid .home-overview-heading {
+  grid-template-columns: 1fr;
+}
+
+.home-media-link {
+  color: inherit;
+  display: block;
+  text-decoration: none;
+}
+
+.home-media-link:focus-visible {
+  outline: 2px solid var(--centaur-accent);
+  outline-offset: 6px;
+}
+
+.home-media-link:hover .home-architecture-diagram img {
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
 .home-overview-heading {
@@ -622,9 +643,9 @@ a.home-lockup-link {
 
 .home-overview h2 {
   color: #f7f7f2;
-  font-family: var(--centaur-display);
+  font-family: var(--centaur-manual-display);
   font-size: 3rem;
-  font-weight: 400;
+  font-weight: 500;
   line-height: 1;
   margin: 0;
 }
@@ -646,48 +667,51 @@ a.home-lockup-link {
   padding: 0;
 }
 
-.home-overview-list li {
-  display: grid;
-  gap: 8px;
-  padding: 0 28px 0 40px;
-  position: relative;
-}
-
 .home-overview-list li:nth-child(odd) {
   border-right: 0;
 }
 
-.home-overview-list li::before {
-  background: var(--centaur-accent);
-  border-radius: 50%;
-  content: "";
-  height: 7px;
-  left: 16px;
-  position: absolute;
-  top: 32px;
-  width: 7px;
+.home-overview-list a {
+  color: inherit;
+  display: grid;
+  gap: 8px;
+  min-height: 100%;
+  padding: 22px 28px 24px 0;
+  text-decoration: none;
+  transition: background 140ms ease;
+}
+
+.home-overview-list a:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.home-overview-list a:focus-visible {
+  outline: 2px solid var(--centaur-accent);
+  outline-offset: -2px;
 }
 
 .home-overview-list strong {
   color: #ffffff;
-  font-size: 1.06rem;
+  font-size: 1.28rem;
   font-weight: 650;
-  line-height: 1.25;
+  line-height: 1.18;
 }
 
 .home-overview-list span {
   color: #e0e0d8;
-  font-size: 1rem;
-  line-height: 1.5;
+  font-size: 1.14rem;
+  line-height: 1.42;
 }
 
 .home-architecture-diagram {
   margin: clamp(44px, 6dvh, 72px) auto 0;
-  max-width: 100%;
+  max-width: 75%;
   padding-top: clamp(28px, 4dvh, 44px);
 }
 
 .home-media-section .home-architecture-diagram {
+  margin-left: 0;
+  margin-right: auto;
   margin-top: 30px;
   padding-top: 0;
 }
@@ -700,6 +724,7 @@ a.home-lockup-link {
   display: block;
   height: auto;
   object-fit: contain;
+  transition: border-color 140ms ease;
   width: 100%;
 }
 
@@ -709,6 +734,41 @@ a.home-lockup-link {
 @media (max-width: 1080px) {
   .home-architecture-diagram {
     max-width: 100%;
+  }
+}
+
+@media (max-width: 1120px) {
+  .centaur-home {
+    padding-top: clamp(54px, 8dvh, 96px);
+  }
+
+  .home-hero {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(36px, 5dvh, 56px);
+    max-width: 980px;
+    text-align: center;
+  }
+
+  .home-copy {
+    align-items: center;
+    margin: 0 auto;
+    max-width: 980px;
+  }
+
+  .home-hero h1 {
+    max-width: 780px;
+  }
+
+  .home-actions,
+  .home-built-with,
+  .home-logo-row {
+    justify-content: center;
+  }
+
+  .home-thread-demo {
+    margin: 0 auto;
+    max-width: 980px;
   }
 }
 
@@ -731,10 +791,17 @@ a.home-lockup-link {
   display: grid;
   font-family: Slack-Lato, Slack-Fractions, appleLogo, Lato, Arial, sans-serif;
   grid-template-columns: minmax(136px, 168px) minmax(0, 1fr);
-  height: min(760px, 74dvh);
-  min-height: 640px;
+  height: min(680px, 68dvh);
+  min-height: 560px;
   overflow: hidden;
   text-align: left;
+}
+
+@media (max-width: 1120px) {
+  .thread-panel {
+    height: clamp(480px, 64dvh, 620px);
+    min-height: 480px;
+  }
 }
 
 .thread-list {
@@ -1331,6 +1398,11 @@ a.home-lockup-link {
     max-width: 980px;
   }
 
+  .home-media-grid {
+    grid-template-columns: 1fr;
+    max-width: 980px;
+  }
+
   .home-overview-heading {
     gap: 18px;
     grid-template-columns: 1fr;
@@ -1484,7 +1556,7 @@ a.home-lockup-link {
     padding-right: 12px;
   }
 
-  .home-overview-list li {
+  .home-overview-list a {
     padding-right: 0;
   }
 }
