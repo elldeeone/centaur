@@ -3,37 +3,38 @@
  * build-og.ts
  *
  * Generates per-page Open Graph PNG cards at build time and writes them
- * into docs/public/og/. The approach is ported from tempoxyz/mpp's
- * `src/pages/_api/api/og.tsx` but runs as a static prebuild step instead
- * of a serverless function, since centaur-docs deploys as static assets
- * to Cloudflare Workers.
+ * into docs/public/og/. Ported from tempoxyz/mpp's runtime `/api/og`
+ * handler — runs as a prebuild step instead of a serverless function so
+ * the cards ship as static assets and serve identically in localhost,
+ * staging, and production deployments.
  *
  * Inputs:
- *   - docs/scripts/og-template.svg   — body template with named anchors:
- *       <text id="CATEGORY">, <text id="SUBCATEGORY">, the » chevron,
- *       <text id="Route title">, <text id="Description …">
- *   - docs/public/brand/og-image.svg — landing page card (no substitution)
- *   - docs/pages/<path>.mdx          — frontmatter `title` + `description`
- *   - docs/sidebar.ts                — derives CATEGORY/SUBCATEGORY
+ *   - docs/scripts/og-template.svg   — body template with the named
+ *       anchors <text id="CATEGORY">, <text id="Route title">, and
+ *       <text id="Description …"> that we substitute per route.
+ *   - docs/public/brand/og-image.svg — landing card (no substitution;
+ *       rasterized once and used for `/` plus `_default.png`).
+ *   - docs/pages/<path>.mdx          — frontmatter `title` + `description`.
+ *   - docs/sidebar.ts                — derives CATEGORY from the page link.
  *
  * Output:
- *   - docs/public/og/<slug>.png      — 1200x657 raster per route
- *   - docs/public/og/_default.png    — fallback when no page-specific card
+ *   - docs/public/og/<slug>.png      — 1200x657 raster per route.
+ *   - docs/public/og/_default.png    — fallback used by Vocs when a
+ *       route has no explicit `ogImageUrl` entry. Cloned from the
+ *       homepage card so unknown routes still get on-brand artwork.
  *
- * Fonts: Instrument Serif (title), Instrument Sans (description), and
- * Berkeley Mono Variable (eyebrow) are loaded from Google Fonts on disk
- * cache, with Berkeley Mono falling back to the user's Library/Fonts
- * because it isn't on Google Fonts.
+ * Fonts: pulled from Google Fonts at build time and cached under
+ * docs/scripts/.font-cache/ — no vendored binaries, no system font
+ * lookup. Resolves URLs dynamically from the css2 endpoint because
+ * gstatic versions the .ttf filenames per release.
  */
 
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, existsSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import matter from 'gray-matter'
 import { Resvg, initWasm } from '@resvg/resvg-wasm'
-import * as fontverter from 'fontverter'
 
 import { sidebar } from '../sidebar'
 
@@ -92,53 +93,49 @@ function getSubcategoryForPath(p: string): string | null {
   return null
 }
 
-// Load the brand fonts the rest of the site uses. The vendored woff/woff2
-// files live in docs/public/fonts/, but resvg-wasm only consumes .ttf, so
-// we convert each one once per build via fontverter and cache the result
-// in the .font-cache directory. Berkeley Mono Variable is licensed/closed-
-// source and pulled from the user's local font dir.
-const VENDORED_FONTS = [
-  { name: 'Perfectly Nineties', file: 'PerfectlyNineties-Regular.woff' },
-  { name: 'PolySans Var', file: 'PolySans-variable.woff2' },
-  { name: 'Sagittaire Display', file: 'SagittaireDisplay-Regular.woff2' },
+/*
+ * Google Fonts loader.
+ *
+ * Bodoni Moda — title type. High-contrast serif with a strong masthead
+ *   feel that reads well at the 99px heading size.
+ * Source Serif 4 — description / preview text. Adobe's editorial serif,
+ *   reliably legible at 41px and pairs cleanly with Bodoni's curves.
+ * Geist Mono — eyebrow ("CATEGORY"). Monospace eyebrow keeps the
+ *   visual hierarchy clear without leaning on a proprietary font.
+ *
+ * We fetch the CSS first, then pull the ttf URL it advertises — gstatic
+ * versions the path per release so a hardcoded URL stops resolving.
+ */
+const GOOGLE_FONT_FAMILIES = [
+  { name: 'Bodoni Moda', cssParam: 'Bodoni+Moda:wght@400;500' },
+  { name: 'Source Serif 4', cssParam: 'Source+Serif+4:wght@400;500' },
+  { name: 'Geist Mono', cssParam: 'Geist+Mono:wght@400;500' },
 ]
 
-const LOCAL_FONT_PATHS = {
-  'Berkeley Mono Variable': [
-    join(homedir(), 'Library', 'Fonts', 'BerkeleyMonoVariable-Regular.ttf'),
-    join(DOCS_ROOT, 'scripts', 'fonts', 'BerkeleyMonoVariable-Regular.ttf'),
-  ],
-}
-
-async function loadVendoredFont(name: string, file: string): Promise<Buffer> {
-  const cached = join(FONT_CACHE_DIR, file.replace(/\.woff2?$/, '.ttf'))
+async function loadGoogleFont(name: string, cssParam: string): Promise<Buffer> {
+  const cached = join(FONT_CACHE_DIR, `${name.replace(/\s+/g, '-')}.ttf`)
   if (existsSync(cached)) return Buffer.from(readFileSync(cached))
-  const src = join(DOCS_ROOT, 'public', 'fonts', file)
-  if (!existsSync(src)) {
-    throw new Error(`Vendored font missing: ${file}`)
-  }
-  console.log(`Converting font: ${name}`)
-  const ttf = Buffer.from(await fontverter.convert(readFileSync(src), 'sfnt'))
-  writeFileSync(cached, ttf)
-  return ttf
-}
-
-function loadLocalFont(name: string, paths: string[]): Buffer | null {
-  for (const p of paths) {
-    if (existsSync(p)) return Buffer.from(readFileSync(p))
-  }
-  console.warn(`Local font not found: ${name} — OG eyebrow text may fall back.`)
-  return null
+  const cssUrl = `https://fonts.googleapis.com/css2?family=${cssParam}&display=swap`
+  console.log(`Fetching font: ${name}`)
+  // Google Fonts returns different ttf vs woff2 payloads based on the
+  // User-Agent. Use a vanilla Mozilla UA so we get the ttf list (which
+  // is what resvg-wasm consumes); woff2 would require fontverter again.
+  const cssResponse = await fetch(cssUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+  if (!cssResponse.ok) throw new Error(`Font CSS fetch failed for ${name}: ${cssResponse.status}`)
+  const css = await cssResponse.text()
+  const match = css.match(/url\((https:\/\/fonts\.gstatic\.com[^)]+\.ttf)\)/)
+  if (!match) throw new Error(`No ttf URL found in Google Fonts CSS for ${name}`)
+  const ttfResponse = await fetch(match[1])
+  if (!ttfResponse.ok) throw new Error(`Font ttf fetch failed for ${name}: ${ttfResponse.status}`)
+  const buffer = Buffer.from(await ttfResponse.arrayBuffer())
+  writeFileSync(cached, buffer)
+  return buffer
 }
 
 async function loadAllFonts(): Promise<Buffer[]> {
   const fonts: Buffer[] = []
-  for (const { name, file } of VENDORED_FONTS) {
-    fonts.push(await loadVendoredFont(name, file))
-  }
-  for (const [name, paths] of Object.entries(LOCAL_FONT_PATHS)) {
-    const buf = loadLocalFont(name, paths)
-    if (buf) fonts.push(buf)
+  for (const { name, cssParam } of GOOGLE_FONT_FAMILIES) {
+    fonts.push(await loadGoogleFont(name, cssParam))
   }
   return fonts
 }
@@ -230,8 +227,7 @@ function wrapText(text: string, maxChars: number, maxLines: number): string[] {
 // Layout constants for the left content stack inside the 1200x657 card.
 // Positions are computed so the (eyebrow + title + description) block is
 // vertically centered around CENTER_Y. The 0.78 ASCENT_RATIO converts each
-// line's visual top (its "box") into the baseline that SVG y= anchors to —
-// it's tuned by eye for Perfectly Nineties + Berkeley Mono Variable.
+// line's visual top (its "box") into the baseline that SVG y= anchors to.
 const LEFT_X = 81
 const CENTER_Y = 328.5
 const EYEBROW_H = 30
@@ -280,9 +276,6 @@ function buildSvg(
     descLines.length,
   )
 
-  // The current template only has a CATEGORY eyebrow (no SUBCATEGORY or
-  // chevron). We keep the subcategory parameter so we can append it inline
-  // if a future template/sidebar grows that capability.
   if (category) {
     const catUp = esc(category.toUpperCase())
     let eyebrowText = `<tspan x="${LEFT_X}" y="${eyebrowBaseline.toFixed(2)}">${catUp}</tspan>`
@@ -295,7 +288,7 @@ function buildSvg(
     }
     svg = svg.replace(
       /<text id="CATEGORY"[^>]*>[\s\S]*?<\/text>/,
-      `<text id="CATEGORY" opacity="0.4" fill="white" xml:space="preserve" font-family="Berkeley Mono Variable" font-size="30" font-weight="100" letter-spacing="0.01em">${eyebrowText}</text>`,
+      `<text id="CATEGORY" opacity="0.4" fill="white" xml:space="preserve" font-family="Geist Mono" font-size="28" font-weight="400" letter-spacing="0.01em">${eyebrowText}</text>`,
     )
   } else {
     svg = svg.replace(/<text id="CATEGORY"[^>]*>[\s\S]*?<\/text>/, '')
@@ -309,7 +302,7 @@ function buildSvg(
     .join('')
   svg = svg.replace(
     /<text id="Route title"[^>]*>[\s\S]*?<\/text>/,
-    `<text id="Route title" fill="white" xml:space="preserve" font-family="Perfectly Nineties" font-size="99" letter-spacing="-0.02em">${titleTspans}</text>`,
+    `<text id="Route title" fill="white" xml:space="preserve" font-family="Bodoni Moda" font-weight="500" font-size="99" letter-spacing="-0.02em">${titleTspans}</text>`,
   )
 
   if (descLines.length > 0) {
@@ -321,7 +314,7 @@ function buildSvg(
       .join('')
     svg = svg.replace(
       /<text id="Description[^>]*>[\s\S]*?<\/text>/,
-      `<text opacity="0.6" fill="white" xml:space="preserve" font-family="Perfectly Nineties" font-size="41" letter-spacing="0em">${descTspans}</text>`,
+      `<text opacity="0.6" fill="white" xml:space="preserve" font-family="Source Serif 4" font-weight="400" font-size="41" letter-spacing="0em">${descTspans}</text>`,
     )
   } else {
     svg = svg.replace(/<text id="Description[^>]*>[\s\S]*?<\/text>/, '')
@@ -400,7 +393,9 @@ async function main() {
     generated.push(`${route} -> ${relative(DOCS_ROOT, outPath)}`)
   }
 
-  // Default fallback card used by Vocs when no per-path mapping matches.
+  // Default fallback used when Vocs's per-path ogImageUrl mapping doesn't
+  // match — clone the homepage card so unknown / new routes still get an
+  // on-brand image.
   writeFileSync(join(OUT_DIR, '_default.png'), readFileSync(join(OUT_DIR, 'index.png')))
 
   console.log(`Generated ${generated.length} OG cards:`)
