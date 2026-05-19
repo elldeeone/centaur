@@ -664,6 +664,7 @@ a.home-lockup-link {
 .home-overview-heading p {
   color: #edede7;
   font-size: 1.22rem;
+  letter-spacing: -0.01em;
   line-height: 1.5;
   margin: 0;
   max-width: 780px;
