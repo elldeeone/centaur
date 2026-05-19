@@ -232,6 +232,11 @@ fi
 
 if truthy_env "${CLAUDE_USE_LOCAL_AUTH:-}"; then
     CLAUDE_LOCAL_AUTH_LOADED=0
+    if [ -n "${CLAUDE_CODE_OAUTH_TOKEN_FILE:-}" ] && [ -r "$CLAUDE_CODE_OAUTH_TOKEN_FILE" ]; then
+        export CLAUDE_CODE_OAUTH_TOKEN
+        CLAUDE_CODE_OAUTH_TOKEN="$(cat "$CLAUDE_CODE_OAUTH_TOKEN_FILE")"
+        CLAUDE_LOCAL_AUTH_LOADED=1
+    fi
     if [ -n "${CLAUDE_AUTH_JSON_FILE:-}" ] && [ -r "$CLAUDE_AUTH_JSON_FILE" ]; then
         cat "$CLAUDE_AUTH_JSON_FILE" > "$HOME_DIR/.claude.json"
         chmod 600 "$HOME_DIR/.claude.json"
@@ -246,10 +251,11 @@ if truthy_env "${CLAUDE_USE_LOCAL_AUTH:-}"; then
     if [ "$CLAUDE_LOCAL_AUTH_LOADED" = "1" ]; then
         unset ANTHROPIC_API_KEY CLAUDE_API_KEY
     else
-        echo "CLAUDE_USE_LOCAL_AUTH=true but Claude local auth files are missing; falling back to API-key auth. Run claude setup-token on the host, then bun run auth:bootstrap." >&2
+        echo "CLAUDE_USE_LOCAL_AUTH=true but Claude local auth token/files are missing; falling back to API-key auth. Run claude setup-token on the host, then bun run auth:bootstrap." >&2
     fi
 fi
 unset CLAUDE_AUTH_JSON CLAUDE_CREDENTIALS_JSON CLAUDE_AUTH_PAYLOAD CLAUDE_CREDENTIALS_PAYLOAD
+unset CLAUDE_CODE_OAUTH_TOKEN_FILE
 
 # Signal readiness
 touch "$HOME_DIR/.ready"

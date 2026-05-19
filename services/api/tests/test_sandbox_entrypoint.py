@@ -144,9 +144,11 @@ def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> 
     codex_auth = '{"tokens":{"id_token":"codex-secret"}}'
     claude_auth = '{"oauthAccount":{"accessToken":"claude-secret"}}'
     claude_credentials = '{"refreshToken":"claude-refresh-secret"}'
+    claude_oauth_token = "claude-oauth-token"
     auth_dir = tmp_path / "harness-auth"
     auth_dir.mkdir()
     (auth_dir / "codex-auth.json").write_text(codex_auth)
+    (auth_dir / "claude-code-oauth-token").write_text(claude_oauth_token)
     (auth_dir / "claude-auth.json").write_text(claude_auth)
     (auth_dir / "claude-credentials.json").write_text(claude_credentials)
 
@@ -160,8 +162,9 @@ def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> 
                 'cat "$HOME/.codex/auth.json"; printf "\\n"; '
                 'cat "$HOME/.claude.json"; printf "\\n"; '
                 'cat "$HOME/.claude/.credentials.json"; printf "\\n"; '
-                'printf "%s/%s/%s\\n" "${OPENAI_API_KEY-unset}" '
-                '"${CODEX_API_KEY-unset}" "${ANTHROPIC_API_KEY-unset}"'
+                'printf "%s/%s/%s/%s\\n" "${OPENAI_API_KEY-unset}" '
+                '"${CODEX_API_KEY-unset}" "${ANTHROPIC_API_KEY-unset}" '
+                '"${CLAUDE_CODE_OAUTH_TOKEN-unset}"'
             ),
         ],
         check=False,
@@ -174,6 +177,9 @@ def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> 
             "CODEX_USE_LOCAL_AUTH": "yes",
             "CODEX_AUTH_JSON_FILE": str(auth_dir / "codex-auth.json"),
             "CLAUDE_USE_LOCAL_AUTH": "on",
+            "CLAUDE_CODE_OAUTH_TOKEN_FILE": str(
+                auth_dir / "claude-code-oauth-token"
+            ),
             "CLAUDE_AUTH_JSON_FILE": str(auth_dir / "claude-auth.json"),
             "CLAUDE_CREDENTIALS_JSON_FILE": str(
                 auth_dir / "claude-credentials.json"
@@ -191,7 +197,7 @@ def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> 
         "oauthAccount": {"accessToken": "claude-secret"}
     }
     assert json.loads(credentials_line) == {"refreshToken": "claude-refresh-secret"}
-    assert env_line == "unset/unset/unset"
+    assert env_line == "unset/unset/unset/claude-oauth-token"
 
 
 def test_sandbox_entrypoint_preserves_api_keys_when_local_auth_missing(

@@ -133,8 +133,9 @@ harnessAuth:
 | Secret | Used for |
 |--------|----------|
 | `CODEX_AUTH_JSON` | Codex local auth file reconstruction. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token from `claude setup-token`. |
 | `CLAUDE_AUTH_JSON` | Claude account metadata, when available. |
-| `CLAUDE_CREDENTIALS_JSON` | Claude portable credentials from `claude setup-token`. |
+| `CLAUDE_CREDENTIALS_JSON` | Legacy Claude portable credentials, when available. |
 
 Then enable only the providers you intend to use:
 
@@ -253,12 +254,16 @@ kubectl exec -n centaur-system deploy/centaur-centaur-api -- \
   curl -fsS http://localhost:8000/health/tools | jq
 ```
 
-If you need to call operator routes from outside the cluster, create an admin
-API key from inside the API deployment and save the returned plaintext key:
+If you need to call operator routes from outside the cluster, use a configured
+admin key such as `LOCAL_DEV_API_KEY` to create a narrower operator key and
+save the returned plaintext key:
 
 ```bash
+ADMIN_KEY=$(kubectl exec -n centaur-system deploy/centaur-centaur-api -- printenv LOCAL_DEV_API_KEY)
+
 kubectl exec -n centaur-system deploy/centaur-centaur-api -- \
   curl -fsS -X POST http://localhost:8000/admin/api-keys \
+    -H "Authorization: Bearer ${ADMIN_KEY}" \
     -H "Content-Type: application/json" \
     -d '{"name":"operator","scopes":["admin"],"created_by":"ops"}' | jq
 ```
@@ -274,22 +279,27 @@ Run one agent turn from inside the API deployment:
 
 ```bash
 THREAD_KEY=production-smoke-codex
+API_KEY=$(kubectl exec -n centaur-system deploy/centaur-centaur-api -- printenv SLACKBOT_API_KEY)
 
 SPAWN=$(kubectl exec -n centaur-system deploy/centaur-centaur-api -- curl -s -X POST http://localhost:8000/agent/spawn \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{\"thread_key\":\"${THREAD_KEY}\"}")
 ASSIGNMENT_GENERATION=$(printf '%s' "$SPAWN" | jq -r '.assignment_generation')
 
 kubectl exec -n centaur-system deploy/centaur-centaur-api -- curl -s -X POST http://localhost:8000/agent/message \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{\"thread_key\":\"${THREAD_KEY}\",\"assignment_generation\":${ASSIGNMENT_GENERATION},\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"Reply with exactly PONG.\"}]}"
 
 EXECUTE=$(kubectl exec -n centaur-system deploy/centaur-centaur-api -- curl -s -X POST http://localhost:8000/agent/execute \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{\"thread_key\":\"${THREAD_KEY}\",\"assignment_generation\":${ASSIGNMENT_GENERATION},\"delivery\":{\"platform\":\"dev\"}}")
 EXECUTION_ID=$(printf '%s' "$EXECUTE" | jq -r '.execution_id')
 
 kubectl exec -n centaur-system deploy/centaur-centaur-api -- curl -s \
+  -H "Authorization: Bearer ${API_KEY}" \
   "http://localhost:8000/agent/executions/${EXECUTION_ID}" | jq
 ```
 
@@ -313,6 +323,7 @@ execution before retrying:
 
 ```bash
 kubectl exec -n centaur-system deploy/centaur-centaur-api -- curl -s \
+  -H "Authorization: Bearer ${API_KEY}" \
   "http://localhost:8000/agent/executions/${EXECUTION_ID}" | jq
 
 kubectl logs -n centaur-system deploy/centaur-centaur-api --tail=200

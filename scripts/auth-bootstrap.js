@@ -71,6 +71,26 @@ function claudeCredentialsPayload() {
   return { path, value: JSON.stringify(credentials) };
 }
 
+function claudeCodeOauthTokenPayload() {
+  const token = (process.env.CLAUDE_CODE_OAUTH_TOKEN || "").trim();
+  return token ? { path: "CLAUDE_CODE_OAUTH_TOKEN", value: token } : null;
+}
+
+function extractClaudeCodeOauthToken(output) {
+  const assignment = /CLAUDE_CODE_OAUTH_TOKEN\s*=\s*['"]?([^\s'"]+)['"]?/.exec(
+    output,
+  );
+  if (assignment) return assignment[1];
+
+  return (
+    output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .reverse()
+      .find((line) => line.length > 50 && !/\s/.test(line)) || ""
+  );
+}
+
 const updates = {};
 const imported = [];
 const missing = [];
@@ -95,7 +115,19 @@ if (codex) {
 
 const claudeAccount = claudeAccountPayload();
 const claudeCredentials = claudeCredentialsPayload();
-if (claudeCredentials) {
+const claudeCodeOauthToken = claudeCodeOauthTokenPayload();
+if (claudeCodeOauthToken) {
+  updates.CLAUDE_CODE_OAUTH_TOKEN = claudeCodeOauthToken.value;
+  imported.push([
+    "Claude OAuth token",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    claudeCodeOauthToken.path,
+  ]);
+  if (claudeAccount) {
+    updates.CLAUDE_AUTH_JSON = claudeAccount.value;
+    imported.push(["Claude account", "CLAUDE_AUTH_JSON", claudeAccount.path]);
+  }
+} else if (claudeCredentials) {
   updates.CLAUDE_CREDENTIALS_JSON = claudeCredentials.value;
   imported.push([
     "Claude credentials",
@@ -112,9 +144,10 @@ if (claudeCredentials) {
     "Claude",
     [
       `Found ${claudeAccount.path}, but it only contains account metadata.`,
-      "Sandbox auth needs portable credentials from `claude setup-token`.",
+      "Sandbox auth needs an OAuth token from `claude setup-token`.",
       "Run `claude setup-token` on the host,",
-      "or `bun run auth:bootstrap -- --login` to stream setup.",
+      "export the emitted CLAUDE_CODE_OAUTH_TOKEN,",
+      "or `bun run auth:bootstrap -- --login` to capture setup output.",
       "Then rerun `bun run auth:bootstrap`.",
     ].join(" "),
   ]);
@@ -124,7 +157,8 @@ if (claudeCredentials) {
     "Claude",
     [
       "Run `claude setup-token` on the host,",
-      "or `bun run auth:bootstrap -- --login` to stream setup.",
+      "export the emitted CLAUDE_CODE_OAUTH_TOKEN,",
+      "or `bun run auth:bootstrap -- --login` to capture setup output.",
       "For SSH sessions, follow the browser URL printed by Claude Code,",
       "then rerun `bun run auth:bootstrap`.",
     ].join(" "),
@@ -147,13 +181,29 @@ for (const [name, instruction] of missing) {
 if (loginRequested && loginCommands.length > 0) {
   for (const [name, command, args] of loginCommands) {
     console.log(`${name}: running ${[command, ...args].join(" ")}`);
-    const result = spawnSync(command, args, { stdio: "inherit" });
+    const stdio =
+      command === "claude" && args[0] === "setup-token"
+        ? ["inherit", "pipe", "inherit"]
+        : "inherit";
+    const result = spawnSync(command, args, { encoding: "utf8", stdio });
     if (result.error) {
       console.error(`${name}: failed to run ${command}: ${result.error.message}`);
       process.exitCode = 1;
     } else if (result.status !== 0) {
       console.error(`${name}: ${command} exited with status ${result.status}`);
       process.exitCode = result.status ?? 1;
+    } else if (command === "claude" && args[0] === "setup-token") {
+      const output = result.stdout || "";
+      process.stdout.write(output);
+      const token = extractClaudeCodeOauthToken(output);
+      if (token) {
+        upsertEnvValues(envFile, { CLAUDE_CODE_OAUTH_TOKEN: token });
+        console.log(`Wrote ${envFile}`);
+        console.log("Claude OAuth token: imported setup-token output into CLAUDE_CODE_OAUTH_TOKEN=[redacted]");
+      } else {
+        console.error("Claude: setup-token completed but no CLAUDE_CODE_OAUTH_TOKEN was found in output.");
+        process.exitCode = 1;
+      }
     }
   }
   console.log("Rerun `bun run auth:bootstrap` after login completes.");

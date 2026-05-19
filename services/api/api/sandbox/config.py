@@ -48,6 +48,8 @@ _LOCAL_AUTH_EXTRA_ENV_KEYS = {
     "CODEX_AUTH_JSON_FILE",
     "CODEX_AUTH_PAYLOAD",
     "CLAUDE_USE_LOCAL_AUTH",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN_FILE",
     "CLAUDE_AUTH_JSON",
     "CLAUDE_AUTH_JSON_FILE",
     "CLAUDE_CREDENTIALS_JSON",
@@ -192,6 +194,9 @@ def container_env(
         "CLAUDE_USE_LOCAL_AUTH", extra_env
     ):
         env.append("CLAUDE_USE_LOCAL_AUTH=true")
+        env.append(
+            "CLAUDE_CODE_OAUTH_TOKEN_FILE=/harness-auth/claude-code-oauth-token"
+        )
         env.append("CLAUDE_AUTH_JSON_FILE=/harness-auth/claude-auth.json")
         env.append(
             "CLAUDE_CREDENTIALS_JSON_FILE=/harness-auth/claude-credentials.json"

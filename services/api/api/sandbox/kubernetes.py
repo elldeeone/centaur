@@ -77,6 +77,7 @@ def _harness_auth_secret_sources(engine: str) -> list[dict[str, Any]]:
         ]
     if engine == "claude-code" and sandbox_env_flag("CLAUDE_USE_LOCAL_AUTH"):
         return [
+            source("CLAUDE_CODE_OAUTH_TOKEN", "claude-code-oauth-token"),
             source("CLAUDE_AUTH_JSON", "claude-auth.json"),
             source("CLAUDE_CREDENTIALS_JSON", "claude-credentials.json"),
         ]

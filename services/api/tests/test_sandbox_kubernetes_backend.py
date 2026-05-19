@@ -161,6 +161,8 @@ def _default_per_sandbox_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "CODEX_AUTH_JSON",
         "CODEX_AUTH_JSON_FILE",
         "CLAUDE_USE_LOCAL_AUTH",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN_FILE",
         "CLAUDE_AUTH_JSON",
         "CLAUDE_AUTH_JSON_FILE",
         "CLAUDE_CREDENTIALS_JSON",
@@ -296,6 +298,10 @@ def test_container_env_passes_local_auth_only_when_enabled(
     assert "CLAUDE_USE_LOCAL_AUTH" not in codex_env
     assert "CODEX_USE_LOCAL_AUTH" not in claude_env
     assert claude_env["CLAUDE_USE_LOCAL_AUTH"] == "true"
+    assert (
+        claude_env["CLAUDE_CODE_OAUTH_TOKEN_FILE"]
+        == "/harness-auth/claude-code-oauth-token"
+    )
     assert claude_env["CLAUDE_AUTH_JSON_FILE"] == "/harness-auth/claude-auth.json"
     assert (
         claude_env["CLAUDE_CREDENTIALS_JSON_FILE"]
@@ -313,6 +319,7 @@ def test_container_env_filters_raw_local_auth_from_extra_env(
         "CODEX_AUTH_JSON": "codex-secret",
         "CODEX_AUTH_PAYLOAD": "codex-payload",
         "CLAUDE_USE_LOCAL_AUTH": "true",
+        "CLAUDE_CODE_OAUTH_TOKEN": "claude-oauth-token",
         "CLAUDE_AUTH_JSON": "claude-secret",
         "CLAUDE_AUTH_PAYLOAD": "claude-payload",
     }
@@ -354,6 +361,11 @@ def test_harness_auth_secret_sources_are_engine_scoped(
         ("custom-harness-auth", "CODEX_AUTH_JSON", "codex-auth.json")
     ]
     assert secret_items("claude-code") == [
+        (
+            "custom-harness-auth",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "claude-code-oauth-token",
+        ),
         ("custom-harness-auth", "CLAUDE_AUTH_JSON", "claude-auth.json"),
         (
             "custom-harness-auth",

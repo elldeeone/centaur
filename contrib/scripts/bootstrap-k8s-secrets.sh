@@ -18,6 +18,7 @@ set to onepassword-connect in the Helm values):
                                creates Secret centaur-onepassword-connect-credentials
   OP_CONNECT_TOKEN             Connect API token; added to centaur-infra-env
   CODEX_AUTH_JSON              Codex local auth payload; added to centaur-harness-auth
+  CLAUDE_CODE_OAUTH_TOKEN      Claude Code setup-token payload; added to centaur-harness-auth
   CLAUDE_AUTH_JSON             Claude local auth payload; added to centaur-harness-auth
   CLAUDE_CREDENTIALS_JSON      Claude credentials payload; added to centaur-harness-auth
 EOF
@@ -91,6 +92,7 @@ optional_secret_env_names=(
 
 harness_auth_env_names=(
   CODEX_AUTH_JSON
+  CLAUDE_CODE_OAUTH_TOKEN
   CLAUDE_AUTH_JSON
   CLAUDE_CREDENTIALS_JSON
 )

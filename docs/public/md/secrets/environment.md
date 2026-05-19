@@ -62,8 +62,9 @@ Optional payload keys:
 | Secret | Notes |
 |--------|-------|
 | `CODEX_AUTH_JSON` | Copied from `~/.codex/auth.json`. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Emitted by `claude setup-token`. |
 | `CLAUDE_AUTH_JSON` | Claude account metadata from `~/.claude.json`, when available. |
-| `CLAUDE_CREDENTIALS_JSON` | Portable Claude credentials from `~/.claude/.credentials.json`; create with `claude setup-token`. |
+| `CLAUDE_CREDENTIALS_JSON` | Legacy portable Claude credentials from `~/.claude/.credentials.json`, when available. |
 
 `just bootstrap-secrets` writes those payloads to `centaur-harness-auth`, not
 `centaur-infra-env`, so the API pod does not receive raw local OAuth payloads
