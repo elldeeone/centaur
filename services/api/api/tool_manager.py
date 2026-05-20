@@ -113,6 +113,7 @@ class HttpSecret:
     inject_header: str = ""
     inject_formatter: str = ""
     inject_query_param: str = ""
+    source_kind: str = ""
 
     def __post_init__(self) -> None:
         # Replace-mode secrets need a placeholder; default it to the name so

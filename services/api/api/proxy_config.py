@@ -76,8 +76,11 @@ def _op_vault() -> str:
     return os.environ.get("OP_VAULT", "ai-agents").strip()
 
 
-def _build_source(secret_ref: str) -> dict[str, str]:
-    iron_proxy_type = _OP_REF_SOURCES.get(_secret_source_kind())
+def _build_source(secret_ref: str, source_kind: str | None = None) -> dict[str, str]:
+    kind = (source_kind or "").strip().lower() or _secret_source_kind()
+    if kind == "env":
+        return {"type": "env", "var": secret_ref}
+    iron_proxy_type = _OP_REF_SOURCES.get(kind)
     if iron_proxy_type is not None:
         return {
             "type": iron_proxy_type,
@@ -148,7 +151,7 @@ def _build_secret_transform(
         action, block = _secret_action_block(secret)
         entries.append(
             {
-                "source": _build_source(secret.secret_ref),
+                "source": _build_source(secret.secret_ref, secret.source_kind),
                 action: block,
                 "rules": [{"host": h} for h in sorted(host_set)],
             }

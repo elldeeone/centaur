@@ -64,9 +64,6 @@ def _harness_auth_secret_name() -> str:
 
 
 def _harness_auth_secret_sources(engine: str) -> list[dict[str, Any]]:
-    if local_auth_uses_proxy():
-        return []
-
     def source(key: str, path: str) -> dict[str, Any]:
         return {
             "secret": {
@@ -80,6 +77,8 @@ def _harness_auth_secret_sources(engine: str) -> list[dict[str, Any]]:
         return [
             source("CODEX_AUTH_JSON", "codex-auth.json"),
         ]
+    if local_auth_uses_proxy():
+        return []
     if engine == "claude-code" and sandbox_env_flag("CLAUDE_USE_LOCAL_AUTH"):
         return [
             source("CLAUDE_CREDENTIALS_JSON", "claude-credentials.json"),
@@ -90,8 +89,6 @@ def _harness_auth_secret_sources(engine: str) -> list[dict[str, Any]]:
 def _harness_uses_proxy_auth(engine: str) -> bool:
     if not local_auth_uses_proxy():
         return False
-    if engine == "codex":
-        return sandbox_env_flag("CODEX_USE_LOCAL_AUTH")
     if engine == "claude-code":
         return sandbox_env_flag("CLAUDE_USE_LOCAL_AUTH")
     return False
@@ -100,15 +97,6 @@ def _harness_uses_proxy_auth(engine: str) -> bool:
 def _harness_proxy_auth_secrets(engine: str) -> list[SecretDef]:
     if not _harness_uses_proxy_auth(engine):
         return []
-    if engine == "codex":
-        return [
-            HttpSecret(
-                name="CODEX_ACCESS_TOKEN",
-                secret_ref="CODEX_ACCESS_TOKEN",
-                hosts=("api.openai.com",),
-                match_headers=("Authorization",),
-            )
-        ]
     if engine == "claude-code":
         return [
             HttpSecret(
@@ -116,6 +104,7 @@ def _harness_proxy_auth_secrets(engine: str) -> list[SecretDef]:
                 secret_ref="CLAUDE_CODE_OAUTH_ACCESS_TOKEN",
                 hosts=("api.anthropic.com",),
                 match_headers=("Authorization",),
+                source_kind="env",
             )
         ]
     return []
@@ -124,8 +113,6 @@ def _harness_proxy_auth_secrets(engine: str) -> list[SecretDef]:
 def _harness_proxy_auth_env_keys(engine: str) -> tuple[str, ...]:
     if not _harness_uses_proxy_auth(engine):
         return ()
-    if engine == "codex":
-        return ("CODEX_ACCESS_TOKEN",)
     if engine == "claude-code":
         return ("CLAUDE_CODE_OAUTH_ACCESS_TOKEN",)
     return ()

@@ -185,16 +185,13 @@ def container_env(
     use_proxy_local_auth = local_auth_uses_proxy(extra_env)
     if engine == "codex" and sandbox_env_flag("CODEX_USE_LOCAL_AUTH", extra_env):
         env.append("CODEX_USE_LOCAL_AUTH=true")
-        if use_proxy_local_auth:
-            _set_env(env, "OPENAI_API_KEY", "CODEX_ACCESS_TOKEN")
-            env.append("CODEX_PROXY_AUTH=true")
-        else:
-            env.append("CODEX_AUTH_JSON_FILE=/harness-auth/codex-auth.json")
+        env.append("CODEX_AUTH_JSON_FILE=/harness-auth/codex-auth.json")
     if engine == "claude-code" and sandbox_env_flag(
         "CLAUDE_USE_LOCAL_AUTH", extra_env
     ):
         env.append("CLAUDE_USE_LOCAL_AUTH=true")
         if use_proxy_local_auth:
+            _set_env(env, "ANTHROPIC_API_KEY", "")
             env.append("ANTHROPIC_AUTH_TOKEN=ANTHROPIC_AUTH_TOKEN")
         else:
             env.append(

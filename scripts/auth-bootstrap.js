@@ -48,11 +48,7 @@ function codexPayload() {
   const path = resolve(home, ".codex", "auth.json");
   const auth = readJson(path);
   if (!auth) return null;
-  const accessToken = auth?.tokens?.access_token;
-  if (typeof accessToken !== "string" || !accessToken) {
-    throw new Error(`${path} does not include tokens.access_token`);
-  }
-  return { path, value: JSON.stringify(auth), accessToken };
+  return { path, value: JSON.stringify(auth) };
 }
 
 function claudeCredentialsFromValue(path, value) {
@@ -111,9 +107,7 @@ const loginCommands = [];
 const codex = codexPayload();
 if (codex) {
   updates.CODEX_AUTH_JSON = codex.value;
-  updates.CODEX_ACCESS_TOKEN = codex.accessToken;
   imported.push(["Codex", "CODEX_AUTH_JSON", codex.path]);
-  imported.push(["Codex access token", "CODEX_ACCESS_TOKEN", codex.path]);
 } else {
   loginCommands.push(["Codex", "codex", ["login", "--device-auth"]]);
   missing.push([

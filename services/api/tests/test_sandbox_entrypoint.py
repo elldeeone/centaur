@@ -268,17 +268,11 @@ def test_sandbox_entrypoint_preserves_api_keys_when_local_auth_missing(
     assert result.stdout.strip() == "OPENAI_API_KEY/CODEX_API_KEY/ANTHROPIC_API_KEY"
 
 
-def test_sandbox_entrypoint_uses_proxy_local_auth_placeholders(
+def test_sandbox_entrypoint_keeps_claude_proxy_local_auth_placeholder(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
     harness_dir = _write_codex_harness_config(home)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    codex = bin_dir / "codex"
-    captured = tmp_path / "codex-token"
-    codex.write_text(f"#!/usr/bin/env sh\ncat > {captured}\n")
-    codex.chmod(0o755)
 
     result = subprocess.run(
         [
@@ -286,33 +280,23 @@ def test_sandbox_entrypoint_uses_proxy_local_auth_placeholders(
             str(ENTRYPOINT_SH),
             "sh",
             "-lc",
-            (
-                'printf "%s/%s/%s/%s\\n" '
-                '"${OPENAI_API_KEY-unset}" "${CODEX_API_KEY-unset}" '
-                '"$ANTHROPIC_AUTH_TOKEN" "$ANTHROPIC_API_KEY"'
-            ),
+            'printf "%s/%s\\n" "$ANTHROPIC_AUTH_TOKEN" "${ANTHROPIC_API_KEY-unset}"',
         ],
         check=False,
         capture_output=True,
         text=True,
         env={
             "HOME": str(home),
-            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
-            "CODEX_USE_LOCAL_AUTH": "true",
-            "CODEX_PROXY_AUTH": "true",
             "CLAUDE_USE_LOCAL_AUTH": "true",
             "ANTHROPIC_AUTH_TOKEN": "ANTHROPIC_AUTH_TOKEN",
-            "OPENAI_API_KEY": "CODEX_ACCESS_TOKEN",
-            "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+            "ANTHROPIC_API_KEY": "",
         },
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
-    assert captured.read_text() == "CODEX_ACCESS_TOKEN\n"
-    assert result.stdout.strip() == (
-        "CODEX_ACCESS_TOKEN/unset/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY"
-    )
+    assert result.stdout.strip() == "ANTHROPIC_AUTH_TOKEN/"
 
 
 def test_sandbox_entrypoint_appends_codex_laminar_otel_config(tmp_path: Path) -> None:

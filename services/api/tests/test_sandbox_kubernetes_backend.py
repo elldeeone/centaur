@@ -253,14 +253,12 @@ def test_container_env_passes_proxy_local_auth_only_when_enabled(
     )
 
     assert codex_env["CODEX_USE_LOCAL_AUTH"] == "true"
-    assert codex_env["CODEX_PROXY_AUTH"] == "true"
-    assert codex_env["OPENAI_API_KEY"] == "CODEX_ACCESS_TOKEN"
-    assert "CODEX_ACCESS_TOKEN" not in codex_env
-    assert "CODEX_AUTH_JSON_FILE" not in codex_env
+    assert codex_env["CODEX_AUTH_JSON_FILE"] == "/harness-auth/codex-auth.json"
     assert "CLAUDE_USE_LOCAL_AUTH" not in codex_env
     assert "CODEX_USE_LOCAL_AUTH" not in claude_env
     assert claude_env["CLAUDE_USE_LOCAL_AUTH"] == "true"
     assert claude_env["ANTHROPIC_AUTH_TOKEN"] == "ANTHROPIC_AUTH_TOKEN"
+    assert claude_env["ANTHROPIC_API_KEY"] == ""
     assert "CLAUDE_CREDENTIALS_JSON_FILE" not in claude_env
     assert claude_env["CLAUDE_CONFIG_DIR"] == "/tmp/claude"
     assert "CODEX_USE_LOCAL_AUTH" not in amp_env
@@ -347,7 +345,9 @@ def test_harness_auth_secret_sources_are_engine_scoped(
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
     monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
 
-    assert secret_items("codex") == []
+    assert secret_items("codex") == [
+        ("custom-harness-auth", "CODEX_AUTH_JSON", "codex-auth.json")
+    ]
     assert secret_items("claude-code") == []
     assert secret_items("amp") == []
 
@@ -374,12 +374,9 @@ def test_harness_proxy_auth_secrets_are_engine_scoped(
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
     monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
 
-    codex = _harness_proxy_auth_secrets("codex")
     claude = _harness_proxy_auth_secrets("claude-code")
 
-    assert [(secret.name, secret.secret_ref, secret.hosts) for secret in codex] == [
-        ("CODEX_ACCESS_TOKEN", "CODEX_ACCESS_TOKEN", ("api.openai.com",))
-    ]
+    assert _harness_proxy_auth_secrets("codex") == []
     assert [(secret.name, secret.secret_ref, secret.hosts) for secret in claude] == [
         (
             "ANTHROPIC_AUTH_TOKEN",
@@ -404,18 +401,18 @@ def test_proxy_pod_spec_can_receive_harness_auth_keys(
         [],
         {},
         restart_policy="Never",
-        harness_auth_env_keys=("CODEX_ACCESS_TOKEN",),
+        harness_auth_env_keys=("CLAUDE_CODE_OAUTH_ACCESS_TOKEN",),
     )
 
     assert spec["containers"][0]["envFrom"] == [
         {"secretRef": {"name": "centaur-infra-env"}},
     ]
     assert {
-        "name": "CODEX_ACCESS_TOKEN",
+        "name": "CLAUDE_CODE_OAUTH_ACCESS_TOKEN",
         "valueFrom": {
             "secretKeyRef": {
                 "name": "custom-harness-auth",
-                "key": "CODEX_ACCESS_TOKEN",
+                "key": "CLAUDE_CODE_OAUTH_ACCESS_TOKEN",
                 "optional": True,
             }
         },
