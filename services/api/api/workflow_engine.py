@@ -1226,6 +1226,13 @@ async def do_agent_turn(
                 if not history_parts:
                     skipped += 1
                     continue
+                if await _message_request_exists(
+                    ctx._pool,
+                    thread_key=effective_thread_key,
+                    message_id=history_message_id,
+                ):
+                    skipped += 1
+                    continue
                 history_role = str(item.get("role") or "user").strip().lower()
                 if history_role not in {"user", "assistant"}:
                     skipped += 1
@@ -1321,6 +1328,21 @@ async def do_agent_turn(
 
     # Not terminal yet — suspend and wait for notify_execution_terminal
     raise SuspendWorkflow(status="waiting")
+
+
+async def _message_request_exists(
+    pool,
+    *,
+    thread_key: str,
+    message_id: str,
+) -> bool:
+    row = await pool.fetchrow(
+        "SELECT 1 FROM agent_message_requests "
+        "WHERE thread_key = $1 AND message_id = $2",
+        thread_key,
+        message_id,
+    )
+    return row is not None
 
 
 # ── Handler discovery ─────────────────────────────────────────────────
@@ -1783,6 +1805,17 @@ async def _insert_workflow_run(
         )
         if existing:
             if existing["request_hash"] != req_hash:
+                keys = ",".join(sorted(str(key) for key in run_input.keys()))
+                log.warning(
+                    "workflow_idempotency_payload_mismatch",
+                    workflow_name=workflow_name,
+                    trigger_key=trigger_key,
+                    thread_key=run_input.get("thread_key"),
+                    input_keys=keys,
+                    existing_request_hash_prefix=str(existing["request_hash"])[:12],
+                    request_hash_prefix=req_hash[:12],
+                    run_id=str(existing["run_id"]),
+                )
                 raise ControlPlaneError(
                     "IDEMPOTENCY_PAYLOAD_MISMATCH",
                     "trigger_key was already used with a different payload",
