@@ -1,6 +1,6 @@
 import type { WebClient } from '@slack/web-api'
 import { slackReplyLimits } from '../constants'
-import { AgentSessionRenderer } from './agent-session'
+import { AgentSessionRenderer, type SessionMetrics } from './agent-session'
 import {
   clipLines,
   preformatted as pre,
@@ -210,7 +210,11 @@ export class CodexSessionRenderer {
     }
   }
 
-  async done(agentSessionId: string, threadId?: string): Promise<void> {
+  async done(
+    agentSessionId: string,
+    threadId?: string,
+    opts: { metrics?: SessionMetrics } = {}
+  ): Promise<void> {
     const state = getState(agentSessionId)
     if (state.done) return
     if (threadId) state.threadId = threadId
@@ -222,7 +226,8 @@ export class CodexSessionRenderer {
     const { streamedTextChars } = await this.renderer.done(agentSessionId, {
       streamFinalUpdates: true,
       commentaryMarkdown: state.commentaryText,
-      answerMarkdown: state.answerText
+      answerMarkdown: state.answerText,
+      metrics: opts.metrics
     })
     state.deliveredAnswerChars = streamedTextChars
     state.done = true

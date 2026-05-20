@@ -178,13 +178,34 @@ async def session_step(
     await post(f"/api/slack/agent-sessions/{session_id}/step", body)
 
 
-async def session_done(session_id: str | None, thread_id: str | None = None) -> None:
+async def session_done(
+    session_id: str | None,
+    thread_id: str | None = None,
+    *,
+    metrics: dict[str, Any] | None = None,
+) -> None:
     if not session_id:
         return
     body: dict[str, Any] = {}
     if thread_id:
         body["thread_id"] = thread_id
+    metrics_payload = _build_metrics_payload(metrics)
+    if metrics_payload:
+        body["metrics"] = metrics_payload
     await post(f"/api/slack/agent-sessions/{session_id}/done", body)
+
+
+def _build_metrics_payload(metrics: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not metrics:
+        return None
+    fields = {
+        "duration_s": metrics.get("duration_s"),
+        "ttft_ms": metrics.get("ttft_ms"),
+        "total_tokens": metrics.get("total_tokens"),
+        "cost_usd": metrics.get("cost_usd"),
+    }
+    payload = {key: value for key, value in fields.items() if value is not None}
+    return payload or None
 
 
 async def harness_event(

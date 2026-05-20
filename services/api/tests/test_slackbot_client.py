@@ -99,3 +99,51 @@ async def test_post_returns_none_after_exhausting_retries():
 
     assert result is None
     assert len(fake.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_session_done_forwards_metrics_payload():
+    fake = _FakeClient([_response(200, {"ok": True})])
+    with patch("api.slackbot_client.httpx.AsyncClient", return_value=fake):
+        from api import slackbot_client
+
+        await slackbot_client.session_done(
+            "sess_x",
+            "thread_id_1",
+            metrics={
+                "duration_s": 47.3,
+                "ttft_ms": 1240.5,
+                "total_tokens": 18532,
+                "cost_usd": 0.342,
+            },
+        )
+
+    assert len(fake.calls) == 1
+    body = fake.calls[0]["json"]
+    assert body["thread_id"] == "thread_id_1"
+    assert body["metrics"] == {
+        "duration_s": 47.3,
+        "ttft_ms": 1240.5,
+        "total_tokens": 18532,
+        "cost_usd": 0.342,
+    }
+
+
+@pytest.mark.asyncio
+async def test_session_done_omits_metrics_when_all_none():
+    fake = _FakeClient([_response(200, {"ok": True})])
+    with patch("api.slackbot_client.httpx.AsyncClient", return_value=fake):
+        from api import slackbot_client
+
+        await slackbot_client.session_done(
+            "sess_x",
+            metrics={
+                "duration_s": None,
+                "ttft_ms": None,
+                "total_tokens": None,
+                "cost_usd": None,
+            },
+        )
+
+    body = fake.calls[0]["json"]
+    assert "metrics" not in body

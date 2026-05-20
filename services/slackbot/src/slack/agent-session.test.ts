@@ -1,5 +1,56 @@
 import { describe, expect, it } from 'bun:test'
-import { AgentSessionRenderer, withAgentSessionLock } from './agent-session'
+import { AgentSessionRenderer, formatMetricsFooter, withAgentSessionLock } from './agent-session'
+
+describe('formatMetricsFooter', () => {
+  it('returns an empty string when no metrics are present', () => {
+    expect(formatMetricsFooter()).toBe('')
+    expect(formatMetricsFooter({})).toBe('')
+    expect(formatMetricsFooter({ durationS: null, totalTokens: 0, costUsd: 0 })).toBe('')
+  })
+
+  it('formats a complete metrics line with subtle units', () => {
+    expect(
+      formatMetricsFooter({
+        durationS: 47.3,
+        ttftMs: 1240,
+        totalTokens: 18532,
+        costUsd: 0.342
+      })
+    ).toBe('47s · 1.2s ttft · 19k tok · $0.34')
+  })
+
+  it('falls back to short labels for tiny values', () => {
+    expect(
+      formatMetricsFooter({ durationS: 0.4, ttftMs: 820, totalTokens: 8, costUsd: 0.001 })
+    ).toBe('<1s · 820ms ttft · 8 tok · <$0.01')
+  })
+
+  it('switches duration to minutes when over a minute', () => {
+    expect(formatMetricsFooter({ durationS: 152.0 })).toBe('2m 32s')
+    expect(formatMetricsFooter({ durationS: 600 })).toBe('10m')
+  })
+
+  it('uses tenths between 1k and 10k tokens', () => {
+    expect(formatMetricsFooter({ totalTokens: 4321 })).toBe('4.3k tok')
+  })
+
+  it('formats ttft in ms below 1s, seconds otherwise', () => {
+    expect(formatMetricsFooter({ ttftMs: 450 })).toBe('450ms ttft')
+    expect(formatMetricsFooter({ ttftMs: 1100 })).toBe('1.1s ttft')
+    expect(formatMetricsFooter({ ttftMs: 65_000 })).toBe('65s ttft')
+  })
+
+  it('skips fields with missing or non-finite values', () => {
+    expect(
+      formatMetricsFooter({
+        durationS: Number.NaN,
+        ttftMs: undefined,
+        totalTokens: 1500,
+        costUsd: undefined
+      })
+    ).toBe('1.5k tok')
+  })
+})
 
 describe('AgentSessionRenderer', () => {
   it('stops calling assistant.threads.setStatus after the channel returns user_not_found', async () => {
@@ -506,7 +557,8 @@ describe('AgentSessionRenderer', () => {
 
     await renderer.done(sessionId, {
       commentaryMarkdown: 'Planning the tool calls.',
-      answerMarkdown: 'Done: five tools called.'
+      answerMarkdown: 'Done: five tools called.',
+      metrics: { durationS: 47, ttftMs: 1240, totalTokens: 18500, costUsd: 0.34 }
     })
 
     const stop = calls.find(call => call.method === 'chat.stopStream')
@@ -524,6 +576,11 @@ describe('AgentSessionRenderer', () => {
           block.type === 'markdown' && String(block.text).includes('Done: five tools called.')
       )
     ).toBe(true)
+    const footer = blocks.find(
+      (block: any) =>
+        block.type === 'context' && String(block.elements?.[0]?.text ?? '').startsWith('47s')
+    )
+    expect(footer?.elements?.[0]?.text).toBe('47s · 1.2s ttft · 19k tok · $0.34')
     expect(
       blocks.some(
         (block: any) =>

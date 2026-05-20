@@ -347,15 +347,31 @@ app.post('/api/slack/agent-sessions/:session_id/step', apiKeyMiddleware, async c
 })
 
 app.post('/api/slack/agent-sessions/:session_id/done', apiKeyMiddleware, async c => {
-  const body = await c.req.json<{ thread_id?: string }>()
+  const body = await c.req.json<{
+    thread_id?: string
+    metrics?: {
+      duration_s?: number | null
+      ttft_ms?: number | null
+      total_tokens?: number | null
+      cost_usd?: number | null
+    }
+  }>()
   const { client } = await resolver.resolve({})
   try {
     const sessionId = c.req.param('session_id')
+    const metrics = body.metrics
+      ? {
+          durationS: body.metrics.duration_s ?? null,
+          ttftMs: body.metrics.ttft_ms ?? null,
+          totalTokens: body.metrics.total_tokens ?? null,
+          costUsd: body.metrics.cost_usd ?? null
+        }
+      : undefined
     await withAgentSessionLock(sessionId, async () => {
       if (hasActiveCodexSession(sessionId)) {
-        await new CodexSessionRenderer(client).done(sessionId, body.thread_id)
+        await new CodexSessionRenderer(client).done(sessionId, body.thread_id, { metrics })
       } else {
-        await new AgentSessionRenderer(client).done(sessionId)
+        await new AgentSessionRenderer(client).done(sessionId, { metrics })
       }
     })
     return c.json({ ok: true })

@@ -2555,7 +2555,14 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
                     await slackbot_client.session_text(finalize_session_id, result_text)
                     slackbot_text_sent = True
                 await slackbot_client.session_done(
-                    finalize_session_id, harness_thread_id or None
+                    finalize_session_id,
+                    harness_thread_id or None,
+                    metrics={
+                        "duration_s": summary_payload.get("duration_s"),
+                        "ttft_ms": summary_payload.get("ttft_ms"),
+                        "total_tokens": summary_payload.get("total_tokens"),
+                        "cost_usd": summary_payload.get("cost_usd"),
+                    },
                 )
                 slackbot_done = True
             except Exception:

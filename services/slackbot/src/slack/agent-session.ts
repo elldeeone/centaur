@@ -52,6 +52,7 @@ type AgentSessionState = {
   header?: string
   finalCommentaryMarkdown?: string
   finalAnswerMarkdown?: string
+  finalMetricsFooter?: string
   done: boolean
   statusCleared: boolean
   statusUnsupported: boolean
@@ -91,10 +92,18 @@ export type TextOptions = {
   planPrefix?: boolean
 }
 
+export type SessionMetrics = {
+  durationS?: number | null
+  ttftMs?: number | null
+  totalTokens?: number | null
+  costUsd?: number | null
+}
+
 export type DoneOptions = {
   streamFinalUpdates?: boolean
   commentaryMarkdown?: string
   answerMarkdown?: string
+  metrics?: SessionMetrics
 }
 
 function headerMarkdown(header: string): string {
@@ -217,6 +226,7 @@ export class AgentSessionRenderer {
     state.done = true
     state.finalCommentaryMarkdown = opts.commentaryMarkdown
     state.finalAnswerMarkdown = opts.answerMarkdown
+    state.finalMetricsFooter = formatMetricsFooter(opts.metrics)
     const streamFinalUpdates = opts.streamFinalUpdates ?? true
     let closed = false
     let streamedTextChars = 0
@@ -308,12 +318,14 @@ export class AgentSessionRenderer {
     // Slack accumulates appendStream chunks; stopStream blocks are the composed final layout.
     // Only add blocks for content that was not streamed live; live task_update chunks carry
     // fenced details/output, and the header has already been streamed as the first chunk.
+    const footerBlock = metricsFooterBlock(state.finalMetricsFooter)
     const blocks = sanitizeFinalMessagePayload([
       ...(tasks.length && !segment.planStarted
         ? [planBlock(planTitle(state.title, originalTasks), tasks, EXECUTION_PLAN_ID)]
         : []),
       ...(thinkingBlock ? [thinkingBlock] : []),
-      ...(!streamedTextLive && answerMarkdown ? renderMarkdownBlocks(answerMarkdown) : [])
+      ...(!streamedTextLive && answerMarkdown ? renderMarkdownBlocks(answerMarkdown) : []),
+      ...(footerBlock ? [footerBlock] : [])
     ] as AnyBlock[])
     const fallbackText = buildFinalFallbackText({
       title: state.title,
@@ -579,6 +591,60 @@ function finalizeOpenTasks(segment: Segment): StreamTask[] {
 
 function finalTaskSnapshot(segment: Segment): StreamTask[] {
   return Array.from(segment.tasks.values())
+}
+
+export function formatMetricsFooter(metrics?: SessionMetrics): string {
+  if (!metrics) return ''
+  const parts: string[] = []
+  const duration = formatDuration(metrics.durationS)
+  if (duration) parts.push(duration)
+  const ttft = formatTtft(metrics.ttftMs)
+  if (ttft) parts.push(ttft)
+  const tokens = formatTokens(metrics.totalTokens)
+  if (tokens) parts.push(tokens)
+  const cost = formatCost(metrics.costUsd)
+  if (cost) parts.push(cost)
+  return parts.join(' · ')
+}
+
+function formatDuration(durationS: number | null | undefined): string {
+  if (durationS == null || !Number.isFinite(durationS) || durationS < 0) return ''
+  if (durationS < 1) return '<1s'
+  if (durationS < 60) return `${Math.round(durationS)}s`
+  const minutes = Math.floor(durationS / 60)
+  const seconds = Math.round(durationS - minutes * 60)
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`
+}
+
+function formatTtft(ttftMs: number | null | undefined): string {
+  if (ttftMs == null || !Number.isFinite(ttftMs) || ttftMs <= 0) return ''
+  if (ttftMs < 1000) return `${Math.round(ttftMs)}ms ttft`
+  if (ttftMs < 60_000) return `${(ttftMs / 1000).toFixed(1)}s ttft`
+  return `${Math.round(ttftMs / 1000)}s ttft`
+}
+
+function formatTokens(totalTokens: number | null | undefined): string {
+  if (totalTokens == null || !Number.isFinite(totalTokens) || totalTokens <= 0) return ''
+  if (totalTokens < 1000) return `${totalTokens} tok`
+  if (totalTokens < 10_000) return `${(totalTokens / 1000).toFixed(1)}k tok`
+  if (totalTokens < 1_000_000) return `${Math.round(totalTokens / 1000)}k tok`
+  return `${(totalTokens / 1_000_000).toFixed(1)}M tok`
+}
+
+function formatCost(costUsd: number | null | undefined): string {
+  if (costUsd == null || !Number.isFinite(costUsd) || costUsd <= 0) return ''
+  if (costUsd < 0.01) return '<$0.01'
+  if (costUsd < 100) return `$${costUsd.toFixed(2)}`
+  return `$${Math.round(costUsd)}`
+}
+
+function metricsFooterBlock(footer: string | undefined): AnyBlock | null {
+  const trimmed = footer?.trim()
+  if (!trimmed) return null
+  return {
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text: trimmed }]
+  }
 }
 
 function shouldStreamTaskUpdate(segment: Segment, taskId: string): boolean {
