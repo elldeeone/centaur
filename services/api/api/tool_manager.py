@@ -37,6 +37,11 @@ from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
 log = structlog.get_logger()
 
 
+def _disabled_tool_names() -> set[str]:
+    raw = os.getenv("CENTAUR_DISABLED_TOOLS", "")
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
+
 # Headers the legacy raw-string shim lets iron-proxy scan for ``secrets``-transform
 # placeholders. Literal strings match a single header name; ``/.../`` is a regex.
 # Typed secret entries must instead name the exact headers they touch via
@@ -1364,6 +1369,7 @@ class ToolManager:
         """
         seen: dict[str, int] = {}
         tools: list[tuple[Path, dict]] = []
+        disabled_tools = _disabled_tool_names()
         for dir_idx, base_dir in enumerate(self.tools_dirs):
             if not base_dir.exists():
                 continue
@@ -1392,6 +1398,9 @@ class ToolManager:
                 tool_conf = pyproject.get("tool", {}).get("centaur", {})
 
                 name = tool_dir.name
+                if name in disabled_tools:
+                    log.info("tool_disabled", tool=name)
+                    continue
                 # Tool-level ``hosts`` is the legacy fallback for secret entries
                 # that do not carry their own; each secret should declare its.
                 default_hosts = tuple(tool_conf.get("hosts", []))

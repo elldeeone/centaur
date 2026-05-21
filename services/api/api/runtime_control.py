@@ -950,6 +950,16 @@ def _has_slackbot_live_delivery(metadata: dict[str, Any]) -> bool:
     )
 
 
+def _event_has_answer_text(event: dict[str, Any]) -> bool:
+    if _canonical_text_blocks(event):
+        return True
+    for key in ("delta", "text", "result"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
 async def _mark_slackbot_live_delivery_failed(
     pool,
     execution_id: str,
@@ -1759,6 +1769,7 @@ async def _mark_execution_terminal(
     terminal_reason: str,
     result_text: str,
     error_text: str | None,
+    slackbot_live_answer_delivered: bool | None = None,
 ) -> None:
     next_attempt_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(
         seconds=FINAL_DELIVERY_READY_GRACE_S,
@@ -1823,11 +1834,17 @@ async def _mark_execution_terminal(
             slackbot_live_delivery_failed = bool(
                 metadata.get("slackbot_live_delivery_failed")
             )
+            raw_streamed_answer_chars = metadata.get("slackbot_streamed_answer_chars")
+            if slackbot_live_answer_delivered is None:
+                slackbot_live_answer_delivered = (
+                    isinstance(raw_streamed_answer_chars, int)
+                    and raw_streamed_answer_chars > 0
+                )
             suppress_legacy_delivery = (
                 _has_slackbot_live_delivery(metadata)
                 and not slackbot_live_delivery_failed
+                and bool(slackbot_live_answer_delivered)
             )
-            raw_streamed_answer_chars = metadata.get("slackbot_streamed_answer_chars")
             if (
                 isinstance(raw_streamed_answer_chars, int)
                 and not slackbot_live_delivery_failed
@@ -2579,6 +2596,9 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
             terminal_reason=terminal_reason,
             result_text=result_text,
             error_text=error_text,
+            slackbot_live_answer_delivered=bool(
+                slackbot_text_sent or slackbot_streamed_answer_chars > 0
+            ),
         )
 
     execution_started_payload = {
@@ -2742,16 +2762,19 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
                         slackbot_done = bool(harness_result.get("done"))
                         streamed_chars = harness_result.get("streamedAnswerChars")
                         if isinstance(streamed_chars, int):
+                            previous_streamed_answer_chars = (
+                                slackbot_streamed_answer_chars
+                            )
                             slackbot_streamed_answer_chars = max(
                                 slackbot_streamed_answer_chars,
                                 streamed_chars,
                             )
-                        if slack_event.get("type") in {
-                            "assistant",
-                            "item.agentMessage.delta",
-                            "result",
-                            "turn.done",
-                        }:
+                            if (
+                                slackbot_streamed_answer_chars
+                                > previous_streamed_answer_chars
+                            ):
+                                slackbot_text_sent = True
+                        if _event_has_answer_text(slack_event):
                             slackbot_text_sent = True
             observations.raw_event_count += 1
             # ``amp_raw_event`` is a HISTORICAL label preserved for API and

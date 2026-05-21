@@ -24,6 +24,17 @@ def test_agent_session_title_formats_base_and_persona_runs():
     )
 
 
+def test_live_delivery_answer_text_detection_ignores_turn_done_without_text():
+    from api.runtime_control import _event_has_answer_text
+
+    assert _event_has_answer_text({"type": "turn.done"}) is False
+    assert (
+        _event_has_answer_text({"type": "item.agentMessage.delta", "delta": "done"})
+        is True
+    )
+    assert _event_has_answer_text({"type": "result", "result": "finished"}) is True
+
+
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 

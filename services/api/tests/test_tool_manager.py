@@ -509,6 +509,19 @@ def test_discover_loads_fake_tools_with_shadowing_personas_and_failures(tmp_path
     assert "code-reviewer" not in manager.tools
 
 
+def test_discover_skips_disabled_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    tools_dir = tmp_path / "tools"
+    _write_tool(tools_dir, "grafana", FAKE_TOOL_CLIENT)
+    _write_tool(tools_dir, "vlogs", FAKE_TOOL_CLIENT)
+    monkeypatch.setenv("CENTAUR_DISABLED_TOOLS", "grafana")
+
+    manager = ToolManager(tools_dir)
+    loaded = manager.discover()
+
+    assert [tool.name for tool in loaded] == ["vlogs"]
+    assert "grafana" not in manager.tools
+
+
 @pytest.mark.asyncio
 async def test_call_tool_invokes_sync_and_async_methods_with_secret_placeholders(
     tmp_path: Path,

@@ -279,7 +279,8 @@ function extractText(payload: any): string {
     payload?.result,
     payload?.text,
     payload?.final_text,
-    payload?.message
+    payload?.message,
+    payload?.error_text
   )
   if (value) return value
 

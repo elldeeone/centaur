@@ -46,6 +46,68 @@ describe("final delivery polling", () => {
     ).toBe(true);
   });
 
+  it("posts error text when no result text was captured", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchCalls: Array<{ path: string; body: unknown }> = [];
+    const fetchMock = mock(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        const body = init?.body ? JSON.parse(init.body as string) : undefined;
+        fetchCalls.push({ path: url.pathname, body });
+
+        if (url.pathname === "/agent/final-deliveries/claim") {
+          return jsonResponse({
+            deliveries: [
+              {
+                execution_id: "exe-error-text",
+                delivery: {
+                  platform: "slack",
+                  channel: "C123",
+                  thread_ts: "1778883099.579529",
+                },
+                final_payload: {
+                  error_text: "command failed before a final answer was captured",
+                },
+              },
+            ],
+          });
+        }
+
+        if (url.pathname === "/agent/final-deliveries/exe-error-text/delivered")
+          return jsonResponse({ ok: true });
+
+        throw new Error(`unexpected request: ${url.pathname}`);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const posted: any[] = [];
+    const client = {
+      chat: {
+        postMessage: async (params: any) => {
+          posted.push(params);
+          return { ok: true };
+        },
+      },
+      conversations: {
+        replies: async () => ({ ok: true, messages: [] }),
+      },
+    };
+
+    try {
+      await pollFinalDeliveriesOnce(config, client as any);
+
+      expect(posted[0]?.text).toBe(
+        "command failed before a final answer was captured",
+      );
+      expect(fetchCalls.some((call) => call.path.endsWith("/delivered"))).toBe(
+        true,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("posts a claimed delivery once and marks it delivered before the next poll", async () => {
     const originalFetch = globalThis.fetch;
     const fetchCalls: Array<{ path: string; body: unknown }> = [];
