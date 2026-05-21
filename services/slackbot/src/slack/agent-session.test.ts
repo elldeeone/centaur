@@ -153,7 +153,10 @@ describe('AgentSessionRenderer', () => {
           calls.push({ method: 'chat.stopStream', params })
           return { ok: true }
         },
-        update: async () => ({ ok: true })
+        update: async (params: any) => {
+          calls.push({ method: 'chat.update', params })
+          return { ok: true }
+        }
       }
     }
 
@@ -272,7 +275,10 @@ describe('AgentSessionRenderer', () => {
           calls.push({ method: 'chat.stopStream', params })
           return { ok: true }
         },
-        update: async () => ({ ok: true })
+        update: async (params: any) => {
+          calls.push({ method: 'chat.update', params })
+          return { ok: true }
+        }
       }
     }
 
@@ -434,7 +440,10 @@ describe('AgentSessionRenderer', () => {
           calls.push({ method: 'chat.stopStream', params })
           return { ok: true }
         },
-        update: async () => ({ ok: true })
+        update: async (params: any) => {
+          calls.push({ method: 'chat.update', params })
+          return { ok: true }
+        }
       }
     }
 
@@ -459,7 +468,9 @@ describe('AgentSessionRenderer', () => {
     })
 
     const stop = calls.find(call => call.method === 'chat.stopStream')
-    const blocks = stop?.params.blocks ?? []
+    const update = calls.find(call => call.method === 'chat.update')
+    const blocks = update?.params.blocks ?? []
+    expect(stop?.params.blocks).toBeUndefined()
     expect(blocks.some((block: any) => block.type === 'plan')).toBe(true)
     expect(
       blocks.some(
@@ -469,6 +480,7 @@ describe('AgentSessionRenderer', () => {
     expect(blocks.some((block: any) => block.type === 'context')).toBe(false)
     expect(stopStreamFallbackText(stop?.params).trim()).toBe('')
     expect(calls.some(call => call.method === 'chat.appendStream')).toBe(true)
+    expect(update?.params.ts).toBe('1778866940.295499')
   })
 
   it('shows thinking text by default and renders the answer in markdown on finalize', async () => {

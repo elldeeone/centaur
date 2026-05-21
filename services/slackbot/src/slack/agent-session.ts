@@ -309,9 +309,6 @@ export class AgentSessionRenderer {
     const showThinking =
       !streamedTextLive && shouldShowThinkingBlock(commentaryMarkdown, answerMarkdown)
     const thinkingBlock = showThinking ? thinkingContextBlock(commentaryMarkdown) : null
-    // Keep a durable final layout even when the live stream already showed
-    // tasks/text. Slack's streamed surface is not reliable enough to be the only
-    // persisted content.
     const blocks = sanitizeFinalMessagePayload([
       ...(tasks.length
         ? [planBlock(planTitle(state.title, originalTasks), tasks, EXECUTION_PLAN_ID)]
@@ -324,14 +321,53 @@ export class AgentSessionRenderer {
       commentaryMarkdown: showThinking ? commentaryMarkdown : '',
       answerMarkdown
     })
+    const replaceLiveStreamWithFinalBlocks =
+      blocks.length > 0 && (Boolean(segment.streamedText.trim()) || segment.planStarted)
     const stopResponse = await this.client.chat.stopStream({
       channel: state.channel,
       ts: segment.streamTs,
-      chunks: markdownToStreamChunks(blocks.length || streamedTextLive ? ' ' : fallbackText),
-      ...(blocks.length ? { blocks } : {})
+      chunks: markdownToStreamChunks(
+        blocks.length || streamedTextLive || replaceLiveStreamWithFinalBlocks ? ' ' : fallbackText
+      ),
+      ...(!replaceLiveStreamWithFinalBlocks && blocks.length ? { blocks } : {})
     })
     if (!stopResponse.ok) throw new Error(stopResponse.error ?? 'chat.stopStream failed')
+    if (replaceLiveStreamWithFinalBlocks) {
+      await this.replaceFinalStreamMessage(state, segment, blocks, fallbackText)
+    }
     segment.closed = true
+  }
+
+  private async replaceFinalStreamMessage(
+    state: AgentSessionState,
+    segment: Segment,
+    blocks: AnyBlock[],
+    fallbackText: string
+  ): Promise<void> {
+    if (!segment.streamTs) return
+    try {
+      const response = await this.client.chat.update({
+        channel: state.channel,
+        ts: segment.streamTs,
+        text: fallbackText || state.title,
+        blocks
+      })
+      if (!response.ok) {
+        logWarn('slack_final_stream_update_failed', {
+          channel: state.channel,
+          thread_ts: state.parentTs,
+          stream_ts: segment.streamTs,
+          error: response.error ?? 'unknown_error'
+        })
+      }
+    } catch (error) {
+      logWarn('slack_final_stream_update_failed', {
+        channel: state.channel,
+        thread_ts: state.parentTs,
+        stream_ts: segment.streamTs,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   private async streamChunks(
