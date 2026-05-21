@@ -110,6 +110,7 @@ RUN set -eux; \
     tar -xzf /tmp/sccache.tar.gz -C /tmp; \
     install -m 0755 "/tmp/${sccache_pkg}/sccache" "$HOME/.cargo/bin/sccache"; \
     rm -rf /tmp/sccache.tar.gz /tmp/sccache.sha256 "/tmp/${sccache_pkg}"; \
+    mkdir -p "$HOME/.cache/sccache"; \
     sccache --version
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN curl -fsSL https://bun.sh/install | bash -s "${BUN_VERSION}"
