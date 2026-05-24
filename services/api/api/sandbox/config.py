@@ -93,6 +93,23 @@ def local_auth_uses_proxy(extra_env: list[tuple[str, str]] | None = None) -> boo
     return local_auth_transport(extra_env) == "proxy"
 
 
+def _local_auth_secret_source_kind() -> str:
+    return (
+        os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE")
+        or os.getenv("FIREWALL_MANAGER_SECRET_SOURCE")
+        or "env"
+    ).strip().lower()
+
+
+def codex_local_auth_uses_proxy(
+    extra_env: list[tuple[str, str]] | None = None,
+) -> bool:
+    return local_auth_uses_proxy(extra_env) and _local_auth_secret_source_kind() in {
+        "onepassword",
+        "onepassword-connect",
+    }
+
+
 def _sandbox_extra_env() -> list[tuple[str, str]]:
     raw = (os.getenv("KUBERNETES_SANDBOX_EXTRA_ENV") or "").strip()
     if not raw:
@@ -185,9 +202,10 @@ def container_env(
         if value:
             env.append(f"{key}={value}")
     use_proxy_local_auth = local_auth_uses_proxy(extra_env)
+    use_codex_proxy_local_auth = codex_local_auth_uses_proxy(extra_env)
     if engine == "codex" and sandbox_env_flag("CODEX_USE_LOCAL_AUTH", extra_env):
         env.append("CODEX_USE_LOCAL_AUTH=true")
-        if use_proxy_local_auth:
+        if use_codex_proxy_local_auth:
             env.append("CODEX_PROXY_AUTH=true")
             _set_env(env, "OPENAI_API_KEY", "")
             _set_env(env, "CODEX_API_KEY", "")

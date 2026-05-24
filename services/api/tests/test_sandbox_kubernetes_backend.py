@@ -232,6 +232,7 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
 def test_container_env_passes_proxy_local_auth_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
     monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
 
@@ -352,9 +353,14 @@ def test_harness_auth_secret_sources_are_engine_scoped(
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
     monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
 
-    assert secret_items("codex") == []
+    assert secret_items("codex") == [
+        ("custom-harness-auth", "CODEX_AUTH_JSON", "codex-auth.json")
+    ]
     assert secret_items("claude-code") == []
     assert secret_items("amp") == []
+
+    monkeypatch.setenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
+    assert secret_items("codex") == []
 
     monkeypatch.setenv("HARNESS_LOCAL_AUTH_TRANSPORT", "file")
 
@@ -379,6 +385,7 @@ def test_harness_proxy_auth_secrets_are_engine_scoped(
         _harness_proxy_auth_secrets,
     )
 
+    monkeypatch.setenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
     monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
 

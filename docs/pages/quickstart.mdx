@@ -89,6 +89,9 @@ Code OAuth refresh-token fields, when present, are copied into the separate
 `centaur-harness-auth` Secret. They are not added to `centaur-infra-env`,
 which the API consumes with `envFrom`.
 
+If your local stack uses environment-backed iron-proxy secrets, Codex local auth
+uses the file transport instead of proxy writeback.
+
 If local auth is missing, run the command it prints, or use:
 
 ```bash

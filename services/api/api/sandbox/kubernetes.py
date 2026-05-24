@@ -35,6 +35,7 @@ from api.proxy_config import (
 from api.sandbox.base import SandboxBackend, SandboxSession
 from api.sandbox.config import (
     build_harness_cmd,
+    codex_local_auth_uses_proxy,
     container_env,
     image,
     local_auth_uses_proxy,
@@ -75,12 +76,14 @@ def _harness_auth_secret_sources(engine: str) -> list[dict[str, Any]]:
             }
         }
 
-    if local_auth_uses_proxy():
-        return []
     if engine == "codex" and sandbox_env_flag("CODEX_USE_LOCAL_AUTH"):
+        if codex_local_auth_uses_proxy():
+            return []
         return [
             source("CODEX_AUTH_JSON", "codex-auth.json"),
         ]
+    if local_auth_uses_proxy():
+        return []
     if engine == "claude-code" and sandbox_env_flag("CLAUDE_USE_LOCAL_AUTH"):
         return [
             source("CLAUDE_CREDENTIALS_JSON", "claude-credentials.json"),
@@ -92,7 +95,7 @@ def _harness_uses_proxy_auth(engine: str) -> bool:
     if not local_auth_uses_proxy():
         return False
     if engine == "codex":
-        return sandbox_env_flag("CODEX_USE_LOCAL_AUTH")
+        return sandbox_env_flag("CODEX_USE_LOCAL_AUTH") and codex_local_auth_uses_proxy()
     if engine == "claude-code":
         return sandbox_env_flag("CLAUDE_USE_LOCAL_AUTH")
     return False

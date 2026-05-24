@@ -75,6 +75,10 @@ Enable use with sandbox flags such as `CODEX_USE_LOCAL_AUTH=true` and
 available to that sandbox's iron-proxy sidecar instead of the sandbox container
 itself.
 
+Codex proxy transport requires `FIREWALL_MANAGER_SECRET_SOURCE=onepassword` or
+`onepassword-connect` so iron-proxy can write back rotated refresh tokens. With
+environment-backed secret sources, Centaur falls back to Codex file transport.
+
 Claude Code subscription credentials contain a refresh token that can rotate.
 Use Console API keys or an auth helper/gateway for fleet-style concurrency.
 

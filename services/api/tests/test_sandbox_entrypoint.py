@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
+import time
 import tomllib
 from pathlib import Path
 
 
 ENTRYPOINT_SH = Path(__file__).resolve().parents[2] / "sandbox" / "entrypoint.sh"
+CODEX_STUB_ACCOUNT_ID = "iron-proxy-codex-stub-account"
 
 
 def _write_codex_harness_config(home: Path) -> Path:
@@ -54,6 +57,18 @@ def _write_codex_harness_config(home: Path) -> Path:
         )
     )
     return harness_dir
+
+
+def _assert_codex_stub_jwt(token: str) -> None:
+    parts = token.split(".")
+    assert len(parts) == 3
+    assert all(parts)
+    payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+    assert payload["exp"] > int(time.time()) + 86400
+    assert (
+        payload["https://api.openai.com/auth"]["chatgpt_account_id"]
+        == CODEX_STUB_ACCOUNT_ID
+    )
 
 
 def test_sandbox_entrypoint_bootstraps_mock_google_adc(tmp_path: Path) -> None:
@@ -230,9 +245,10 @@ def test_sandbox_entrypoint_writes_codex_proxy_auth_stub(tmp_path: Path) -> None
     assert result.returncode == 0, result.stderr or result.stdout
     auth = json.loads((home / ".codex" / "auth.json").read_text())
     assert auth["auth_mode"] == "chatgpt"
-    assert auth["tokens"]["access_token"] == "iron-proxy-codex-stub-token"
+    _assert_codex_stub_jwt(auth["tokens"]["access_token"])
+    _assert_codex_stub_jwt(auth["tokens"]["id_token"])
     assert auth["tokens"]["refresh_token"] == "iron-proxy-codex-stub-refresh-token"
-    assert auth["tokens"]["account_id"] == "iron-proxy-codex-stub-account"
+    assert auth["tokens"]["account_id"] == CODEX_STUB_ACCOUNT_ID
     assert result.stdout.splitlines()[-1] == "unset/unset/unset"
 
 
