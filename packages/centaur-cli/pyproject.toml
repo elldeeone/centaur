@@ -1,0 +1,26 @@
+[project]
+name = "centaur-cli"
+version = "0.1.0"
+description = "Interactive onboarding CLI for Centaur deployments"
+requires-python = ">=3.11"
+readme = "README.md"
+license = "Apache-2.0 OR MIT"
+dependencies = [
+    "rich>=13.0",
+    "typer>=0.12.0",
+]
+
+[project.scripts]
+centaur = "centaur_cli.main:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["centaur_cli"]

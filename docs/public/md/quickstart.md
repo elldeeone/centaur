@@ -19,6 +19,18 @@ such as `/md/quickstart.md`.
 
 ## 1. Install prerequisites
 
+For guided setup, install the onboarding CLI from this checkout and let it
+generate the overlay, Slack manifest, secret checklist, and deployment plan:
+
+```bash
+uv run --project packages/centaur-cli centaur init
+uv run --project packages/centaur-cli centaur doctor --deep
+uv run --project packages/centaur-cli centaur deploy kind
+```
+
+The wizard is resumable through `centaur init --resume` and writes local state
+under `~/.centaur`.
+
 From the repo root:
 
 ```bash
