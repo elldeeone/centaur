@@ -1193,6 +1193,37 @@ async def get_execution_terminal_snapshot(
     }
 
 
+async def _completed_session_result_for_reclaimed_turn(
+    pool,
+    *,
+    thread_key: str,
+    durable_turn_id: str,
+) -> str | None:
+    """Return the persisted result for a reclaimed turn that already completed.
+
+    A worker can die after the sandbox stream persists turn completion in
+    ``sandbox_sessions`` but before runtime control records the execution as
+    terminal.  Reclaimed executions with an existing durable turn id must not
+    wait only for a fresh live ``turn.done`` event; that event may already have
+    been consumed by the dead worker.
+    """
+    if not durable_turn_id:
+        return None
+    row = await pool.fetchrow(
+        "SELECT inflight_turn_id, last_result FROM sandbox_sessions "
+        "WHERE thread_key = $1",
+        thread_key,
+    )
+    if row is None:
+        return None
+    if row["inflight_turn_id"]:
+        return None
+    last_result = row["last_result"]
+    if last_result is None:
+        return None
+    return str(last_result)
+
+
 async def enqueue_execution(
     pool,
     *,
@@ -2700,6 +2731,29 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
 
     if durable_turn_id:
         await _heartbeat_execution_lease(pool, execution_id)
+        completed_result = await _completed_session_result_for_reclaimed_turn(
+            pool,
+            thread_key=thread_key,
+            durable_turn_id=durable_turn_id,
+        )
+        if completed_result is not None:
+            log.info(
+                "execution_reclaimed_completed_session_result",
+                execution_id=execution_id,
+                thread_key=thread_key,
+                durable_turn_id=durable_turn_id,
+                result_size_bytes=payload_size_bytes(completed_result),
+            )
+            await _mark_execution_terminal(
+                pool,
+                execution_id=execution_id,
+                thread_key=thread_key,
+                status="completed",
+                terminal_reason="completed_reclaimed_session_result",
+                result_text=completed_result,
+                error_text=None,
+            )
+            return
         if silence_deadline <= dt.datetime.now(dt.timezone.utc):
             silence_deadline = await _touch_execution_progress(pool, execution_id)
     else:
@@ -3255,6 +3309,26 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
             await backend.close_streams(session)
 
     if turn_done_event is None:
+        completed_result = await _completed_session_result_for_reclaimed_turn(
+            pool,
+            thread_key=thread_key,
+            durable_turn_id=durable_turn_id,
+        )
+        if completed_result is not None:
+            log.info(
+                "execution_stream_recovered_completed_session_result",
+                execution_id=execution_id,
+                thread_key=thread_key,
+                durable_turn_id=durable_turn_id,
+                result_size_bytes=payload_size_bytes(completed_result),
+            )
+            await _finalize_execution(
+                status="completed",
+                terminal_reason="completed_reclaimed_session_result",
+                result_text=completed_result,
+                error_text=None,
+            )
+            return
         status_row = await pool.fetchrow(
             "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
             execution_id,
