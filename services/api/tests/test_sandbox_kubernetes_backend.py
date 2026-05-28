@@ -258,6 +258,8 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
 
     env = sandbox_container_env(
         "thread-key",
@@ -296,6 +298,8 @@ def test_container_env_applies_kubernetes_sandbox_extra_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
     monkeypatch.setenv(
         "KUBERNETES_SANDBOX_EXTRA_ENV",
         json.dumps(
@@ -319,8 +323,14 @@ def test_container_env_applies_kubernetes_sandbox_extra_env(
     env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
     env_map = dict(item.split("=", 1) for item in env)
 
-    assert env_map["NO_PROXY"] == "localhost,127.0.0.1,api.internal,metrics.internal"
-    assert env_map["no_proxy"] == "localhost,127.0.0.1,api.internal,metrics.internal"
+    assert env_map["NO_PROXY"] == (
+        "localhost,127.0.0.1,firewall.internal,api.internal,host.orb.internal,"
+        "metrics.internal"
+    )
+    assert env_map["no_proxy"] == (
+        "localhost,127.0.0.1,firewall.internal,api.internal,host.orb.internal,"
+        "metrics.internal"
+    )
     assert env_map["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://host.orb.internal:8000"
     assert len([item for item in env if item.startswith("NO_PROXY=")]) == 1
     assert len([item for item in env if item.startswith("no_proxy=")]) == 1

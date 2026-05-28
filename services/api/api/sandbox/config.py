@@ -52,6 +52,19 @@ def _set_env(env: list[str], name: str, value: str) -> None:
     env.append(entry)
 
 
+def _merge_env_csv(env: list[str], name: str, value: str) -> None:
+    prefix = f"{name}="
+    additions = [item.strip() for item in value.split(",") if item.strip()]
+    for index, existing in enumerate(env):
+        if existing.startswith(prefix):
+            current = existing[len(prefix) :]
+            hosts = [item.strip() for item in current.split(",") if item.strip()]
+            merged = ",".join(dict.fromkeys([*hosts, *additions]))
+            env[index] = f"{name}={merged}"
+            return
+    env.append(f"{name}={','.join(dict.fromkeys(additions))}")
+
+
 def _sandbox_extra_env() -> list[tuple[str, str]]:
     raw = (os.getenv("KUBERNETES_SANDBOX_EXTRA_ENV") or "").strip()
     if not raw:
@@ -197,7 +210,10 @@ def container_env(
             env.append(f"{name}={dsn}")
 
     for name, value in extra_env:
-        _set_env(env, name, value)
+        if name in {"NO_PROXY", "no_proxy"}:
+            _merge_env_csv(env, name, value)
+        else:
+            _set_env(env, name, value)
 
     return env
 
