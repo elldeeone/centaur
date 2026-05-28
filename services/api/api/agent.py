@@ -866,11 +866,14 @@ async def get_or_spawn(
                         thread_key=thread_key,
                         sandbox=session.sandbox_id[:12],
                         error=str(exc),
+                        will_spawn_replacement=True,
                         exc_info=True,
                     )
-                    raise RuntimeError(
-                        f"failed to resume suspended sandbox: {session.sandbox_id}"
-                    ) from exc
+                    # The backend no longer has a resumable runtime. Treat the
+                    # session as stale and let the cleanup/spawn path below
+                    # create a replacement. The old harness thread belongs to
+                    # the missing sandbox and may not be valid in a fresh one.
+                    session.agent_thread_id = ""
             # Container is gone — save agent_thread_id and cursor for resume, clean up row
             old_agent_thread_id = session.agent_thread_id
             old_last_delivered_id = session.last_delivered_id
