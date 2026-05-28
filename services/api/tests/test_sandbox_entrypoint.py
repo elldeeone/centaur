@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ENTRYPOINT_SH = Path(__file__).resolve().parents[2] / "sandbox" / "entrypoint.sh"
+CODEX_AUTH_JSON = Path(__file__).resolve().parents[2] / "sandbox" / "codex-auth.json"
 
 
 def _write_codex_harness_config(home: Path) -> Path:
@@ -157,6 +158,7 @@ def test_sandbox_entrypoint_writes_codex_subscription_auth(tmp_path: Path) -> No
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
             "CODEX_AUTH_MODE": "access_token",
+            "CENTAUR_CODEX_AUTH_DEFAULT_JSON": str(CODEX_AUTH_JSON),
         },
     )
 
@@ -164,7 +166,7 @@ def test_sandbox_entrypoint_writes_codex_subscription_auth(tmp_path: Path) -> No
     auth_json, mode = result.stdout.rsplit("\n", 1)
     auth = json.loads(auth_json)
     assert auth["auth_mode"] == "chatgpt"
-    assert auth["tokens"]["refresh_token"] == "OPENAI_CODEX_REFRESH_TOKEN"
-    assert auth["tokens"]["account_id"] == "OPENAI_CODEX_ACCOUNT_ID"
+    assert auth["tokens"]["refresh_token"] == "dummy-refresh-token-replaced-by-iron-proxy-broker"
+    assert auth["tokens"]["account_id"] == "00000000-0000-0000-0000-000000000000"
     assert len(auth["tokens"]["access_token"].split(".")) == 3
     assert mode == "600"

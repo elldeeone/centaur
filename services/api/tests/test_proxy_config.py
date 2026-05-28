@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 import yaml
 
@@ -13,6 +11,7 @@ from api.proxy_config import (
     render_proxy_yaml,
 )
 from api.tool_manager import (
+    BrokeredTokenSecret,
     DEFAULT_MATCH_HEADERS,
     GcpAuthSecret,
     HmacHeader,
@@ -1070,13 +1069,16 @@ def test_tool_manager_codex_subscription_secrets_render_chatgpt_oauth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
-    monkeypatch.setenv(
-        "KUBERNETES_SANDBOX_EXTRA_ENV",
-        json.dumps([{"name": "CODEX_AUTH_MODE", "value": "access_token"}]),
+    tm = ToolManager([])
+    all_secrets = tm.collect_secrets()
+    secrets = tm.secrets_for_sandbox("codex", {"CODEX_AUTH_MODE": "access_token"})
+
+    assert any(
+        isinstance(secret, HttpSecret)
+        and secret.name == "OPENAI_API_KEY"
+        and secret.hosts == ("api.openai.com",)
+        for secret in all_secrets
     )
-
-    secrets = ToolManager([]).collect_secrets()
-
     assert not any(
         isinstance(secret, HttpSecret)
         and secret.name == "OPENAI_API_KEY"
@@ -1086,13 +1088,15 @@ def test_tool_manager_codex_subscription_secrets_render_chatgpt_oauth(
     codex_oauth = next(
         secret
         for secret in secrets
-        if isinstance(secret, OAuthTokenSecret)
-        and secret.name == "OPENAI_CODEX_BLOB"
+        if isinstance(secret, BrokeredTokenSecret)
+        and secret.name == "openai-codex"
     )
-    assert codex_oauth.grant == "refresh_token"
     assert codex_oauth.hosts == ("chatgpt.com",)
-    assert codex_oauth.scopes == ("openid", "profile", "email")
     assert codex_oauth.token_endpoint == "https://auth.openai.com/oauth/token"
+    assert dict(codex_oauth.fields) == {
+        "client_id": OAuthFieldSource("OPENAI_CODEX_CLIENT_ID"),
+        "refresh_token": OAuthFieldSource("OPENAI_CODEX_BLOB"),
+    }
 
     account_id = next(
         secret
@@ -1100,24 +1104,36 @@ def test_tool_manager_codex_subscription_secrets_render_chatgpt_oauth(
         if isinstance(secret, HttpSecret)
         and secret.name == "OPENAI_CODEX_ACCOUNT_ID"
     )
-    assert account_id.match_headers == ("ChatGPT-Account-Id",)
+    assert account_id.mode is SecretMode.INJECT
+    assert account_id.inject_header == "chatgpt-account-id"
 
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
-    token = next(t for t in tokens if t["rules"] == [{"host": "chatgpt.com"}])
-    assert token["token_endpoint"] == "https://auth.openai.com/oauth/token"
-    assert token["refresh_token"] == {
-        "type": "env",
-        "var": "OPENAI_CODEX_BLOB",
-        "json_key": "refresh_token",
+    assert not any(t["name"] == "oauth_token" for t in cfg["transforms"])
+    entries = next(
+        t for t in cfg["transforms"] if t["name"] == "secrets"
+    )["config"]["secrets"]
+    broker = next(
+        entry
+        for entry in entries
+        if isinstance(entry["source"], dict)
+        and entry["source"].get("type") == "token_broker"
+        and entry["source"].get("credential_id") == "openai-codex"
+    )
+    assert broker["source"]["ttl"] == "1m"
+    assert broker["inject"] == {
+        "header": "Authorization",
+        "formatter": "Bearer {{.Value}}",
     }
-    assert token["client_id"] == {"type": "env", "var": "OPENAI_CODEX_CLIENT_ID"}
-    headers = next(
-        t for t in cfg["transforms"] if t["name"] == "header_allowlist"
-    )["config"]["headers"]
-    assert "chatgpt-account-id" in headers
+    assert broker["rules"] == [{"host": "chatgpt.com"}]
+    account_entry = next(
+        entry
+        for entry in entries
+        if entry["source"] == {
+            "type": "env",
+            "var": "OPENAI_CODEX_ACCOUNT_ID",
+        }
+    )
+    assert account_entry["inject"] == {"header": "chatgpt-account-id"}
 
 
 def test_render_oauth_token_field_omits_json_key_for_whole_secret(
