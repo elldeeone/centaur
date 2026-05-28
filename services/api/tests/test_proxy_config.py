@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 import yaml
 
@@ -20,6 +22,7 @@ from api.tool_manager import (
     OAuthTokenSecret,
     PgDsnSecret,
     SecretMode,
+    ToolManager,
     _parse_secret,
     _parse_secrets,
 )
@@ -1063,6 +1066,60 @@ def test_render_emits_oauth_token_transform(
     assert "token_endpoint" not in tokens[0]
 
 
+def test_tool_manager_codex_subscription_secrets_render_chatgpt_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
+    monkeypatch.setenv(
+        "KUBERNETES_SANDBOX_EXTRA_ENV",
+        json.dumps([{"name": "CODEX_AUTH_MODE", "value": "access_token"}]),
+    )
+
+    secrets = ToolManager([]).collect_secrets()
+
+    assert not any(
+        isinstance(secret, HttpSecret)
+        and secret.name == "OPENAI_API_KEY"
+        and secret.hosts == ("api.openai.com",)
+        for secret in secrets
+    )
+    codex_oauth = next(
+        secret
+        for secret in secrets
+        if isinstance(secret, OAuthTokenSecret)
+        and secret.name == "OPENAI_CODEX_BLOB"
+    )
+    assert codex_oauth.grant == "refresh_token"
+    assert codex_oauth.hosts == ("chatgpt.com",)
+    assert codex_oauth.scopes == ("openid", "profile", "email")
+    assert codex_oauth.token_endpoint == "https://auth.openai.com/oauth/token"
+
+    account_id = next(
+        secret
+        for secret in secrets
+        if isinstance(secret, HttpSecret)
+        and secret.name == "OPENAI_CODEX_ACCOUNT_ID"
+    )
+    assert account_id.match_headers == ("ChatGPT-Account-Id",)
+
+    cfg = yaml.safe_load(render_proxy_yaml(secrets))
+    tokens = next(
+        t for t in cfg["transforms"] if t["name"] == "oauth_token"
+    )["config"]["tokens"]
+    token = next(t for t in tokens if t["rules"] == [{"host": "chatgpt.com"}])
+    assert token["token_endpoint"] == "https://auth.openai.com/oauth/token"
+    assert token["refresh_token"] == {
+        "type": "env",
+        "var": "OPENAI_CODEX_BLOB",
+        "json_key": "refresh_token",
+    }
+    assert token["client_id"] == {"type": "env", "var": "OPENAI_CODEX_CLIENT_ID"}
+    headers = next(
+        t for t in cfg["transforms"] if t["name"] == "header_allowlist"
+    )["config"]["headers"]
+    assert "chatgpt-account-id" in headers
+
+
 def test_render_oauth_token_field_omits_json_key_for_whole_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1494,7 +1551,10 @@ def test_render_emits_postgres_listeners_with_env_refs(
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     listeners = cfg["postgres"]
-    assert [l["name"] for l in listeners] == ["analytics_pg", "database_url"]
+    assert [listener["name"] for listener in listeners] == [
+        "analytics_pg",
+        "database_url",
+    ]
     assert listeners[0]["listen"] == "0.0.0.0:5432"
     assert listeners[1]["listen"] == "0.0.0.0:5433"
     # upstream.dsn uses the secret_ref directly so iron-proxy can resolve it

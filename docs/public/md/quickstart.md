@@ -19,17 +19,25 @@ such as `/md/quickstart.md`.
 
 ## 1. Install prerequisites
 
-For guided setup, install the onboarding CLI from this checkout and let it
-generate the overlay, Slack manifest, secret checklist, and deployment plan:
+For agent-driven setup, install the onboarding CLI from this checkout. The
+commands return structured output and CTAs so an agent can keep driving the next
+step:
 
 ```bash
-uv run --project packages/centaur-cli centaur init
-uv run --project packages/centaur-cli centaur doctor --deep
-uv run --project packages/centaur-cli centaur deploy kind
+pnpm install
+pnpm --silent --filter @centaur/cli centaur init --harness codex --auth-mode api_key
+pnpm --silent --filter @centaur/cli centaur integrations slack-manifest --domain centaur.example.com --app-name centaur --output org/slack-app-manifest.json --copy --harness codex --auth-mode api_key
+pnpm --silent --filter @centaur/cli centaur secrets collect --backend local-env --install-mode local --harness codex --auth-mode api_key --overlay-path org
+pnpm --silent --filter @centaur/cli centaur doctor --deep --harness codex --auth-mode api_key --secret-backend local-env --install-mode local
+pnpm --silent --filter @centaur/cli centaur deploy k3s
 ```
 
-The wizard is resumable through `centaur init --resume` and writes local state
-under `~/.centaur`.
+Pick one default harness for the deployment: `codex` or `claude-code`. Use
+`--auth-mode access_token` for the selected harness when routing through a
+dedicated ChatGPT or Claude.ai subscription account. The Slack manifest command
+copies JSON to your clipboard for paste-in-place setup, and `secrets collect`
+prompts for secret values with masked input before writing them to the selected
+backend.
 
 From the repo root:
 

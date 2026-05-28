@@ -1815,8 +1815,8 @@ class ToolManager:
     #
     # Bootstrap (per harness OAuth flow): run ``claude login`` / ``codex
     # login`` locally and copy the refresh token into the matching ``*_BLOB``
-    # secret item. The ``*_CLIENT_ID`` is a fixed public constant baked into
-    # the CLI; store the literal value. The codex flow also needs
+    # secret item. The ``*_CLIENT_ID`` value is collected into the selected
+    # secret backend alongside the refresh-token blob. The codex flow also needs
     # ``OPENAI_CODEX_ACCOUNT_ID`` (a ChatGPT account UUID injected as the
     # ``chatgpt-account-id`` header) so the backend routes to the right
     # workspace; the Anthropic flow has no equivalent header.

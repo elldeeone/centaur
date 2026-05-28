@@ -29,6 +29,7 @@ transforms:
         - "accept-encoding"
         - "accept-language"
         - "authorization"
+        - "chatgpt-account-id"
         - "jwt"
         - "anthropic-version"
         - "anthropic-beta"

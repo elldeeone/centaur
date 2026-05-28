@@ -135,3 +135,36 @@ def test_sandbox_entrypoint_installs_codex_harness_config(tmp_path: Path) -> Non
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert result.stdout == (harness_dir / "codex" / "config.toml").read_text()
+
+
+def test_sandbox_entrypoint_writes_codex_subscription_auth(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            'cat "$HOME/.codex/auth.json" && printf "\\n%s" "$(stat -c %a "$HOME/.codex/auth.json" 2>/dev/null || stat -f %Lp "$HOME/.codex/auth.json")"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "CODEX_AUTH_MODE": "access_token",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    auth_json, mode = result.stdout.rsplit("\n", 1)
+    auth = json.loads(auth_json)
+    assert auth["auth_mode"] == "chatgpt"
+    assert auth["tokens"]["refresh_token"] == "OPENAI_CODEX_REFRESH_TOKEN"
+    assert auth["tokens"]["account_id"] == "OPENAI_CODEX_ACCOUNT_ID"
+    assert len(auth["tokens"]["access_token"].split(".")) == 3
+    assert mode == "600"

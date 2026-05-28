@@ -41,7 +41,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
       | tee /etc/apt/sources.list.d/docker.list > /dev/null \
-    && apt-get update && apt-get install -y gh nodejs docker-ce-cli
+    && apt-get update && apt-get install -y --no-install-recommends \
+      gh nodejs docker-ce-cli
 
 # ── Non-root agent user ─────────────────────────────────────────────────────
 RUN useradd -m -s /bin/bash -u 1001 agent \
@@ -83,7 +84,8 @@ RUN set -eux; \
     nu --version | grep -F "${NUSHELL_VERSION}"
 
 # ── Global npm CLIs (root) ──────────────────────────────────────────────────
-RUN npm install -g --prefer-online --force \
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm install -g --prefer-online --no-audit --no-fund --omit=dev --force \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       "@openai/codex@${CODEX_VERSION}" \
       "@mariozechner/pi-coding-agent@${PI_CODING_AGENT_VERSION}" \

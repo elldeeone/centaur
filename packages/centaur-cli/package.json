@@ -1,0 +1,25 @@
+{
+  "name": "@centaur/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent-readable onboarding CLI for Centaur deployments",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "bin": {
+    "centaur": "./src/index.ts"
+  },
+  "scripts": {
+    "centaur": "tsx src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "incur": "^0.4.8",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.7.0",
+    "typescript": "5.9.3",
+    "vitest": "^4.1.0"
+  }
+}
