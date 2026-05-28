@@ -213,6 +213,64 @@ async def test_reconcile_tick_falls_back_to_gone_when_suspended_missing() -> Non
 
 
 @pytest.mark.asyncio
+async def test_get_or_spawn_replaces_suspended_session_when_resume_runtime_is_gone() -> None:
+    from api.agent import get_or_spawn
+
+    thread_key = "slack:T-test:C-test:123.456"
+    old_session = SandboxSession(
+        sandbox_id="sandbox-old",
+        thread_key=thread_key,
+        harness="codex",
+        engine="codex",
+        db_state="suspended",
+        agent_thread_id="dead-harness-thread",
+        last_delivered_id="msg-last",
+        trace_id="00000000-0000-0000-0000-000000000123",
+    )
+    fresh_session = SandboxSession(
+        sandbox_id="sandbox-fresh",
+        thread_key=thread_key,
+        harness="codex",
+        engine="codex",
+    )
+    pool = AsyncMock()
+    backend = AsyncMock()
+    backend.status = AsyncMock(return_value="gone")
+    backend.resume_by_id = AsyncMock()
+    backend.stop_by_id = AsyncMock()
+    backend.create = AsyncMock(return_value=fresh_session)
+
+    with (
+        patch("api.agent._get_pool", return_value=pool),
+        patch("api.agent._db_get_session", new=AsyncMock(return_value=old_session)),
+        patch("api.agent.get_backend", return_value=backend),
+        patch("api.agent._db_delete_session", new=AsyncMock()) as delete_session,
+        patch("api.agent._db_insert_session", new=AsyncMock(return_value=True)),
+        patch(
+            "api.agent.get_or_create_thread_trace_id",
+            new=AsyncMock(return_value="00000000-0000-0000-0000-000000000123"),
+        ),
+        patch(
+            "api.agent._evict_idle_sessions_for_capacity",
+            new=AsyncMock(return_value=0),
+        ),
+        patch("api.agent._get_runtime", return_value=RuntimeState()),
+        patch("api.agent._drop_runtime") as drop_runtime,
+        patch("api.agent._resolve_harness_profile", return_value=("codex", None, None)),
+        patch("api.warm_pool.claim_container", new=AsyncMock(return_value=None)),
+    ):
+        result = await get_or_spawn(thread_key, "codex")
+
+    assert result is fresh_session
+    backend.resume_by_id.assert_awaited_once_with("sandbox-old")
+    backend.stop_by_id.assert_awaited_once_with("sandbox-old")
+    delete_session.assert_awaited_once_with(thread_key)
+    drop_runtime.assert_any_call("sandbox-old")
+    backend.create.assert_awaited_once()
+    assert backend.create.await_args.kwargs["resume_thread_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_reconcile_tick_isolates_row_failures() -> None:
     from api.agent import reconcile_tick
 
