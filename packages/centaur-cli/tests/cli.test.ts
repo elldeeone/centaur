@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest'
 
 import { app, k3sDeploymentCommands } from '../src/app.js'
 import { envChecks } from '../src/checks.js'
+import { CentaurClient, parseSse } from '../src/client.js'
 import { CLAUDE_CODE_CLIENT_ID, OPENAI_CODEX_CLIENT_ID } from '../src/constants.js'
+import { runAgent } from '../src/run.js'
 import { kubernetesEnvFile, writeSecrets } from '../src/secrets.js'
 import { harnessAuthPlan, slackManifest, writeOverlay, writeSlackManifest } from '../src/templates.js'
 
@@ -21,6 +23,26 @@ async function runCli(args: string[]) {
     },
   })
   return stdout
+}
+
+function response(data: unknown, init?: ResponseInit) {
+  return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    ...init,
+  })
+}
+
+function sse(body: string) {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body))
+        controller.close()
+      },
+    }),
+    { headers: { 'content-type': 'text/event-stream' } },
+  )
 }
 
 describe('slack manifest', () => {
@@ -231,5 +253,211 @@ describe('secret backends', () => {
     expect(text).toContain('OPENAI_API_KEY=sk-secret')
     expect(result.command).toBe(`write ${target}`)
     expect(result.command).not.toContain('xoxb-secret')
+  })
+})
+
+describe('agent run client', () => {
+  it('posts spawn, message, and execute payloads', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init })
+      if (String(url).endsWith('/agent/spawn')) {
+        return response({ thread_key: 'cli:test', assignment_generation: 7 })
+      }
+      if (String(url).endsWith('/agent/message')) return response({ ok: true, message_id: 'msg-1' })
+      if (String(url).endsWith('/agent/execute')) return response({ execution_id: 'exe-1', status: 'queued' })
+      throw new Error(`unexpected url ${String(url)}`)
+    }) as typeof fetch
+
+    const client = new CentaurClient({
+      apiUrl: 'http://api.test/',
+      apiKey: 'key',
+      fetchImpl,
+    })
+
+    const spawn = await client.spawn({ threadKey: 'cli:test', harness: 'codex' })
+    await client.message({
+      threadKey: 'cli:test',
+      assignmentGeneration: spawn.assignment_generation,
+      parts: [{ type: 'text', text: 'hello' }],
+    })
+    await client.execute({
+      threadKey: 'cli:test',
+      assignmentGeneration: spawn.assignment_generation,
+      harness: 'codex',
+    })
+
+    expect(calls.map(call => [call.url, call.init?.body && JSON.parse(String(call.init.body))])).toEqual([
+      [
+        'http://api.test/agent/spawn',
+        {
+          thread_key: 'cli:test',
+          harness: 'codex',
+        },
+      ],
+      [
+        'http://api.test/agent/message',
+        {
+          thread_key: 'cli:test',
+          assignment_generation: 7,
+          role: 'user',
+          parts: [{ type: 'text', text: 'hello' }],
+          metadata: { platform: 'cli' },
+        },
+      ],
+      [
+        'http://api.test/agent/execute',
+        {
+          thread_key: 'cli:test',
+          assignment_generation: 7,
+          harness: 'codex',
+          delivery: { platform: 'cli' },
+          metadata: { platform: 'cli' },
+        },
+      ],
+    ])
+    expect(calls[0]?.init?.headers).toMatchObject({
+      Authorization: 'Bearer key',
+      'X-Api-Key': 'key',
+    })
+  })
+
+  it('parses SSE frames with ids, events, multiline data, and invalid json fallback', async () => {
+    const frames = []
+    const stream = sse(
+      [
+        'id: 1',
+        'event: assistant',
+        'data: {"result":"hello"}',
+        '',
+        'id: 2',
+        'event: message',
+        'data: first',
+        'data: second',
+        '',
+      ].join('\n'),
+    ).body!
+
+    for await (const frame of parseSse(stream)) frames.push(frame)
+
+    expect(frames).toEqual([
+      { id: '1', event: 'assistant', data: '{"result":"hello"}' },
+      { id: '2', event: 'message', data: 'first\nsecond' },
+    ])
+  })
+
+  it('runs the durable agent flow and preserves every streamed API event', async () => {
+    const calls: string[] = []
+    const fetchImpl = (async (url: string | URL | Request) => {
+      const target = String(url)
+      calls.push(target)
+      if (target.endsWith('/agent/spawn')) {
+        return response({ thread_key: 'cli:test', assignment_generation: 7 })
+      }
+      if (target.endsWith('/agent/message')) return response({ ok: true, message_id: 'msg-1' })
+      if (target.endsWith('/agent/execute')) return response({ execution_id: 'exe-1', status: 'queued' })
+      if (target.includes('/agent/threads/cli%3Atest/events')) {
+        return sse(
+          [
+            'id: 1',
+            'event: harness_raw_event',
+            'data: {"item":{"type":"userMessage","content":[{"type":"text","text":"hello"}]},"type":"item.completed"}',
+            '',
+            'id: 2',
+            'event: chat_stream_chunk',
+            'data: {"type":"markdown_text","text":"P"}',
+            '',
+            'id: 3',
+            'event: chat_stream_chunk',
+            'data: {"type":"markdown_text","text":"P"}',
+            '',
+            'id: 4',
+            'event: execution_state',
+            'data: {"status":"completed","result_text":"P"}',
+            '',
+          ].join('\n'),
+        )
+      }
+      if (target.endsWith('/agent/executions/exe-1')) {
+        return response({ status: 'completed', result_text: 'P' })
+      }
+      throw new Error(`unexpected url ${target}`)
+    }) as typeof fetch
+
+    const stream = runAgent({
+      apiUrl: 'http://api.test',
+      apiKey: 'key',
+      prompt: 'hello',
+      threadKey: 'cli:test',
+      harness: 'codex',
+      fetchImpl,
+    })
+
+    const yielded = []
+    let next = await stream.next()
+    while (!next.done) {
+      yielded.push(next.value)
+      next = await stream.next()
+    }
+
+    expect(yielded).toEqual([
+      {
+        phase: 'spawned',
+        threadKey: 'cli:test',
+        assignmentGeneration: 7,
+      },
+      {
+        phase: 'message_persisted',
+        messageId: 'msg-1',
+      },
+      {
+        phase: 'execution_queued',
+        executionId: 'exe-1',
+        status: 'queued',
+      },
+      {
+        phase: 'api_event',
+        eventId: 1,
+        eventKind: 'harness_raw_event',
+        data: {
+          item: {
+            type: 'userMessage',
+            content: [{ type: 'text', text: 'hello' }],
+          },
+          type: 'item.completed',
+        },
+      },
+      {
+        phase: 'api_event',
+        eventId: 2,
+        eventKind: 'chat_stream_chunk',
+        data: { type: 'markdown_text', text: 'P' },
+      },
+      {
+        phase: 'api_event',
+        eventId: 3,
+        eventKind: 'chat_stream_chunk',
+        data: { type: 'markdown_text', text: 'P' },
+      },
+      {
+        phase: 'api_event',
+        eventId: 4,
+        eventKind: 'execution_state',
+        data: { status: 'completed', result_text: 'P' },
+      },
+      {
+        phase: 'final_state',
+        executionId: 'exe-1',
+        state: { status: 'completed', result_text: 'P' },
+      },
+    ])
+    expect(next.value).toEqual({
+      threadKey: 'cli:test',
+      assignmentGeneration: 7,
+      executionId: 'exe-1',
+      status: 'completed',
+      resultText: 'P',
+    })
+    expect(calls.at(-1)).toBe('http://api.test/agent/executions/exe-1')
   })
 })

@@ -40,6 +40,7 @@ import {
   type SecretBackendOptions,
   type SecretMap,
 } from './secrets.js'
+import { runAgent } from './run.js'
 
 const authModeSchema = z.enum(AUTH_MODES)
 const harnessSchema = z.enum(HARNESSES)
@@ -1024,10 +1025,81 @@ const deploy = Cli.create('deploy', {
   })
 
 export const app = Cli.create('centaur', {
-  description: 'Centaur onboarding and operations CLI',
+  description: 'Centaur onboarding, deployment, and agent operations CLI',
   version: VERSION,
   mcp: {},
 })
+  .command('run', {
+    description: 'Run one Centaur agent turn and pipe API events.',
+    args: z.object({
+      prompt: z.string().describe('Prompt to send to the Centaur agent.'),
+    }),
+    options: z.object({
+      thread: z.string().optional().describe('Thread key to reuse or create'),
+      harness: z.string().optional().describe('Harness to run, for example codex, amp, or claude-code'),
+      engine: z.string().optional().describe('Optional harness engine/model override'),
+      persona: z.string().optional().describe('Optional Centaur persona id'),
+      apiUrl: z
+        .string()
+        .optional()
+        .describe('Centaur API URL. Defaults to CENTAUR_API_URL or http://127.0.0.1:8000.'),
+      apiKey: z.string().optional().describe('Centaur API key. Defaults to CENTAUR_API_KEY.'),
+      noStream: z.boolean().default(false).describe('Skip SSE streaming and poll final state only'),
+      pollMs: z.number().int().positive().optional().describe('Server stream polling interval in milliseconds'),
+    }),
+    env: z.object({
+      CENTAUR_API_URL: z.string().optional().describe('Default Centaur API URL'),
+      CENTAUR_API_KEY: z.string().optional().describe('Centaur API key'),
+    }),
+    async *run(c) {
+      const apiUrl = c.options.apiUrl || c.env.CENTAUR_API_URL || 'http://127.0.0.1:8000'
+      const apiKey = c.options.apiKey || c.env.CENTAUR_API_KEY
+      if (!apiKey) {
+        return c.error({
+          code: 'MISSING_API_KEY',
+          message: 'Set CENTAUR_API_KEY or pass --api-key.',
+          retryable: true,
+          cta: {
+            commands: [
+              {
+                command: 'export CENTAUR_API_KEY=<api-key>',
+                description: 'set the API key for subsequent CLI runs',
+              },
+            ],
+          },
+        })
+      }
+
+      const stream = runAgent({
+        apiUrl,
+        apiKey,
+        prompt: c.args.prompt,
+        threadKey: c.options.thread,
+        harness: c.options.harness,
+        engine: c.options.engine,
+        personaId: c.options.persona,
+        stream: !c.options.noStream,
+        pollMs: c.options.pollMs,
+      })
+
+      let next = await stream.next()
+      while (!next.done) {
+        yield next.value
+        next = await stream.next()
+      }
+
+      return c.ok(next.value, {
+        cta: {
+          commands: [
+            {
+              command: commandLine(['run', c.args.prompt, '--thread', next.value.threadKey]),
+              description: 'continue this same Centaur thread',
+            },
+          ],
+        },
+      })
+    },
+  })
   .command('init', {
     description: 'Start a Centaur setup run by scaffolding files and returning next-step CTAs.',
     options: z.object({
