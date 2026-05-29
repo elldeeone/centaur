@@ -46,7 +46,7 @@ jobs:
         run: |
           uv run pytest -q \
             tests/test_workflows.py::test_create_slack_thread_turn_workflow_eager_start \
-            tests/test_workflows.py::test_slack_thread_turn_active_assignment_does_not_backfill_stop_history \
+            tests/test_workflows.py::test_slack_thread_turn_active_assignment_still_backfills_thread_history \
             tests/test_workflows.py::test_cancel_workflow_run_cancels_linked_execution \
             tests/test_agent_control_plane.py::test_cancel_execution_stops_runtime_and_clears_inflight \
             tests/test_agent_control_plane.py::test_steer_stdin_interrupts_amp_before_injecting \
