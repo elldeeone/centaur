@@ -1177,6 +1177,9 @@ describe('secret backends', () => {
     expect(deploy.command).toContain(`--values ${join(overlayPath, 'values.centaur.yaml')}`)
     expect(deploy.command).toContain('--wait --timeout 10m')
     expect(deploy.command).not.toContain('--secrets-file')
+    expect(output.steps.map((step: { command: string }) => step.command)).toEqual(
+      output.cta.commands.map((command: { command: string }) => command.command),
+    )
   })
 
   it('preserves custom local-env paths in doctor deploy CTAs', async () => {
@@ -1218,6 +1221,9 @@ describe('secret backends', () => {
     expect(deploy.command).toContain(`--values ${join(overlayPath, 'values.centaur.yaml')}`)
     expect(deploy.command).toContain(`--secrets-file ${localEnvPath}`)
     expect(deploy.command).not.toContain(join(overlayPath, 'secrets.local.env'))
+    expect(output.steps.map((step: { command: string }) => step.command)).toEqual(
+      output.cta.commands.map((command: { command: string }) => command.command),
+    )
   })
 
   it('does not suggest deploy before failed doctor checks are repaired', async () => {
@@ -1240,6 +1246,7 @@ describe('secret backends', () => {
     expect(ctaCommands[0]).toContain(`--overlay-path ${overlayPath}`)
     expect(ctaCommands.some((command: string) => command.startsWith('centaur deploy '))).toBe(false)
     expect(ctaCommands.at(-1)).toContain('centaur doctor --deep')
+    expect(output.steps.map((step: { command: string }) => step.command)).toEqual(ctaCommands)
   })
 
   it('uses backend-aware deep doctor checks for non-env secret stores', async () => {

@@ -3069,7 +3069,7 @@ export const app = Cli.create('centaur', {
             },
           ]
       return c.ok(
-        { ok, results },
+        { ok, results, steps: commandSteps(ctaCommands) },
         {
           cta: {
             description: ok ? 'Next deployment commands:' : 'Repair failing checks first:',
