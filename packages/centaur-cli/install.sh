@@ -81,18 +81,13 @@ trap cleanup EXIT
 
 mkdir -p "$BUILD_DIR"
 cp -R "$PACKAGE_DIR/src" "$BUILD_DIR/src"
-cp "$PACKAGE_DIR/tsconfig.json" "$PACKAGE_DIR/tsconfig.build.json" "$BUILD_DIR/"
 cat >"$BUILD_DIR/package.json" <<'JSON'
 {
   "private": true,
   "type": "module",
-  "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/index.js"
-  },
   "dependencies": {
-    "@types/node": "^25.7.0",
-    "incur": "^0.4.8",
-    "typescript": "5.9.3"
+    "esbuild": "^0.27.0",
+    "incur": "^0.4.8"
   }
 }
 JSON
@@ -100,7 +95,15 @@ JSON
 (
   cd "$BUILD_DIR"
   npm install --package-lock=false --no-audit --no-fund
-  npm run build
+  ./node_modules/.bin/esbuild src/index.ts \
+    --bundle \
+    --platform=node \
+    --target=node22 \
+    --format=esm \
+    --outfile=dist/index.js \
+    --legal-comments=none \
+    '--banner:js=import { createRequire } from "node:module";const require=createRequire(import.meta.url);'
+  chmod +x dist/index.js
 )
 
 rm -rf "$RUNTIME_DIR"
@@ -109,16 +112,9 @@ cp -R "$BUILD_DIR/dist" "$RUNTIME_DIR/dist"
 cat >"$RUNTIME_DIR/package.json" <<'JSON'
 {
   "private": true,
-  "type": "module",
-  "dependencies": {
-    "incur": "^0.4.8"
-  }
+  "type": "module"
 }
 JSON
-(
-  cd "$RUNTIME_DIR"
-  npm install --omit=dev --package-lock=false --no-audit --no-fund
-)
 
 mkdir -p "$BIN_DIR"
 ln -sf "$RUNTIME_DIR/dist/index.js" "$BIN_DIR/centaur"
