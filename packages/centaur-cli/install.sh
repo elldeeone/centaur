@@ -98,6 +98,7 @@ require_cmd npm
 if [[ "$(node_major)" -lt 22 ]]; then
   die "Node.js 22 or newer is required; found $(node -v)"
 fi
+NODE_BIN="$(command -v node)"
 
 SOURCE_DIR="$(checkout_source)"
 PACKAGE_DIR="$SOURCE_DIR/packages/centaur-cli"
@@ -159,7 +160,21 @@ cat >"$RUNTIME_DIR/package.json" <<'JSON'
 JSON
 
 mkdir -p "$BIN_DIR"
-ln -sf "$RUNTIME_DIR/dist/index.js" "$BIN_DIR/centaur"
+rm -f "$BIN_DIR/centaur"
+cat >"$BIN_DIR/centaur" <<EOF
+#!/bin/sh
+NODE_BIN=$(shell_quote "$NODE_BIN")
+CLI_JS=$(shell_quote "$RUNTIME_DIR/dist/index.js")
+if [ ! -x "\$NODE_BIN" ]; then
+  NODE_BIN="\$(command -v node 2>/dev/null || true)"
+fi
+if [ -z "\$NODE_BIN" ]; then
+  echo "centaur: Node.js 22 or newer is required. Install Node, then rerun the installer." >&2
+  exit 127
+fi
+exec "\$NODE_BIN" "\$CLI_JS" "\$@"
+EOF
+chmod +x "$BIN_DIR/centaur"
 
 echo "Installed centaur at $BIN_DIR/centaur"
 centaur_cmd="centaur"
