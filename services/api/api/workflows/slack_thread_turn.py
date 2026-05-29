@@ -336,31 +336,50 @@ def _is_recovery_turn(parts: list[dict[str, Any]]) -> bool:
     return _normalize_recovery_command(text) in _RECOVERY_COMMANDS
 
 
+def _history_item_is_mention(item: dict[str, Any]) -> bool:
+    metadata = item.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    slack = metadata.get("slack")
+    if isinstance(slack, dict) and isinstance(slack.get("is_mention"), bool):
+        return slack["is_mention"]
+    if isinstance(metadata.get("is_mention"), bool):
+        return metadata["is_mention"]
+    return False
+
+
 def _lookup_last_unresolved_ask_from_history(
     history_messages: list[dict[str, Any]],
     *,
     user_id: str | None,
     current_message_id: str | None,
 ) -> tuple[str | None, dict[str, Any]]:
-    for item in reversed(history_messages):
-        if not isinstance(item, dict):
-            continue
-        message_id = str(item.get("message_id") or item.get("messageId") or "").strip()
-        if current_message_id and message_id == current_message_id:
-            continue
-        history_user_id = item.get("user_id") or item.get("userId")
-        if user_id and history_user_id and history_user_id != user_id:
-            continue
-        text = _extract_text_parts(item.get("parts"))
-        if not text:
-            continue
-        if _normalize_recovery_command(text) in _RECOVERY_COMMANDS:
-            continue
-        return text, {
-            "hydrated_from_message_id": message_id or None,
-            "hydrated_from_user_id": history_user_id,
-            "hydrated_from_source": "workflow_history",
-        }
+    for prefer_mention in (True, False):
+        for item in reversed(history_messages):
+            if not isinstance(item, dict):
+                continue
+            if prefer_mention and not _history_item_is_mention(item):
+                continue
+            message_id = str(item.get("message_id") or item.get("messageId") or "").strip()
+            if current_message_id and message_id == current_message_id:
+                continue
+            role = str(item.get("role") or "user").strip().lower()
+            if role != "user":
+                continue
+            history_user_id = item.get("user_id") or item.get("userId")
+            if user_id and history_user_id and history_user_id != user_id:
+                continue
+            text = _extract_text_parts(item.get("parts"))
+            if not text:
+                continue
+            if _normalize_recovery_command(text) in _RECOVERY_COMMANDS:
+                continue
+            return text, {
+                "hydrated_from_message_id": message_id or None,
+                "hydrated_from_user_id": history_user_id,
+                "hydrated_from_source": "workflow_history",
+                "hydrated_from_mention": _history_item_is_mention(item),
+            }
     return None, {}
 
 

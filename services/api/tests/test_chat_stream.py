@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from api.chat_stream import (
     CHAT_STREAM_CHUNK_TYPES,
     CHAT_STREAM_EVENT_KIND,
@@ -176,21 +179,21 @@ def test_projector_keeps_codex_commentary_and_answer_in_chat_sdk_chunk_shapes():
     assert chunks == [
         {
             "type": "task_update",
-            "id": "thinking:thinking-1",
+            "id": "thinking",
             "title": "Thinking",
             "status": "in_progress",
         },
         {
             "type": "task_update",
-            "id": "thinking:thinking-1",
-            "title": "Thinking",
+            "id": "thinking",
+            "title": "Thinking: Inspecting the failing test",
             "status": "in_progress",
             "output": "Inspecting the failing test.",
         },
         {
             "type": "task_update",
-            "id": "thinking:thinking-1",
-            "title": "Thinking",
+            "id": "thinking",
+            "title": "Thinking: Inspecting the failing test",
             "status": "complete",
             "output": "Inspecting the failing test.",
         },
@@ -245,8 +248,8 @@ def test_projector_covers_every_vercel_chat_sdk_stream_chunk_type():
         },
         {
             "type": "task_update",
-            "id": "reasoning",
-            "title": "Thinking",
+            "id": "thinking",
+            "title": "Thinking: Thinking through the validation path",
             "status": "in_progress",
             "output": "Thinking through the validation path.",
         },
@@ -329,6 +332,65 @@ def test_projector_uses_visible_command_title_without_markdown_ticks():
             "output": '{"events":[]}',
         },
     ]
+
+
+def test_projector_bounds_task_output_for_native_chat_sdk_task_cards():
+    chunks = _project(
+        {
+            "type": "item.started",
+            "itemId": "thinking-1",
+            "item": {"id": "thinking-1", "type": "agentMessage", "phase": "commentary"},
+        },
+        {
+            "type": "item.agentMessage.delta",
+            "itemId": "thinking-1",
+            "delta": "Inspecting " + "x" * 500,
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "cmd-call",
+                "type": "commandExecution",
+                "command": '/bin/bash -lc "call kalshi list_events --limit 2"',
+                "status": "completed",
+                "exit_code": 0,
+                "aggregated_output": "```json\n" + '{"events":[' + '"x",' * 200 + '"z"]}' + "\n```",
+            },
+        },
+    )
+
+    for chunk in chunks:
+        _assert_chat_sdk_chunk(chunk)
+        if chunk["type"] == "task_update" and "output" in chunk:
+            assert len(chunk["output"]) <= 230
+            assert "```" not in chunk["output"]
+
+
+def test_projector_polishes_real_codex_fixture_for_native_task_cards():
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "services/slackbot/test-fixtures/codex/exe_a89da7f248bb4724-min.json"
+    )
+    events = json.loads(fixture_path.read_text())["events"]
+    chunks = _project(*events)
+
+    for chunk in chunks:
+        _assert_chat_sdk_chunk(chunk)
+    task_chunks = [chunk for chunk in chunks if chunk["type"] == "task_update"]
+    thinking_chunks = [
+        chunk for chunk in task_chunks if str(chunk.get("title", "")).startswith("Thinking")
+    ]
+    assert thinking_chunks
+    assert {chunk["id"] for chunk in thinking_chunks} == {"thinking"}
+    assert any(
+        chunk["title"].startswith("Thinking: Use the AI ecosystem brief skill")
+        for chunk in thinking_chunks
+    )
+    for chunk in task_chunks:
+        assert len(chunk["title"]) <= 128
+        if "output" in chunk:
+            assert len(chunk["output"]) <= 230
+            assert "```" not in chunk["output"]
 
 
 def test_runtime_header_chunk_keeps_metadata_at_top_as_markdown():

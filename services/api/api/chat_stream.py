@@ -18,6 +18,9 @@ from typing import Any
 CHAT_STREAM_EVENT_KIND = "chat_stream_chunk"
 CHAT_STREAM_CHUNK_TYPES = frozenset({"markdown_text", "task_update", "plan_update"})
 DEFAULT_CLAUDE_CODE_MODEL = "claude-opus-4-8"
+CHAT_PLAN_TITLE_CHARS = 256
+CHAT_TASK_TITLE_CHARS = 128
+CHAT_TASK_OUTPUT_CHARS = 230
 
 _TERMINAL_EVENT_TYPES = frozenset(
     {"turn.done", "turn.completed", "execution_state", "result"}
@@ -42,9 +45,9 @@ def _stable_id(prefix: str, *values: Any) -> str:
     return f"{prefix}:{digest}"
 
 
-def _format_json(value: Any) -> str:
+def _format_compact_json(value: Any) -> str:
     try:
-        return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False)
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     except Exception:
         return str(value)
 
@@ -57,11 +60,11 @@ def _format_output(value: Any) -> str:
         stripped = text.strip()
         if stripped.startswith("{") or stripped.startswith("["):
             try:
-                return _format_json(json.loads(stripped))
+                return _format_compact_json(json.loads(stripped))
             except Exception:
                 return text
         return text
-    return _format_json(value)
+    return _format_compact_json(value)
 
 
 def _one_line(value: str, limit: int = 120) -> str:
@@ -69,6 +72,46 @@ def _one_line(value: str, limit: int = 120) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: max(limit - 3, 1)] + "..."
+
+
+def _strip_markdown_fence(text: str) -> str:
+    stripped = text.strip()
+    match = re.fullmatch(r"```[a-zA-Z0-9_-]*\n?(.*?)\n?```", stripped, re.DOTALL)
+    return match.group(1).strip() if match else text
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    suffix = "... (truncated)"
+    return text[: max(limit - len(suffix), 1)].rstrip() + suffix
+
+
+def _task_output_preview(value: Any, limit: int = CHAT_TASK_OUTPUT_CHARS) -> str:
+    text = _strip_markdown_fence(_format_output(value))
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return _truncate_text(text, limit)
+
+
+def _thinking_summary(text: str) -> str:
+    candidate = re.split(r"(?<=[.!?])\s+", text.strip(), maxsplit=1)[0]
+    candidate = candidate.splitlines()[0] if candidate else ""
+    candidate = re.sub(
+        r"^(?:i(?:'ll|’ll| will| am|'m|’m)\s+|let me\s+|we need to\s+|need to\s+)",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip()
+    candidate = candidate.strip(" .")
+    if candidate and candidate[0].islower():
+        candidate = candidate[0].upper() + candidate[1:]
+    return _one_line(candidate, CHAT_TASK_TITLE_CHARS - len("Thinking: "))
+
+
+def _thinking_title(text: str) -> str:
+    summary = _thinking_summary(text)
+    return f"Thinking: {summary}" if summary else "Thinking"
 
 
 def _task_status(value: Any, *, done: bool = False, failed: bool = False) -> str:
@@ -152,11 +195,13 @@ def _task_update(
     chunk: dict[str, Any] = {
         "type": "task_update",
         "id": task_id,
-        "title": _one_line(title) or "Task",
+        "title": _one_line(title, CHAT_TASK_TITLE_CHARS) or "Task",
         "status": status,
     }
     if output:
-        chunk["output"] = output
+        preview = _task_output_preview(output)
+        if preview:
+            chunk["output"] = preview
     return chunk
 
 
@@ -196,7 +241,7 @@ def _tool_start_output(name: str, tool_input: dict[str, Any]) -> str:
         return ""
     if not tool_input:
         return ""
-    return f"```json\n{_format_json(tool_input)}\n```"
+    return _format_output(tool_input)
 
 
 def _agent_message_event_id(event: dict[str, Any]) -> str:
@@ -337,11 +382,11 @@ def _file_change_output(changes: list[Any]) -> str:
         path = _as_str(record.get("path"))
         diff = _as_str(record.get("diff")) or _as_str(record.get("unified_diff"))
         if path and diff:
-            rendered.append(f"{path}\n```diff\n{diff}\n```")
+            rendered.append(f"{path}\n{diff}")
         elif path:
             rendered.append(path)
         elif diff:
-            rendered.append(f"```diff\n{diff}\n```")
+            rendered.append(diff)
     return "\n\n".join(rendered)
 
 
@@ -404,7 +449,9 @@ class ChatStreamProjector:
         elif event_type == "item.plan.delta":
             text = _extract_delta_text(event).strip()
             if text:
-                chunks.append({"type": "plan_update", "title": _one_line(text)})
+                chunks.append(
+                    {"type": "plan_update", "title": _one_line(text, CHAT_PLAN_TITLE_CHARS)}
+                )
         elif event_type == "result":
             text = _terminal_result_text(event)
             if text:
@@ -465,6 +512,23 @@ class ChatStreamProjector:
         if chunk_type in {"task_update", "plan_update"}:
             if self._last_markdown_tail and not self._last_markdown_tail[-1].isspace():
                 self._pending_text_separator = True
+            if chunk_type == "plan_update":
+                return {
+                    **chunk,
+                    "title": _one_line(_as_str(chunk.get("title")), CHAT_PLAN_TITLE_CHARS),
+                }
+            output = _as_str(chunk.get("output"))
+            prepared = {
+                **chunk,
+                "title": _one_line(_as_str(chunk.get("title")), CHAT_TASK_TITLE_CHARS),
+            }
+            if output:
+                preview = _task_output_preview(output)
+                if preview:
+                    prepared["output"] = preview
+                else:
+                    prepared.pop("output", None)
+            return prepared
         return chunk
 
     def _project_assistant(self, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -522,11 +586,12 @@ class ChatStreamProjector:
         if not text:
             return []
         self._reasoning_text += text
-        self._open_tasks["reasoning"] = "Thinking"
+        title = _thinking_title(self._reasoning_text)
+        self._open_tasks["thinking"] = title
         return [
             _task_update(
-                task_id="reasoning",
-                title="Thinking",
+                task_id="thinking",
+                title=title,
                 status="in_progress",
                 output=self._reasoning_text,
             )
@@ -615,10 +680,10 @@ class ChatStreamProjector:
                 if item_id:
                     self._agent_message_phase_by_id[item_id] = phase
             if event_type == "item.started" and phase == "commentary" and item_id:
-                self._open_tasks[f"thinking:{item_id}"] = "Thinking"
+                self._open_tasks["thinking"] = "Thinking"
                 chunks.append(
                     _task_update(
-                        task_id=f"thinking:{item_id}",
+                        task_id="thinking",
                         title="Thinking",
                         status="in_progress",
                     )
@@ -628,11 +693,11 @@ class ChatStreamProjector:
                 resolved_phase = phase or self._agent_message_phase_by_id.get(item_id)
                 if resolved_phase == "commentary" and item_id:
                     self._agent_text_by_id[item_id] = text
-                    self._open_tasks.pop(f"thinking:{item_id}", None)
+                    self._open_tasks.pop("thinking", None)
                     chunks.append(
                         _task_update(
-                            task_id=f"thinking:{item_id}",
-                            title="Thinking",
+                            task_id="thinking",
+                            title=_thinking_title(text),
                             status="complete",
                             output=text,
                         )
@@ -696,9 +761,11 @@ class ChatStreamProjector:
         )
         self._agent_text_by_id[item_id] = self._agent_text_by_id.get(item_id, "") + text
         if phase == "commentary":
+            title = _thinking_title(self._agent_text_by_id[item_id])
+            self._open_tasks["thinking"] = title
             return _task_update(
-                task_id=f"thinking:{item_id}",
-                title="Thinking",
+                task_id="thinking",
+                title=title,
                 status="in_progress",
                 output=self._agent_text_by_id[item_id],
             )

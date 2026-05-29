@@ -346,16 +346,20 @@ async function historyFromThread(
   if (!decoded.threadTs) return []
 
   const currentTs = numericSlackTs(input.message.id)
-  const collected: NonNullable<NormalizedSlackEvent['history_messages']> = []
+  const collected: Array<{
+    index: number
+    sortTs: number | null
+    entry: NonNullable<NormalizedSlackEvent['history_messages']>[number]
+  }> = []
   try {
     const result = await input.thread.adapter.fetchMessages(input.thread.id, {
       limit: HISTORY_LIMIT + 1,
       direction: 'backward'
     })
-    for (const message of result.messages) {
+    for (const [index, message] of result.messages.entries()) {
       if (message.id === input.message.id) continue
-      if (currentTs && numericSlackTs(message.id) && numericSlackTs(message.id)! > currentTs)
-        continue
+      const messageTs = numericSlackTs(message.id)
+      if (currentTs && messageTs && messageTs > currentTs) continue
 
       const parts = await partsFromMessage(message, input.botUserId)
       if (!parts.length) continue
@@ -374,15 +378,20 @@ async function historyFromThread(
         message.author.userId
 
       collected.push({
-        message_id: `slack:${teamId}:${channelId}:${message.id}`,
-        role: message.author.isMe ? 'assistant' : 'user',
-        parts,
-        user_id: userId,
-        metadata: {
-          slack: {
-            message_ts: message.id,
-            bot_id: stringField(raw.bot_id),
-            app_id: stringField(raw.app_id)
+        index,
+        sortTs: messageTs,
+        entry: {
+          message_id: `slack:${teamId}:${channelId}:${message.id}`,
+          role: message.author.isMe ? 'assistant' : 'user',
+          parts,
+          user_id: userId,
+          metadata: {
+            slack: {
+              message_ts: message.id,
+              is_mention: input.thread.isDM || messageMentionsBot(message, input.botUserId),
+              bot_id: stringField(raw.bot_id),
+              app_id: stringField(raw.app_id)
+            }
           }
         }
       })
@@ -391,7 +400,15 @@ async function historyFromThread(
     return []
   }
 
-  return collected.slice(-HISTORY_LIMIT)
+  return collected
+    .sort((left, right) => {
+      if (left.sortTs !== null && right.sortTs !== null) return left.sortTs - right.sortTs
+      if (left.sortTs !== null) return -1
+      if (right.sortTs !== null) return 1
+      return left.index - right.index
+    })
+    .slice(-HISTORY_LIMIT)
+    .map(item => item.entry)
 }
 
 async function partsFromMessage(
@@ -418,6 +435,15 @@ function textFromMessage(message: Message, botUserId: string | undefined): strin
     .map(part => part.trim())
     .filter(Boolean)
     .join('\n')
+}
+
+function messageMentionsBot(message: Message, botUserId: string | undefined): boolean {
+  if (message.isMention) return true
+  if (!botUserId) return false
+  const raw = recordValue(message.raw)
+  const text = stringField(raw.text) ?? message.text
+  if (!text) return false
+  return new RegExp(`<@${escapeRegex(botUserId)}(?:\\|[^>]*)?>`).test(text)
 }
 
 async function partFromAttachment(attachment: Attachment): Promise<NormalizedBinaryPart | null> {

@@ -285,6 +285,45 @@ describe('CentaurHandoff', () => {
       'Prior clarification'
     ])
   })
+
+  it('returns Slack history oldest-first and marks mention messages', async () => {
+    const messages = [
+      slackMessage('1778883120.000000', 'Newer message', 'U123'),
+      slackMessage('1778883111.000000', '<@UBOT> again', 'U123'),
+      slackMessage('1778883110.000000', 'passive thread chatter', 'U123'),
+      slackMessage('1778883100.000000', '<@UBOT> do call discover', 'U123'),
+      slackMessage('1778883099.579529', '<@UBOT> Original request', 'U123')
+    ]
+    const fetchMessages = mock(async (_threadId: string, options: Record<string, unknown>) => {
+      expect(options).toMatchObject({
+        limit: 21,
+        direction: 'backward'
+      })
+      return { messages, nextCursor: undefined }
+    })
+    const thread: any = {
+      id: 'slack:C123:1778883099.579529',
+      isDM: false,
+      adapter: { fetchMessages }
+    }
+
+    const event = await slackEventFromChatMessage({
+      thread,
+      message: messages[1],
+      botUserId: 'UBOT'
+    } as any)
+
+    expect(
+      event.history_messages?.map(item =>
+        item.parts[0]?.type === 'text' ? item.parts[0].text : undefined
+      )
+    ).toEqual(['Original request', 'do call discover', 'passive thread chatter'])
+    expect(event.history_messages?.map(item => (item.metadata?.slack as any)?.is_mention)).toEqual([
+      true,
+      true,
+      false
+    ])
+  })
 })
 
 function slackMessage(ts: string, text: string, user: string, isMe = false): any {
