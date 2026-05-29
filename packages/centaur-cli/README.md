@@ -26,7 +26,7 @@ packages/centaur-cli/install.sh
 The quickest agent-readable plan is:
 
 ```bash
-centaur setup --org acme --assistant-name centaur --domain centaur.acme.com --backend local-env --install-mode local --harness codex --auth-mode api_key
+centaur setup --org acme --assistant-name centaur --domain centaur.acme.com --backend local-env --install-mode local --harness codex --auth-mode api_key --json
 ```
 
 It returns the exact command chain from overlay creation through verified local

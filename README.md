@@ -125,7 +125,7 @@ From a local checkout, `packages/centaur-cli/install.sh` installs the same
 For an agent-driven install-to-run path, start with:
 
 ```bash
-centaur setup --org acme --assistant-name centaur --domain centaur.example.com --backend local-env --install-mode local --harness codex --auth-mode api_key
+centaur setup --org acme --assistant-name centaur --domain centaur.example.com --backend local-env --install-mode local --harness codex --auth-mode api_key --json
 ```
 
 The returned commands create the overlay, copy the Slack manifest to your
