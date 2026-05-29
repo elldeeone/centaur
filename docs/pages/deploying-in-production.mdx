@@ -126,9 +126,10 @@ requests so the sandbox never sees them.
 Store these three items in your secrets backend (1Password vault, Kubernetes
 Secret, etc.) when running in `access_token` mode:
 
-- `OPENAI_CODEX_CLIENT_ID`: the Codex CLI OAuth client id collected by
-  `centaur secrets collect`. The broker resolves it through your secrets
-  backend alongside the refresh-token blob.
+- `OPENAI_CODEX_CLIENT_ID`: the Codex CLI OAuth client id. `centaur secrets
+  collect` derives it from the installed `codex` CLI when possible and only
+  prompts if it cannot. The broker resolves it through your secrets backend
+  alongside the refresh-token blob.
 - `OPENAI_CODEX_BLOB`: a JSON document `{"refresh_token": "..."}`. The
   broker rotates this in place on every refresh, so the backing item must
   be writable.
@@ -139,8 +140,9 @@ Secret, etc.) when running in `access_token` mode:
 
 To bootstrap, run `centaur secrets collect --harness codex --auth-mode
 access_token`. The CLI runs the local Codex login flow, reads
-`~/.codex/auth.json`, prompts for any missing masked values, and writes the
-matching secret items to the selected backend.
+`~/.codex/auth.json`, derives CLI OAuth metadata when possible, prompts for
+any missing masked values, and writes the matching secret items to the
+selected backend.
 
 ### Claude Auth Modes
 
@@ -173,17 +175,19 @@ requests; the broker overwrites the Bearer at request time.
 Store these two items in your secrets backend (1Password vault, Kubernetes
 Secret, etc.) when running in `access_token` mode:
 
-- `CLAUDE_CODE_CLIENT_ID`: the Claude Code CLI OAuth client id collected
-  by `centaur secrets collect`. The broker resolves it through your
-  secrets backend alongside the refresh-token blob.
+- `CLAUDE_CODE_CLIENT_ID`: the Claude Code CLI OAuth client id. `centaur
+  secrets collect` derives it from the installed `claude` CLI when possible
+  and only prompts if it cannot. The broker resolves it through your secrets
+  backend alongside the refresh-token blob.
 - `CLAUDE_CODE_BLOB`: a JSON document `{"refresh_token": "..."}`. The
   broker rotates this in place on every refresh, so the backing item must be
   writable.
 
 To bootstrap, run `centaur secrets collect --harness claude-code
 --auth-mode access_token`. The CLI runs the local Claude Code login flow,
-reads the credentials file or macOS keychain item, prompts for any missing
-masked values, and writes the matching secret items to the selected backend.
+reads the credentials file or macOS keychain item, derives CLI OAuth metadata
+when possible, prompts for any missing masked values, and writes the matching
+secret items to the selected backend.
 
 ## 4. Configure Slack
 

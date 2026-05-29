@@ -124,7 +124,7 @@ export function harnessAuthPlan(harness: Harness, authMode: AuthMode) {
         authMode === 'access_token'
           ? [
               'centaur secrets collect --harness codex --auth-mode access_token runs codex login with a dedicated ChatGPT account.',
-              'The CLI reads ~/.codex/auth.json, prompts for OPENAI_CODEX_CLIENT_ID, and stores Codex OAuth values in the selected backend.',
+              'The CLI reads ~/.codex/auth.json, derives the Codex OAuth client id from the installed codex CLI when available, and stores OAuth values in the selected backend.',
             ]
           : ['Store OPENAI_API_KEY in the configured secret backend.'],
     }
@@ -152,7 +152,7 @@ export function harnessAuthPlan(harness: Harness, authMode: AuthMode) {
       authMode === 'access_token'
         ? [
             'centaur secrets collect --harness claude-code --auth-mode access_token runs claude login with a dedicated Claude.ai Pro or Max account.',
-            'The CLI reads Claude Code credentials, prompts for CLAUDE_CODE_CLIENT_ID, and stores Claude OAuth values in the selected backend.',
+            'The CLI reads Claude Code credentials, derives the OAuth client id from the installed claude CLI when available, and stores OAuth values in the selected backend.',
           ]
         : ['Store ANTHROPIC_API_KEY in the configured secret backend.'],
   }

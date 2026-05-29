@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   app,
+  extractClaudeOAuthClientIdFromText,
+  extractCodexOAuthClientIdFromText,
   k3sDeploymentCommands,
   runClusterSmoke,
   runClusterTurn,
@@ -119,6 +121,17 @@ describe('slack manifest', () => {
 })
 
 describe('harness auth', () => {
+  it('can derive OAuth client ids from installed CLI metadata without hardcoding them', () => {
+    expect(
+      extractCodexOAuthClientIdFromText('grant_type=refresh_token&client_id=app_ABCDEFGHIJKLMNOPQRSTUVWX&scope=openid'),
+    ).toBe('app_ABCDEFGHIJKLMNOPQRSTUVWX')
+    expect(
+      extractClaudeOAuthClientIdFromText(
+        'CLIENT_ID:"11111111-2222-3333-4444-555555555555",OAUTH_FILE_SUFFIX:"",MCP_PROXY_URL:"https://mcp-proxy.anthropic.com"',
+      ),
+    ).toBe('11111111-2222-3333-4444-555555555555')
+  })
+
   it('describes Codex subscription OAuth secrets for the selected harness', () => {
     const plan = harnessAuthPlan('codex', 'access_token')
 
@@ -129,7 +142,7 @@ describe('harness auth', () => {
       'OPENAI_CODEX_BLOB',
       'OPENAI_CODEX_ACCOUNT_ID',
     ])
-    expect(plan.bootstrap.join('\n')).toContain('OPENAI_CODEX_CLIENT_ID')
+    expect(plan.bootstrap.join('\n')).toContain('derives the Codex OAuth client id')
   })
 
   it('describes Claude Code subscription OAuth secrets for the selected harness', () => {
@@ -138,7 +151,7 @@ describe('harness auth', () => {
     expect(plan.values.api.extraEnv).toEqual({ CLAUDE_CODE_AUTH_MODE: 'access_token' })
     expect(plan.values.sandbox.extraEnv).toEqual({ CLAUDE_CODE_AUTH_MODE: 'access_token' })
     expect(plan.requiredSecrets).toEqual(['CLAUDE_CODE_CLIENT_ID', 'CLAUDE_CODE_BLOB'])
-    expect(plan.bootstrap.join('\n')).toContain('CLAUDE_CODE_CLIENT_ID')
+    expect(plan.bootstrap.join('\n')).toContain('derives the OAuth client id')
   })
 })
 

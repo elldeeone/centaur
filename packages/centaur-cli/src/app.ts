@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { createInterface } from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -241,27 +241,112 @@ function readClaudeRefreshTokenFromKeychain() {
   }
 }
 
+function commandPath(command: string) {
+  const proc = spawnSync('sh', ['-lc', `command -v ${quotePart(command)}`], { encoding: 'utf8' })
+  return proc.status === 0 ? proc.stdout.trim() : ''
+}
+
+function readFileTextIfExists(path: string) {
+  try {
+    return readFileSync(path).toString('latin1')
+  } catch {
+    return ''
+  }
+}
+
+export function extractCodexOAuthClientIdFromText(text: string) {
+  const candidates = Array.from(new Set(text.match(/app_[A-Za-z0-9]{24}/g) || []))
+  return candidates.length === 1 ? candidates[0] : ''
+}
+
+export function extractClaudeOAuthClientIdFromText(text: string) {
+  const match = /CLIENT_ID:"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",OAUTH_FILE_SUFFIX:"",MCP_PROXY_URL:"https:\/\/mcp-proxy\.anthropic\.com"/.exec(text)
+  return match?.[1] || ''
+}
+
+function codexNativeBinaryPath(wrapperPath: string) {
+  const packageRoot = dirname(dirname(wrapperPath))
+  const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex'
+  let targetTriple = ''
+  if ((process.platform === 'linux' || process.platform === 'android') && process.arch === 'x64') {
+    targetTriple = 'x86_64-unknown-linux-musl'
+  } else if ((process.platform === 'linux' || process.platform === 'android') && process.arch === 'arm64') {
+    targetTriple = 'aarch64-unknown-linux-musl'
+  } else if (process.platform === 'darwin' && process.arch === 'x64') {
+    targetTriple = 'x86_64-apple-darwin'
+  } else if (process.platform === 'darwin' && process.arch === 'arm64') {
+    targetTriple = 'aarch64-apple-darwin'
+  } else if (process.platform === 'win32' && process.arch === 'x64') {
+    targetTriple = 'x86_64-pc-windows-msvc'
+  } else if (process.platform === 'win32' && process.arch === 'arm64') {
+    targetTriple = 'aarch64-pc-windows-msvc'
+  }
+  return targetTriple ? join(packageRoot, 'vendor', targetTriple, 'codex', binaryName) : ''
+}
+
+function discoverCodexOAuthClientIdFromCli() {
+  const path = commandPath('codex')
+  if (!path) return ''
+  try {
+    const resolved = realpathSync(path)
+    return (
+      extractCodexOAuthClientIdFromText(readFileTextIfExists(codexNativeBinaryPath(resolved))) ||
+      extractCodexOAuthClientIdFromText(readFileTextIfExists(resolved))
+    )
+  } catch {
+    return ''
+  }
+}
+
+function discoverClaudeOAuthClientIdFromCli() {
+  const path = commandPath('claude')
+  if (!path) return ''
+  try {
+    return extractClaudeOAuthClientIdFromText(readFileTextIfExists(realpathSync(path)))
+  } catch {
+    return ''
+  }
+}
+
 function readCodexSubscriptionAuth() {
   try {
     const auth = readJson(expandPath('~/.codex/auth.json'))
     return {
       refreshToken: nestedString(auth, ['tokens', 'refresh_token']),
       accountId: nestedString(auth, ['tokens', 'account_id']),
+      clientId:
+        nestedString(auth, ['tokens', 'client_id']) ||
+        nestedString(auth, ['client_id']) ||
+        nestedString(auth, ['clientId']),
     }
   } catch {
-    return { refreshToken: '', accountId: '' }
+    return { refreshToken: '', accountId: '', clientId: '' }
   }
+}
+
+function clientIdFromCredentialJson(value: unknown) {
+  return (
+    nestedString(value, ['claudeAiOauth', 'clientId']) ||
+    nestedString(value, ['claudeAiOauth', 'client_id']) ||
+    nestedString(value, ['clientId']) ||
+    nestedString(value, ['client_id'])
+  )
 }
 
 function readClaudeSubscriptionAuth() {
   let refreshToken = ''
+  let clientId = ''
   try {
     const auth = readJson(expandPath('~/.claude/.credentials.json'))
     refreshToken = refreshTokenFromCredentialJson(auth)
+    clientId = clientIdFromCredentialJson(auth)
   } catch {
     // Fall back to keychain below.
   }
-  return refreshToken || readClaudeRefreshTokenFromKeychain()
+  return {
+    refreshToken: refreshToken || readClaudeRefreshTokenFromKeychain(),
+    clientId,
+  }
 }
 
 type DeploymentCommandOptions = {
@@ -1044,18 +1129,22 @@ async function collectCodexSubscriptionSecrets(promptUser: boolean): Promise<Sec
     const existing = readCodexSubscriptionAuth()
     refreshToken = existing.refreshToken
     accountId = existing.accountId
+    clientId = clientId || existing.clientId || discoverCodexOAuthClientIdFromCli()
     if ((!refreshToken || !accountId) && commandExists('codex')) {
       console.log('  Running codex login now. Complete the browser/device flow, then return here.')
       runInteractive(['codex', 'login'])
       const updated = readCodexSubscriptionAuth()
       refreshToken = updated.refreshToken
       accountId = updated.accountId
+      clientId = clientId || updated.clientId || discoverCodexOAuthClientIdFromCli()
     } else if (!refreshToken || !accountId) {
       console.log('  codex is not installed or not on PATH; falling back to manual token prompts.')
     } else {
       console.log('  Found existing Codex ChatGPT login; using ~/.codex/auth.json.')
     }
+    if (clientId) console.log('  Found Codex OAuth client id from installed codex CLI metadata.')
   }
+  clientId = clientId || discoverCodexOAuthClientIdFromCli()
   clientId =
     clientId ||
     (await askSecret('OPENAI_CODEX_CLIENT_ID', {
@@ -1075,17 +1164,23 @@ async function collectClaudeSubscriptionSecrets(promptUser: boolean): Promise<Se
   let clientId = process.env.CLAUDE_CODE_CLIENT_ID || ''
   let refreshToken = ''
   if (promptUser) {
-    refreshToken = readClaudeSubscriptionAuth()
+    const existing = readClaudeSubscriptionAuth()
+    refreshToken = existing.refreshToken
+    clientId = clientId || existing.clientId || discoverClaudeOAuthClientIdFromCli()
     if (!refreshToken && commandExists('claude')) {
       console.log('  Running claude login now. Complete the browser/device flow, then return here.')
       runInteractive(['claude', 'login'])
-      refreshToken = readClaudeSubscriptionAuth()
+      const updated = readClaudeSubscriptionAuth()
+      refreshToken = updated.refreshToken
+      clientId = clientId || updated.clientId || discoverClaudeOAuthClientIdFromCli()
     } else if (!refreshToken) {
       console.log('  claude is not installed or not on PATH; falling back to manual token prompts.')
     } else {
       console.log('  Found existing Claude Code login; using local credentials.')
     }
+    if (clientId) console.log('  Found Claude Code OAuth client id from installed claude CLI metadata.')
   }
+  clientId = clientId || discoverClaudeOAuthClientIdFromCli()
   clientId =
     clientId ||
     (await askSecret('CLAUDE_CODE_CLIENT_ID', {
