@@ -2348,3 +2348,47 @@ export const app = Cli.create('centaur', {
       }
     },
   })
+
+type ServeOptions = NonNullable<Parameters<typeof app.serve>[1]>
+
+function kebabCaseFlag(flag: string) {
+  return flag.replace(/[A-Z]/g, char => `-${char.toLowerCase()}`)
+}
+
+export function normalizeLlmsMarkdown(markdown: string) {
+  return markdown.replace(/`--([A-Za-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)`/g, (_match, flag: string) => {
+    return `\`--${kebabCaseFlag(flag)}\``
+  })
+}
+
+export function shouldNormalizeLlmsMarkdown(argv: readonly string[]) {
+  if (!argv.includes('--llms-full')) return false
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]
+    if (token === '--json') return false
+    if (token === '--format') {
+      const format = argv[index + 1]
+      if (format && format !== 'md') return false
+      index += 1
+    }
+  }
+  return true
+}
+
+export async function serveCentaur(argv = process.argv.slice(2), options?: ServeOptions) {
+  if (!shouldNormalizeLlmsMarkdown(argv)) {
+    await app.serve(argv, options)
+    return
+  }
+
+  let stdout = ''
+  await app.serve(argv, {
+    ...options,
+    stdout: chunk => {
+      stdout += chunk
+    },
+  })
+
+  const write = options?.stdout || ((chunk: string) => output.write(chunk))
+  write(normalizeLlmsMarkdown(stdout))
+}

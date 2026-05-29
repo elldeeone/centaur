@@ -4,7 +4,14 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { app, k3sDeploymentCommands, runClusterSmoke, runClusterTurn, runSlackbotSmoke } from '../src/app.js'
+import {
+  app,
+  k3sDeploymentCommands,
+  runClusterSmoke,
+  runClusterTurn,
+  runSlackbotSmoke,
+  serveCentaur,
+} from '../src/app.js'
 import { envChecks } from '../src/checks.js'
 import { CentaurClient, parseSse } from '../src/client.js'
 import { runAgent } from '../src/run.js'
@@ -38,6 +45,19 @@ async function runCliWithExit(args: string[]) {
   return { stdout, exitCode }
 }
 
+async function runEntry(args: string[]) {
+  let stdout = ''
+  await serveCentaur(args, {
+    stdout: chunk => {
+      stdout += chunk
+    },
+    exit: code => {
+      if (code !== 0) throw new Error(`unexpected exit ${code}: ${stdout}`)
+    },
+  })
+  return stdout
+}
+
 function response(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
     status: 200,
@@ -57,6 +77,21 @@ function sse(body: string) {
     { headers: { 'content-type': 'text/event-stream' } },
   )
 }
+
+describe('agent manifest', () => {
+  it('renders llms-full flags in the same kebab-case form the CLI emits', async () => {
+    const stdout = await runEntry(['--llms-full'])
+
+    expect(stdout).toContain('`--assistant-name`')
+    expect(stdout).toContain('`--image-source`')
+    expect(stdout).toContain('`--release-thread`')
+    expect(stdout).toContain('`--timeout-seconds`')
+    expect(stdout).not.toContain('`--assistantName`')
+    expect(stdout).not.toContain('`--imageSource`')
+    expect(stdout).not.toContain('`--releaseThread`')
+    expect(stdout).not.toContain('`--timeoutSeconds`')
+  })
+})
 
 describe('slack manifest', () => {
   it('uses the Slackbot production routes', () => {

@@ -120,8 +120,14 @@ mkdir -p "$BIN_DIR"
 ln -sf "$RUNTIME_DIR/dist/index.js" "$BIN_DIR/centaur"
 
 echo "Installed centaur at $BIN_DIR/centaur"
+centaur_cmd="centaur"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
-  *) echo "Add $BIN_DIR to PATH before running centaur." ;;
+  *)
+    echo "Add $BIN_DIR to PATH before running centaur."
+    centaur_cmd="$BIN_DIR/centaur"
+    ;;
 esac
-echo "Try: centaur --llms"
+echo "Next:"
+echo "  $centaur_cmd --llms"
+echo "  $centaur_cmd setup --org acme --assistant-name centaur --domain centaur.example.com --backend local-env --install-mode local --harness codex --auth-mode api_key"

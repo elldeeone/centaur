@@ -1,4 +1,4 @@
 #!/usr/bin/env node
-import { app } from './app.js'
+import { serveCentaur } from './app.js'
 
-await app.serve()
+await serveCentaur()
