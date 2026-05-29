@@ -30,16 +30,18 @@ centaur setup --org acme --assistant-name centaur --domain centaur.acme.com --ba
 ```
 
 It returns the exact command chain from overlay creation through verified local
-CLI and Slackbot runs. The expanded local happy path is:
+CLI and Slackbot runs. Each returned CTA includes a short description so an
+agent can run the next command without guessing. The expanded local happy path
+is:
 
 ```bash
-centaur init --org acme --assistant-name centaur --domain centaur.acme.com --install-mode local --image-source ghcr --harness codex --auth-mode api_key
-centaur integrations slack-manifest --domain centaur.acme.com --app-name centaur --output org/slack-app-manifest.json --copy --socket-mode --install-mode local --image-source ghcr --harness codex --auth-mode api_key
-centaur secrets collect --backend local-env --install-mode local --image-source ghcr --harness codex --auth-mode api_key --overlay-path org
-centaur doctor --deep --harness codex --auth-mode api_key --secret-backend local-env --install-mode local --image-source ghcr
-centaur deploy k3s --apply --image-source ghcr --wait --timeout 10m --secrets-file org/secrets.local.env
-centaur run "Reply with exactly PONG and nothing else." --local --harness codex --expect PONG --release-thread
-centaur slackbot smoke
+centaur init --org acme --assistant-name centaur --domain centaur.acme.com --install-mode local --image-source ghcr --secret-backend local-env --harness codex --auth-mode api_key --overlay-path org --json
+centaur integrations slack-manifest --domain centaur.acme.com --app-name centaur --output org/slack-app-manifest.json --copy --socket-mode --backend local-env --install-mode local --image-source ghcr --harness codex --auth-mode api_key --overlay-path org --json
+centaur secrets collect --backend local-env --install-mode local --image-source ghcr --harness codex --auth-mode api_key --overlay-path org --json
+centaur doctor --deep --overlay-path org --harness codex --auth-mode api_key --secret-backend local-env --install-mode local --image-source ghcr --json
+centaur deploy k3s --apply --image-source ghcr --wait --timeout 10m --secrets-file org/secrets.local.env --json
+centaur run "Reply with exactly PONG and nothing else." --local --harness codex --expect PONG --release-thread --format jsonl
+centaur slackbot smoke --json
 ```
 
 `centaur init` returns CTAs for the next one-off commands, so an agent can keep

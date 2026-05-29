@@ -358,6 +358,15 @@ describe('overlay scaffolding', () => {
     ])
     expect(output.cta.description).toBe('Run these setup commands in order:')
     expect(output.cta.commands.map((command: { command: string }) => command.command)).toEqual(output.commands)
+    expect(output.cta.commands.map((command: { description: string }) => command.description)).toEqual([
+      'scaffold the overlay and persist resumable setup state',
+      'copy the Slack app manifest JSON to the clipboard for paste-in-place app creation',
+      'prompt for Slack, harness, and infra secrets with masked input and populate the selected backend',
+      'verify prerequisites, generated files, selected harness auth, and secret backend state',
+      'apply local secrets when needed and deploy Centaur with Helm',
+      'prove the selected harness can complete one local Centaur turn through the API pod',
+      'prove Slackbot can turn a signed Slack mention into a completed Centaur execution',
+    ])
     expect(output.secretInputs.map((input: { env: string }) => input.env)).toEqual([
       'SLACK_BOT_TOKEN',
       'SLACK_SIGNING_SECRET',

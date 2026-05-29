@@ -98,6 +98,103 @@ so any thread can use any configured credential. Per-user and per-channel
 scoping is on the roadmap; until then, scope tool and harness access
 accordingly. See [Security](/security) for the full threat model.
 
+### Codex Auth Modes
+
+:::warning[Dedicate the account to Centaur]
+Do not use this ChatGPT account for `codex` outside Centaur once its
+refresh token is in the broker. OpenAI's OAuth flow uses strict refresh
+token reuse detection: if you keep running `codex` locally with the same
+account, both clients will race to rotate the refresh token. Whichever
+side rotates second is treated as a stolen credential and the entire
+token family is revoked, logging both sides out at random. Use a separate
+ChatGPT account for any non-Centaur Codex work.
+:::
+
+Codex supports two authentication modes, selected per deployment with the
+`CODEX_AUTH_MODE` env var on the sandbox (set it via `sandbox.extraEnv`):
+
+| Mode | Upstream | Secrets required |
+|------|----------|------------------|
+| `api_key` (default) | `api.openai.com` | `OPENAI_API_KEY` |
+| `access_token` | `chatgpt.com` | `OPENAI_CODEX_CLIENT_ID`, `OPENAI_CODEX_BLOB`, `OPENAI_CODEX_ACCOUNT_ID` |
+
+`access_token` mode routes Codex through a ChatGPT account rather than a raw
+API key. [iron-token-broker](https://docs.iron.sh) holds the refresh token
+and mints short-lived access tokens, which iron-proxy injects on outbound
+requests so the sandbox never sees them.
+
+Store these three items in your secrets backend (1Password vault, Kubernetes
+Secret, etc.) when running in `access_token` mode:
+
+- `OPENAI_CODEX_CLIENT_ID`: the Codex CLI OAuth client id. `centaur secrets
+  collect` derives it from the installed `codex` CLI when possible and only
+  prompts if it cannot. The broker resolves it through your secrets backend
+  alongside the refresh-token blob.
+- `OPENAI_CODEX_BLOB`: a JSON document `{"refresh_token": "..."}`. The
+  broker rotates this in place on every refresh, so the backing item must
+  be writable.
+- `OPENAI_CODEX_ACCOUNT_ID`: the ChatGPT account UUID the credential is
+  bound to. It is static, but iron-proxy injects it as the
+  `chatgpt-account-id` header so the backend can route to the right
+  workspace. Store it alongside the other two, not in code.
+
+To bootstrap, run `centaur secrets collect --harness codex --auth-mode
+access_token`. The CLI runs the local Codex login flow, reads
+`~/.codex/auth.json`, derives CLI OAuth metadata when possible, prompts for
+any missing masked values, and writes the matching secret items to the
+selected backend.
+For non-interactive agent runs, `--from-env` accepts either a complete
+`OPENAI_CODEX_BLOB` or a simpler `OPENAI_CODEX_REFRESH_TOKEN`; local Codex
+login metadata is still used as a fallback for the client id and account id.
+
+### Claude Auth Modes
+
+:::warning[Dedicate the account to Centaur]
+Do not use this Claude.ai account for `claude` outside Centaur once its
+refresh token is in the broker. Anthropic's OAuth flow uses strict
+refresh token reuse detection: if you keep running `claude` locally with
+the same account, both clients will race to rotate the refresh token.
+Whichever side rotates second is treated as a stolen credential and the
+entire token family is revoked, logging both sides out at random. Use a
+separate Claude.ai account for any non-Centaur Claude Code work.
+:::
+
+Claude Code supports two authentication modes, selected per deployment
+with the `CLAUDE_CODE_AUTH_MODE` env var on the sandbox (set it via
+`sandbox.extraEnv`):
+
+| Mode | Upstream | Secrets required |
+|------|----------|------------------|
+| `api_key` (default) | `api.anthropic.com` | `ANTHROPIC_API_KEY` |
+| `access_token` | `api.anthropic.com` | `CLAUDE_CODE_CLIENT_ID`, `CLAUDE_CODE_BLOB` |
+
+`access_token` mode routes Claude Code through a Claude.ai Pro or Max
+subscription rather than a raw API key. [iron-token-broker](https://docs.iron.sh)
+holds the refresh token and mints short-lived access tokens, which iron-proxy
+injects on outbound requests so the sandbox never sees them. The entrypoint
+plants a dummy `~/.claude/.credentials.json` so the CLI emits OAuth-shaped
+requests; the broker overwrites the Bearer at request time.
+
+Store these two items in your secrets backend (1Password vault, Kubernetes
+Secret, etc.) when running in `access_token` mode:
+
+- `CLAUDE_CODE_CLIENT_ID`: the Claude Code CLI OAuth client id. `centaur
+  secrets collect` derives it from the installed `claude` CLI when possible
+  and only prompts if it cannot. The broker resolves it through your secrets
+  backend alongside the refresh-token blob.
+- `CLAUDE_CODE_BLOB`: a JSON document `{"refresh_token": "..."}`. The
+  broker rotates this in place on every refresh, so the backing item must be
+  writable.
+
+To bootstrap, run `centaur secrets collect --harness claude-code
+--auth-mode access_token`. The CLI runs the local Claude Code login flow,
+reads the credentials file or macOS keychain item, derives CLI OAuth metadata
+when possible, prompts for any missing masked values, and writes the matching
+secret items to the selected backend.
+For non-interactive agent runs, `--from-env` accepts either a complete
+`CLAUDE_CODE_BLOB` or a simpler `CLAUDE_CODE_REFRESH_TOKEN`; local Claude Code
+login metadata is still used as a fallback for the client id.
+
 ## 4. Configure Slack
 
 Create the Slackbot app at [api.slack.com/apps](https://api.slack.com/apps).

@@ -26,13 +26,13 @@ structured output and CTAs so an agent can keep driving the next step:
 curl -fsSL https://centaur.run/install.sh | bash
 centaur --llms
 centaur setup --org acme --assistant-name centaur --domain centaur.example.com --backend local-env --install-mode local --harness codex --auth-mode api_key --json
-centaur init --install-mode local --image-source ghcr --harness codex --auth-mode api_key
-centaur integrations slack-manifest --domain centaur.example.com --app-name centaur --output org/slack-app-manifest.json --copy --socket-mode --install-mode local --image-source ghcr --harness codex --auth-mode api_key
-centaur secrets collect --backend local-env --install-mode local --image-source ghcr --harness codex --auth-mode api_key --overlay-path org
-centaur doctor --deep --harness codex --auth-mode api_key --secret-backend local-env --install-mode local --image-source ghcr
-centaur deploy k3s --apply --image-source ghcr --wait --timeout 10m --secrets-file org/secrets.local.env
-centaur run "Reply with exactly PONG and nothing else." --local --harness codex --expect PONG --release-thread
-centaur slackbot smoke
+centaur init --org acme --assistant-name centaur --domain centaur.example.com --install-mode local --image-source ghcr --secret-backend local-env --harness codex --auth-mode api_key --overlay-path org --json
+centaur integrations slack-manifest --domain centaur.example.com --app-name centaur --output org/slack-app-manifest.json --copy --socket-mode --backend local-env --install-mode local --image-source ghcr --harness codex --auth-mode api_key --overlay-path org --json
+centaur secrets collect --backend local-env --install-mode local --image-source ghcr --harness codex --auth-mode api_key --overlay-path org --json
+centaur doctor --deep --overlay-path org --harness codex --auth-mode api_key --secret-backend local-env --install-mode local --image-source ghcr --json
+centaur deploy k3s --apply --image-source ghcr --wait --timeout 10m --secrets-file org/secrets.local.env --json
+centaur run "Reply with exactly PONG and nothing else." --local --harness codex --expect PONG --release-thread --format jsonl
+centaur slackbot smoke --json
 ```
 
 Pick one default harness for the deployment: `codex` or `claude-code`. Use
@@ -154,7 +154,7 @@ that Slackbot uses: spawn or reuse a runtime, persist a message, enqueue an
 execution, and poll the execution state until the result contains `PONG`.
 
 ```bash
-centaur run "Reply with exactly PONG and nothing else." --local --harness codex --expect PONG --release-thread
+centaur run "Reply with exactly PONG and nothing else." --local --harness codex --expect PONG --release-thread --format jsonl
 ```
 
 The successful result includes the terminal execution row. The important fields

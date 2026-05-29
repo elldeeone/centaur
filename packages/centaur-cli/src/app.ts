@@ -780,9 +780,21 @@ function setupPlan(options: SetupPlanOptions) {
 }
 
 function setupPlanCta(plan: ReturnType<typeof setupPlan>, bin?: string) {
+  const descriptions = [
+    'scaffold the overlay and persist resumable setup state',
+    'copy the Slack app manifest JSON to the clipboard for paste-in-place app creation',
+    'prompt for Slack, harness, and infra secrets with masked input and populate the selected backend',
+    'verify prerequisites, generated files, selected harness auth, and secret backend state',
+    'apply local secrets when needed and deploy Centaur with Helm',
+    'prove the selected harness can complete one local Centaur turn through the API pod',
+    'prove Slackbot can turn a signed Slack mention into a completed Centaur execution',
+  ]
   return {
     description: 'Run these setup commands in order:',
-    commands: plan.commands.map(command => ({ command })),
+    commands: plan.commands.map((command, index) => ({
+      command,
+      description: descriptions[index],
+    })),
   }
 }
 
