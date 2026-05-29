@@ -7,10 +7,12 @@ import { describe, expect, it } from 'vitest'
 import {
   app,
   claudeSubscriptionSecretsFromSources,
+  componentLogCommand,
   codexSubscriptionSecretsFromSources,
   extractClaudeOAuthClientIdFromText,
   extractCodexOAuthClientIdFromText,
   k3sDeploymentCommands,
+  readComponentLogs,
   runClusterSmoke,
   runClusterTurn,
   runSlackbotSmoke,
@@ -765,6 +767,55 @@ describe('slackbot smoke', () => {
     expect(calls[0]?.[8]).toContain('/api/webhooks/slack')
     expect(calls[0]?.[8]).toContain('Reply PONG')
     expect(calls[0]?.[8]).not.toContain('local-dev')
+  })
+})
+
+describe('component logs', () => {
+  it('fetches bounded logs by default instead of only printing a command', () => {
+    const calls: string[][] = []
+    const result = readComponentLogs(
+      {
+        component: 'api',
+        namespace: 'centaur',
+        release: 'centaur',
+        tail: 50,
+      },
+      command => {
+        calls.push(command)
+        return '{"level":"info","event":"ready"}\n'
+      },
+    )
+
+    expect(calls).toEqual([
+      [
+        'kubectl',
+        'logs',
+        '-n',
+        'centaur',
+        'deploy/centaur-centaur-api',
+        '--tail=50',
+      ],
+    ])
+    expect(result.output).toContain('"event":"ready"')
+    expect(result.command).toBe('kubectl logs -n centaur deploy/centaur-centaur-api --tail=50')
+  })
+
+  it('can still render a follow command for humans watching a real Slack mention', () => {
+    expect(componentLogCommand({
+      component: 'slackbot',
+      namespace: 'centaur',
+      release: 'centaur',
+      tail: 200,
+      follow: true,
+    })).toEqual([
+      'kubectl',
+      'logs',
+      '-n',
+      'centaur',
+      'deploy/centaur-centaur-slackbot',
+      '--tail=200',
+      '-f',
+    ])
   })
 })
 

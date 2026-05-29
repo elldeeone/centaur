@@ -702,6 +702,45 @@ function formatDeploymentCommands(commands: string[][]) {
   return formatted
 }
 
+type LogOptions = {
+  component: string
+  namespace: string
+  release: string
+  tail: number
+  follow?: boolean
+  previous?: boolean
+}
+
+export function componentLogCommand(options: LogOptions) {
+  return [
+    'kubectl',
+    'logs',
+    '-n',
+    options.namespace,
+    `deploy/${options.release}-centaur-${options.component}`,
+    `--tail=${options.tail}`,
+    ...(options.previous ? ['--previous'] : []),
+    ...(options.follow ? ['-f'] : []),
+  ]
+}
+
+export function readComponentLogs(
+  options: LogOptions,
+  runner: SmokeRunner = runCommand,
+) {
+  const command = componentLogCommand(options)
+  return {
+    command: commandLine(command),
+    component: options.component,
+    namespace: options.namespace,
+    release: options.release,
+    tail: options.tail,
+    previous: Boolean(options.previous),
+    follow: Boolean(options.follow),
+    output: options.follow ? '' : runner(command),
+  }
+}
+
 function runInteractive(command: string[]) {
   const proc = spawnSync(command[0]!, command.slice(1), { stdio: 'inherit' })
   return proc.status === 0
@@ -1955,6 +1994,7 @@ const slackbot = Cli.create('slackbot', {
               c.options.namespace,
               '--release',
               c.options.release,
+              '--follow',
             ]),
             description: 'watch Slackbot logs while sending a real Slack mention',
           },
@@ -2448,6 +2488,7 @@ export const app = Cli.create('centaur', {
                 c.options.namespace,
                 '--release',
                 c.options.release,
+                '--follow',
               ]),
               description: 'watch Slackbot logs while sending the Slack mention',
             },
@@ -2480,24 +2521,47 @@ export const app = Cli.create('centaur', {
   .command(deploy)
   .command(slackbot)
   .command('logs', {
-    description: 'Print the kubectl log command for a Centaur component.',
+    description: 'Fetch logs for a deployed Centaur component.',
     options: z.object({
       component: z.string().default('api'),
       namespace: z.string().default('centaur'),
       release: z.string().default('centaur'),
+      tail: z.number().int().positive().default(200).describe('Number of recent log lines to fetch'),
+      follow: z.boolean().default(false).describe('Stream logs until interrupted'),
+      previous: z.boolean().default(false).describe('Read logs from the previous crashed container'),
+      plan: z.boolean().default(false).describe('Only print the kubectl command without running it'),
     }),
     run(c) {
-      return {
-        command: commandLine([
-          'kubectl',
-          'logs',
-          '-n',
-          c.options.namespace,
-          `deploy/${c.options.release}-centaur-${c.options.component}`,
-          '--tail=200',
-          '-f',
-        ]),
+      const command = componentLogCommand({
+        component: c.options.component,
+        namespace: c.options.namespace,
+        release: c.options.release,
+        tail: c.options.tail,
+        follow: c.options.follow,
+        previous: c.options.previous,
+      })
+      if (c.options.plan) return { command: commandLine(command) }
+      if (c.options.follow) {
+        const ok = runInteractive(command)
+        setFailedExit(ok)
+        return {
+          command: commandLine(command),
+          component: c.options.component,
+          namespace: c.options.namespace,
+          release: c.options.release,
+          tail: c.options.tail,
+          previous: c.options.previous,
+          follow: true,
+          ok,
+        }
       }
+      return readComponentLogs({
+        component: c.options.component,
+        namespace: c.options.namespace,
+        release: c.options.release,
+        tail: c.options.tail,
+        previous: c.options.previous,
+      })
     },
   })
   .command('repair', {

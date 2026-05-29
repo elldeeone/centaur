@@ -81,3 +81,7 @@ deployed Slackbot pod, waits for the resulting `slack_thread_turn` workflow and
 agent execution to complete, and releases the runtime. Once that passes, send a
 real Slack mention in a test channel to verify Slack delivery with your actual
 workspace/channel.
+
+`centaur logs --component api` and `centaur logs --component slackbot` fetch
+bounded Kubernetes logs directly. Use `--follow` for a live tail and `--plan`
+only when you intentionally want the raw `kubectl logs` command.
