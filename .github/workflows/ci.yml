@@ -82,3 +82,35 @@ jobs:
             src/centaur/handoff.test.ts \
             src/slack/normalize.test.ts \
             src/centaur/final-delivery.test.ts
+
+  control-plane-rs:
+    name: Rust control-plane tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2
+        with:
+          workspaces: services/control-plane-rs
+
+      - name: Format
+        working-directory: services/control-plane-rs
+        run: cargo fmt --check
+
+      - name: Check
+        working-directory: services/control-plane-rs
+        run: cargo check
+
+      - name: Check kube feature
+        working-directory: services/control-plane-rs
+        run: cargo check --features kube-client
+
+      - name: Test
+        working-directory: services/control-plane-rs
+        run: cargo test

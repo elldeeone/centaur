@@ -69,6 +69,9 @@ node_modules/
 .next/
 next-env.d.ts
 
+# Rust
+target/
+
 # TypeScript incremental build state
 *.tsbuildinfo
 _

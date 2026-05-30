@@ -121,6 +121,19 @@ api:
   extraEnv: {}
   resources: {}
 
+controlPlane:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: centaur-control-plane
+    tag: latest
+    pullPolicy: Always
+  sandboxBackend: fake
+  runMigrations: true
+  maxTurns: 128
+  extraEnv: {}
+  resources: {}
+
 overlay:
   mountPath: /app/overlay/org
   systemPrompt: ""

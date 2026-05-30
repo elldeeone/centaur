@@ -7,6 +7,10 @@
 # Node
 services/slackbot/node_modules
 
+# Rust
+target
+**/target
+
 # Sandbox cached repos (4GB+)
 services/sandbox/repos
 

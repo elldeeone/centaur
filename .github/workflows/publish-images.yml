@@ -42,6 +42,10 @@ jobs:
             image: centaur-api
             dockerfile: services/api/Dockerfile
             target: ""
+          - service: control-plane
+            image: centaur-control-plane
+            dockerfile: services/control-plane-rs/Dockerfile
+            target: ""
           - service: slackbot
             image: centaur-slackbot
             dockerfile: services/slackbot/Dockerfile

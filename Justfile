@@ -19,7 +19,7 @@ build:
       just _build-all-sequential
     else
       pids=()
-      for recipe in _build-api _build-iron-proxy _build-slackbot _build-agent; do
+      for recipe in _build-api _build-control-plane _build-iron-proxy _build-slackbot _build-agent; do
         just "$recipe" &
         pids+=("$!")
       done
@@ -32,6 +32,7 @@ build:
 
 _build-all-sequential:
     just _build-api
+    just _build-control-plane
     just _build-iron-proxy
     just _build-slackbot
     just _build-agent
@@ -41,6 +42,7 @@ build-one service:
     set -euo pipefail
     case "{{service}}" in
       api) just _build-api ;;
+      control-plane|control-plane-rs) just _build-control-plane ;;
       iron-proxy) just _build-iron-proxy ;;
       slackbot) just _build-slackbot ;;
       agent|sandbox) just _build-agent ;;
@@ -49,6 +51,9 @@ build-one service:
 
 _build-api:
     docker build -t centaur-api:latest -f services/api/Dockerfile .
+
+_build-control-plane:
+    docker build -t centaur-control-plane:latest -f services/control-plane-rs/Dockerfile .
 
 _build-iron-proxy:
     docker build -t centaur-iron-proxy:latest -f services/iron-proxy/Dockerfile .
@@ -65,7 +70,7 @@ _build-agent:
 _import-k3s:
     #!/usr/bin/env bash
     set -euo pipefail
-    for img in centaur-api centaur-iron-proxy centaur-slackbot centaur-agent; do
+    for img in centaur-api centaur-control-plane centaur-iron-proxy centaur-slackbot centaur-agent; do
       echo "importing ${img}:latest into k3s containerd..."
       docker save "${img}:latest" | {{k3s_ctr}} images import -
     done
@@ -83,6 +88,7 @@ deploy:
       ghcr)
         extra_args+=(
           --set api.image.repository=ghcr.io/paradigmxyz/centaur/centaur-api
+          --set controlPlane.image.repository=ghcr.io/paradigmxyz/centaur/centaur-control-plane
           --set ironProxy.image.repository=ghcr.io/paradigmxyz/centaur/centaur-iron-proxy
           --set slackbot.image.repository=ghcr.io/paradigmxyz/centaur/centaur-slackbot
           --set sandbox.image.repository=ghcr.io/paradigmxyz/centaur/centaur-agent
