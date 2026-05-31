@@ -194,6 +194,9 @@ def container_env(
     if (os.getenv("KUBERNETES_TOOL_SERVER_IMAGE") or "").strip():
         tools_port = (os.getenv("KUBERNETES_TOOL_SERVER_PORT") or "8001").strip()
         env.append(f"CENTAUR_TOOLS_URL=http://localhost:{tools_port}")
+    local_tools = (os.getenv("CENTAUR_LOCAL_TOOLS") or "").strip()
+    if local_tools:
+        env.append(f"CENTAUR_LOCAL_TOOLS={local_tools}")
     visibility = amp_thread_visibility()
     if visibility:
         env.append(f"AMP_THREAD_VISIBILITY={visibility}")

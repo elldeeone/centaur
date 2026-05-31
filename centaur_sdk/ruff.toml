@@ -7,3 +7,8 @@ ignore = ["E501", "TID251"]
 
 [lint.isort]
 known-first-party = ["centaur_sdk"]
+
+[lint.per-file-ignores]
+# toolrunner exposes the ``centaur-tool`` CLI; its main() prints results to
+# stdout by design (that IS the tool's output contract).
+"toolrunner.py" = ["T201"]

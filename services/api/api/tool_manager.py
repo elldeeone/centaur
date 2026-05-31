@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import difflib
 import importlib.util
 import inspect
 import json
@@ -16,8 +15,8 @@ import time
 import tomllib
 import types
 import uuid
-from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, is_dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar
@@ -25,7 +24,6 @@ from typing import Any, ClassVar
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
-from toon_format import encode as toon_encode
 
 from api.api_keys import check_scope
 from api.otel import (
@@ -39,6 +37,31 @@ from api.vm_metrics import record_tool_call
 from api.deps import get_key_info, get_sandbox_claims, verify_api_key
 from api import slackbot_client
 from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
+
+# The pure invocation core is shared with the local agent runner
+# (``centaur-tool``) so the two execution paths stay behaviorally identical.
+# These names keep their historical module-level identity here (and are
+# re-exported below) so existing importers — tests included — are unaffected.
+from centaur_sdk.toolrunner import (  # noqa: F401  (re-exported for back-compat)
+    _ATTACHMENT_EXTRACT_MIN_BYTES,
+    _BUILTIN_TYPE_NAMES,
+    _COMMON_ARGUMENT_ALIASES,
+    _DOCSTRING_BOUNDARY_MARKERS,
+    _FORBIDDEN_TOOL_ARGUMENT_NAMES,
+    _LIFECYCLE_METHODS,
+    _MAX_INLINE_TOOL_BINARY_BYTES,
+    _METHOD_DESCRIPTION_MAX_CHARS,
+    _TOOL_BINARY_PREVIEW_BYTES,
+    ToolMethod,
+    _describe_method_docstring,
+    _friendly_type_name,
+    _normalize_for_serialization,
+    _payload_size_bytes,
+    _to_toon,
+    _tool_arg_validation_error,
+    collect_methods,
+    describe_methods,
+)
 
 log = structlog.get_logger()
 
@@ -1055,17 +1078,10 @@ async def _resolve_secrets(secrets: list[SecretDef]) -> dict[str, str]:
     return {s.name: s.replacer for s in secrets if _is_replace_secret(s)}
 
 
-_MAX_INLINE_TOOL_BINARY_BYTES = max(
-    1024, int(os.getenv("TOOL_BINARY_INLINE_MAX_BYTES", str(1 * 1024 * 1024)))
-)
-_TOOL_BINARY_PREVIEW_BYTES = max(
-    128, int(os.getenv("TOOL_BINARY_PREVIEW_BYTES", str(32 * 1024)))
-)
-
-# Threshold for extracting base64-encoded file data from tool results into
-# the attachments table.  Anything larger gets stored as an attachment and
-# replaced with a download URL so it doesn't bloat the agent context window.
-_ATTACHMENT_EXTRACT_MIN_BYTES = 64 * 1024  # 64 KB
+# ``_MAX_INLINE_TOOL_BINARY_BYTES``, ``_TOOL_BINARY_PREVIEW_BYTES`` and
+# ``_ATTACHMENT_EXTRACT_MIN_BYTES`` now live in ``centaur_sdk.toolrunner`` and
+# are imported above so the local runner and this server path agree on the
+# thresholds.
 
 # Maximum wall-clock seconds a single tool call may run before being cancelled.
 _TOOL_CALL_TIMEOUT_S = float(os.getenv("TOOL_CALL_TIMEOUT_S", "120"))
@@ -1280,269 +1296,14 @@ async def _extract_tool_attachment(
     return out
 
 
-class ToolMethod:
-    def __init__(self, method_name: str, fn: Callable):
-        self.method_name = method_name
-        self.fn = fn
-
-
-_LIFECYCLE_METHODS = frozenset({"close", "connect", "disconnect", "shutdown"})
-
-_COMMON_ARGUMENT_ALIASES: dict[str, str] = {
-    "channel_id": "channel",
-    "count": "limit",
-    "max_results": "limit",
-    "page_size": "limit",
-    "range": "range_notation",
-    "sql": "query",
-    "table": "table_name",
-}
-
-_FORBIDDEN_TOOL_ARGUMENT_NAMES = frozenset(
-    {
-        "output_path",
-        "output_dir",
-        "download_path",
-        "save_path",
-        "dest_path",
-        "destination_path",
-    }
-)
-
-
-def _tool_arg_validation_error(
-    method: ToolMethod, args: dict[str, Any]
-) -> dict[str, Any] | None:
-    """Return a structured argument error before invoking a tool method."""
-    forbidden = sorted(set(args) & _FORBIDDEN_TOOL_ARGUMENT_NAMES)
-    if forbidden:
-        return {
-            "error": "tool_argument_validation_failed",
-            "message": (
-                "Forbidden argument(s): "
-                f"{', '.join(forbidden)}. Tools may not write API-process files "
-                "to caller-supplied paths; return Centaur attachments instead."
-            ),
-            "forbidden_args": forbidden,
-        }
-
-    sig = inspect.signature(method.fn)
-    params = sig.parameters
-    accepts_var_kwargs = any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-    )
-    valid_names = {
-        name
-        for name, param in params.items()
-        if param.kind
-        in {
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        }
-    }
-    if not accepts_var_kwargs:
-        unexpected = sorted(set(args) - valid_names)
-        if unexpected:
-            suggestions = {
-                key: (
-                    _COMMON_ARGUMENT_ALIASES.get(key)
-                    if _COMMON_ARGUMENT_ALIASES.get(key) in valid_names
-                    else (difflib.get_close_matches(key, valid_names, n=1) or [None])[0]
-                )
-                for key in unexpected
-            }
-            return {
-                "error": "tool_argument_validation_failed",
-                "message": f"Unexpected argument(s): {', '.join(unexpected)}",
-                "unexpected_args": unexpected,
-                "accepted_args": sorted(valid_names),
-                "did_you_mean": {k: v for k, v in suggestions.items() if v},
-            }
-
-    missing = sorted(
-        name
-        for name, param in params.items()
-        if param.default is inspect.Parameter.empty
-        and param.kind
-        in {
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        }
-        and name not in args
-    )
-    if missing:
-        return {
-            "error": "tool_argument_validation_failed",
-            "message": f"Missing required argument(s): {', '.join(missing)}",
-            "missing_args": missing,
-            "accepted_args": sorted(valid_names),
-        }
-    return None
-
-
-def _normalize_for_serialization(data: Any) -> Any:
-    """Normalize rich Python values into JSON-friendly structures."""
-    if data is None or isinstance(data, (str, int, float, bool)):
-        return data
-    if isinstance(data, bytes):
-        if len(data) > _MAX_INLINE_TOOL_BINARY_BYTES:
-            return {
-                "encoding": "base64_preview",
-                "byte_length": len(data),
-                "content_base64": base64.b64encode(
-                    data[:_TOOL_BINARY_PREVIEW_BYTES]
-                ).decode(),
-            }
-        return {
-            "encoding": "base64",
-            "byte_length": len(data),
-            "content_base64": base64.b64encode(data).decode(),
-        }
-    if isinstance(data, Enum):
-        return data.value
-    if is_dataclass(data):
-        return _normalize_for_serialization(asdict(data))
-    if isinstance(data, dict):
-        return {
-            str(key): _normalize_for_serialization(value) for key, value in data.items()
-        }
-    if isinstance(data, (list, tuple, set)):
-        return [_normalize_for_serialization(item) for item in data]
-
-    model_dump = getattr(data, "model_dump", None)
-    if callable(model_dump):
-        try:
-            return _normalize_for_serialization(model_dump())
-        except TypeError:
-            pass
-
-    to_dict = getattr(data, "to_dict", None)
-    if callable(to_dict):
-        try:
-            return _normalize_for_serialization(to_dict())
-        except TypeError:
-            pass
-    return data
-
-
-def _to_toon(data: Any) -> str:
-    """Encode data as TOON for token-efficient LLM responses, falling back to JSON."""
-    normalized = _normalize_for_serialization(data)
-    try:
-        toon = toon_encode(normalized)
-        compact_json = json.dumps(normalized, separators=(",", ":"), default=str)
-        return toon if len(toon) <= len(compact_json) else compact_json
-    except Exception:
-        return json.dumps(normalized, default=str)
-
-
-def _payload_size_bytes(value: Any) -> int:
-    normalized = _normalize_for_serialization(value)
-    try:
-        return len(
-            json.dumps(normalized, separators=(",", ":"), default=str).encode("utf-8")
-        )
-    except Exception:
-        return len(str(normalized).encode("utf-8", errors="replace"))
-
-
-# Mapping from Python built-in types to clean names for schema output
-_BUILTIN_TYPE_NAMES: dict[type, str] = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-    list: "array",
-    dict: "object",
-    type(None): "null",
-}
-
-
-_METHOD_DESCRIPTION_MAX_CHARS = 1200
-_DOCSTRING_BOUNDARY_MARKERS = (
-    "Args:",
-    "Arguments:",
-    "Returns:",
-    "Return:",
-    "Yields:",
-    "Raises:",
-    "Example:",
-    "Examples:",
-    "Note:",
-    "Notes:",
-    "Warning:",
-    "See Also:",
-    "See also:",
-)
-
-
-def _describe_method_docstring(doc: str | None) -> str:
-    """Return the agent-facing description for a tool method's docstring.
-
-    The base implementation used only the docstring's FIRST LINE, which
-    silently stripped the rest of any multi-paragraph explanation. For tools
-    whose first line is a noun phrase (e.g. ``"Hybrid research engine."``)
-    and whose follow-on paragraph explains when to use the method, the agent
-    never sees the load-bearing guidance.
-
-    The replacement keeps the full prose summary up to the first Google-style
-    section marker (``Args:`` / ``Returns:`` / ``Raises:`` / ``Example:`` /
-    ``Note:`` / etc.) or a ``_METHOD_DESCRIPTION_MAX_CHARS`` budget, whichever
-    comes first. Parameter docs continue to be exposed structurally on the
-    ``parameters`` field, so excluding them from ``description`` is
-    intentional — agents should pick methods from the prose and pass args
-    from the schema.
-    """
-    if not doc:
-        return ""
-    # ``inspect.cleandoc`` is the canonical normalizer for Python docstrings:
-    # it strips the common leading whitespace from continuation lines so any
-    # subsequent markers match at column 0.
-    text = inspect.cleandoc(doc)
-    if not text:
-        return ""
-    boundary = len(text)
-    for marker in _DOCSTRING_BOUNDARY_MARKERS:
-        # Markers must appear at start-of-line (column 0) to count.
-        idx = text.find("\n" + marker)
-        if idx == -1 and text.startswith(marker):
-            idx = 0
-        if 0 <= idx < boundary:
-            boundary = idx
-    summary = text[:boundary].rstrip()
-    if len(summary) > _METHOD_DESCRIPTION_MAX_CHARS:
-        summary = summary[: _METHOD_DESCRIPTION_MAX_CHARS - 1].rstrip() + "\u2026"
-    return summary
-
-
-def _friendly_type_name(annotation: Any) -> str:
-    """Convert a Python type annotation to a clean, human-readable string.
-
-    Avoids raw ``<class 'str'>`` output by using simple names for built-in types
-    and ``str()`` for union / generic forms.
-    """
-    if annotation in _BUILTIN_TYPE_NAMES:
-        return _BUILTIN_TYPE_NAMES[annotation]
-    origin = getattr(annotation, "__origin__", None)
-    args = getattr(annotation, "__args__", None)
-    # typing.Optional / Union / str | int (PEP 604)
-    if (
-        isinstance(annotation, types.UnionType)
-        or (origin is not None and str(origin) == "typing.Union")
-    ) and args:
-        parts = [_friendly_type_name(a) for a in args]
-        return " | ".join(parts)
-    # list[X], dict[K, V], etc.
-    if origin is not None and args:
-        base = _BUILTIN_TYPE_NAMES.get(origin, getattr(origin, "__name__", str(origin)))
-        inner = ", ".join(_friendly_type_name(a) for a in args)
-        return f"{base}[{inner}]"
-    # Plain class — use __name__ if available
-    name = getattr(annotation, "__name__", None)
-    if name:
-        return name
-    # Fallback
-    return str(annotation)
+# ``ToolMethod``, ``_LIFECYCLE_METHODS``, the argument-validation tables and
+# ``_tool_arg_validation_error``, the serialization helpers
+# (``_normalize_for_serialization`` / ``_to_toon`` / ``_payload_size_bytes``),
+# and the discovery helpers (``_describe_method_docstring`` /
+# ``_friendly_type_name`` / ``_BUILTIN_TYPE_NAMES`` / ``describe_methods``) now
+# live in ``centaur_sdk.toolrunner`` and are imported at the top of this module.
+# Keeping a single implementation is what guarantees the local ``centaur-tool``
+# runner and this server path produce byte-identical results.
 
 
 class LoadedTool:
@@ -2072,34 +1833,9 @@ class ToolManager:
         )
         return loaded_tool
 
-    @staticmethod
-    def _collect_methods(module: Any) -> list[ToolMethod]:
-        """Collect tools from a tool module.
-
-        The module must have a _client() factory. Call it once to get a cached
-        instance and expose every public method as a tool.
-        """
-        methods: list[ToolMethod] = []
-
-        factory = getattr(module, "_client", None)
-        if factory and callable(factory):
-            instance = factory()
-            for method_name, descriptor in sorted(
-                vars(type(instance)).items(),
-                key=lambda item: item[0],
-            ):
-                if method_name.startswith("_") or method_name in _LIFECYCLE_METHODS:
-                    continue
-                if isinstance(descriptor, property):
-                    continue
-                if not callable(descriptor):
-                    continue
-                method = getattr(instance, method_name, None)
-                if not inspect.ismethod(method):
-                    continue
-                methods.append(ToolMethod(method_name, method))
-
-        return methods
+    # Method collection is shared with the local runner — see
+    # ``centaur_sdk.toolrunner.collect_methods``.
+    _collect_methods = staticmethod(collect_methods)
 
     def describe_tool(self, tool_name: str) -> dict[str, Any]:
         """Return full method schemas for a tool's methods."""
@@ -2109,45 +1845,10 @@ class ToolManager:
                 "error": f"Tool '{tool_name}' not found",
                 "available": sorted(self.tools.keys()),
             }
-        method_schemas: list[dict[str, Any]] = []
-        for method in sorted(lt.methods, key=lambda m: m.method_name):
-            description = _describe_method_docstring(method.fn.__doc__)
-            try:
-                sig = inspect.signature(method.fn)
-            except (TypeError, ValueError) as exc:
-                method_schemas.append(
-                    {
-                        "name": method.method_name,
-                        "description": description,
-                        "parameters": {},
-                        "signature_error": str(exc),
-                    }
-                )
-                continue
-            params: dict[str, Any] = {}
-            for pname, param in sig.parameters.items():
-                if pname == "self":
-                    continue
-                ptype = "any"
-                if param.annotation is not inspect.Parameter.empty:
-                    ptype = _friendly_type_name(param.annotation)
-                pinfo: dict[str, Any] = {"type": ptype}
-                if param.default is not inspect.Parameter.empty:
-                    pinfo["default"] = param.default
-                else:
-                    pinfo["required"] = True
-                params[pname] = pinfo
-            method_schemas.append(
-                {
-                    "name": method.method_name,
-                    "description": description,
-                    "parameters": params,
-                }
-            )
         return {
             "tool": lt.name,
             "description": lt.description,
-            "methods": method_schemas,
+            "methods": describe_methods(lt.methods),
         }
 
     async def call_tool_raw(

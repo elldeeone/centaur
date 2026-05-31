@@ -158,6 +158,44 @@ RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
       agent-browser install; \
     fi
 
+# ── Local tool runner venv (tool-CLI migration) ──────────────────────────────
+# A dedicated venv at /opt/centaur-tools holds centaur_sdk + the union of every
+# base tool's pyproject deps so the `centaur-tool` runner can execute tools
+# locally instead of POSTing to the per-sandbox tool-server sidecar. It is kept
+# separate from the agent's system-python doc libs (numpy/pandas/Pillow, pinned
+# with --break-system-packages above) so the two never collide. centaur_sdk is
+# sourced from the local copy via [tool.uv.sources] (mirroring the API image), so
+# the agent-side and sidecar-side SDK stay byte-identical.
+USER root
+RUN install -d -m 0755 -o 1001 -g 1001 /opt/centaur-tools
+USER agent
+RUN uv venv /opt/centaur-tools
+
+# Install centaur_sdk (+ the runner's toon-format) into the venv FIRST. With the
+# standard package layout the install registers a real, importable centaur_sdk
+# distribution and drops the `centaur-tool` console script in
+# /opt/centaur-tools/bin. Doing it before the tool deps means a tool that
+# depends on `centaur_sdk` (crypto/mpp) finds it already satisfied instead of
+# being resolved from a registry it does not live in. toon-format is a direct
+# requirement here (the runner imports it to emit the TOON envelope); it is NOT a
+# centaur_sdk dependency on purpose — see centaur_sdk/pyproject.toml.
+COPY --link --chown=1001:1001 centaur_sdk/ /opt/centaur-tools/src/centaur_sdk/
+RUN --mount=type=cache,target=/home/agent/.cache/uv,uid=1001,gid=1001,sharing=locked \
+    uv pip install --python /opt/centaur-tools/bin/python \
+      /opt/centaur-tools/src/centaur_sdk \
+      "toon-format @ git+https://github.com/toon-format/toon-python.git"
+
+# Then install the union of every base tool's pyproject deps into the same venv.
+RUN --mount=type=cache,target=/home/agent/.cache/uv,uid=1001,gid=1001,sharing=locked \
+    --mount=type=bind,source=tools,target=/tmp/tools \
+    --mount=type=bind,source=services/sandbox/collect-tool-deps.py,target=/tmp/collect-tool-deps.py \
+    python3 /tmp/collect-tool-deps.py /tmp/tools > /tmp/tool-deps.txt \
+    && uv pip install --python /opt/centaur-tools/bin/python -r /tmp/tool-deps.txt \
+    && rm -f /tmp/tool-deps.txt
+
+# Base tool source the runner loads by path (CENTAUR_BASE_TOOLS_DIR default).
+COPY --link --chown=1001:1001 tools/ /opt/centaur-tools/tools/
+
 # ── Agent skills + workspace setup (rarely changes) ─────────────────────────
 RUN --mount=type=cache,target=/home/agent/.npm,uid=1001,gid=1001,sharing=locked \
     npx -y skills add vercel-labs/agent-browser
@@ -191,6 +229,7 @@ COPY --link --chmod=755 services/sandbox/amp-wrapper.py /usr/local/bin/amp-wrapp
 COPY --link --chmod=755 services/sandbox/codex-app-wrapper.py /usr/local/bin/codex-app-wrapper
 COPY --link --chmod=755 services/sandbox/claude-app-wrapper.py /usr/local/bin/claude-app-wrapper
 COPY --link --chmod=755 services/sandbox/harness_adapter.py /usr/local/bin/harness-adapter
+COPY --link --chmod=755 services/sandbox/collect-tool-deps.py /usr/local/bin/collect-tool-deps
 COPY --link --chmod=755 services/sandbox/git-branch.sh /usr/local/bin/git-branch
 COPY --link --chmod=755 services/sandbox/entrypoint.sh /entrypoint.sh
 

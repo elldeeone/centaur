@@ -613,6 +613,24 @@ async def test_tool_rest_router_lists_describes_and_invokes_tools(
     app = FastAPI()
     app.include_router(manager.create_rest_router())
 
+    from fastapi import Request
+
+    from api.api_keys import APIKeyInfo
+    from api.deps import verify_api_key
+
+    async def _grant_tools_scope(request: Request) -> str:
+        request.state.api_key_info = APIKeyInfo(
+            id="test",
+            name="test",
+            key_prefix="test",
+            scopes=["tools:*"],
+            created_by="test",
+            source="localhost",
+        )
+        return "key:test"
+
+    app.dependency_overrides[verify_api_key] = _grant_tools_scope
+
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         list_response = await client.get("/tools")

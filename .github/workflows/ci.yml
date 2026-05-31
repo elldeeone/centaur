@@ -53,6 +53,62 @@ jobs:
             tests/test_agent_control_plane.py::test_worker_stops_session_when_cancel_requested_mid_stream \
             tests/test_agent_control_plane.py::test_worker_maps_amp_user_cancelled_error_to_cancelled
 
+  tool-cli-tests:
+    name: Tool-CLI migration safety net
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies
+        working-directory: services/api
+        run: uv sync --group dev
+
+      # The tool-execution path (call.sh -> runner/sidecar), its packaging, and
+      # the shared invocation core are otherwise uncovered by CI. These guard
+      # the tool-CLI migration so a regression in dispatch, routing, arg
+      # validation, TOON output, discovery, or secret resolution fails the PR.
+      - name: API + local-runner tests
+        working-directory: services/api
+        # api.config requires DATABASE_URL at import. None of these tests open a
+        # real connection (they are unit/wiring/subprocess tests, none request
+        # the DB fixtures), so a deterministic dummy DSN is enough — and it is
+        # the value test_tool_server_core_pg asserts the proxied DSN inherits.
+        env:
+          DATABASE_URL: postgresql://app_user:pw@db:5432/ai_v2
+        # test_tool_server_core_pg reads the cached api.config.settings singleton;
+        # test_sandbox_kubernetes_backend mutates DATABASE_URL in-session, so the
+        # former runs first to read the job's DSN cleanly (pre-existing test-order
+        # coupling, unrelated to this change).
+        run: |
+          uv run pytest -q \
+            tests/test_tool_server_core_pg.py \
+            tests/test_tool_manager.py \
+            tests/test_call_sh.py \
+            tests/test_sandbox_kubernetes_backend.py \
+            tests/test_amp_wrapper.py \
+            tests/test_claude_app_wrapper.py \
+            tests/test_codex_app_wrapper.py \
+            tests/test_toolrunner_parity.py
+
+      - name: SDK + shared-runner unit tests
+        run: |
+          services/api/.venv/bin/python -m pytest -q \
+            centaur_sdk/tests/test_tool_sdk.py \
+            centaur_sdk/tests/test_toolrunner.py
+
+      - name: Lint centaur_sdk (incl. the local runner)
+        run: services/api/.venv/bin/ruff check centaur_sdk/
+
   slackbot-targeted-tests:
     name: Slackbot interface and delivery tests
     runs-on: ubuntu-latest

@@ -238,6 +238,26 @@ if [ "$CODEX_AUTH_MODE" != "access_token" ]; then
     fi
 fi
 
+# ── Install overlay (org) tool deps for locally-routed tools ─────────────────
+# Base tool deps are baked into the /opt/centaur-tools runner venv at image
+# build time. Overlay (org) tools are mounted at runtime from a separate image,
+# so there is no build-time chance to bake them: the deps of any overlay tool
+# routed to the local runner (named in CENTAUR_LOCAL_TOOLS) must be installed
+# now. Mirrors the old tool-server-startup.sh. Best-effort — a failed install
+# surfaces as a per-tool ImportError at call time, not a sandbox failure.
+if [ -n "${CENTAUR_LOCAL_TOOLS:-}" ] \
+   && [ -n "${CENTAUR_OVERLAY_DIR:-}" ] && [ -d "${CENTAUR_OVERLAY_DIR}/tools" ] \
+   && [ -x /opt/centaur-tools/bin/python ] && command -v uv >/dev/null 2>&1; then
+    _overlay_deps_file="$(mktemp)"
+    collect-tool-deps "${CENTAUR_OVERLAY_DIR}/tools" "${CENTAUR_LOCAL_TOOLS}" > "$_overlay_deps_file"
+    if [ -s "$_overlay_deps_file" ]; then
+        echo "entrypoint: installing overlay tool deps into /opt/centaur-tools" >&2
+        uv pip install --python /opt/centaur-tools/bin/python -r "$_overlay_deps_file" \
+            || echo "entrypoint: overlay tool dep install failed; affected tools will error at call time" >&2
+    fi
+    rm -f "$_overlay_deps_file"
+fi
+
 # Wait for the tool-server sidecar before signalling readiness, so the harness
 # doesn't issue its first tool call before the server is listening.
 if [ -n "${CENTAUR_TOOLS_URL:-}" ]; then
