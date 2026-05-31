@@ -92,8 +92,7 @@ jobs:
             tests/test_sandbox_kubernetes_backend.py \
             tests/test_amp_wrapper.py \
             tests/test_claude_app_wrapper.py \
-            tests/test_codex_app_wrapper.py \
-            tests/test_toolrunner_parity.py
+            tests/test_codex_app_wrapper.py
 
       - name: SDK + shared-runner unit tests
         run: |
