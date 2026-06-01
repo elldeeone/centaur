@@ -19,6 +19,7 @@ const CHANNEL_ID = 'C000000001'
 type WorkflowRunRequest = {
   workflow_name: string
   trigger_key: string
+  eager_start?: boolean
   input: {
     thread_key: string
     parts: Array<{ type: string; text?: string }>
@@ -41,6 +42,16 @@ type FakeDelivery = {
   thread_key: string
   delivery: Record<string, unknown>
   final_payload: Record<string, unknown>
+}
+
+type PassiveIngestRequest = {
+  envelope: {
+    type?: string
+    team_id?: string
+    event_id?: string
+    event?: Record<string, unknown>
+  }
+  project_context?: boolean
 }
 
 let emulator: Emulator
@@ -131,9 +142,11 @@ describe(`Slack Emulate E2E (${IMPLEMENTATION})`, () => {
     expect(await response.json()).toEqual({ ok: true })
     await Promise.all(waits)
 
+    expect(centaur.passiveIngests).toHaveLength(1)
+    expect(centaur.passiveIngests[0]?.envelope.event_id).toBe('Ev-emulate-mention')
     const run = onlyRun()
     expect(run.workflow_name).toBe('slack_thread_turn')
-    expect('eager_start' in run).toBe(false)
+    expect(run.eager_start).toBe(true)
     expect(run.trigger_key).toBe(`slack:${TEAM_ID}:${CHANNEL_ID}:${parent.ts}`)
     expect(run.input.thread_key).toBe(`slack:${TEAM_ID}:${CHANNEL_ID}:${parent.ts}`)
     expect(run.input.message_id).toBe(`slack:${TEAM_ID}:${CHANNEL_ID}:${parent.ts}`)
@@ -147,6 +160,39 @@ describe(`Slack Emulate E2E (${IMPLEMENTATION})`, () => {
       thread_ts: parent.ts,
       recipient_user_id: USER_ID,
       recipient_team_id: TEAM_ID
+    })
+  })
+
+  it('passively ingests non-mention messages without starting a Slack workflow', async () => {
+    const message = await postUserMessage('Yonatan asked for this in another channel')
+    const waits: Promise<unknown>[] = []
+    const response = await app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-emulate-passive-message',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          ts: message.ts,
+          text: 'Yonatan asked for this in another channel'
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true })
+    await Promise.all(waits)
+
+    expect(centaur.workflowRuns).toHaveLength(0)
+    expect(centaur.passiveIngests).toHaveLength(1)
+    expect(centaur.passiveIngests[0]?.envelope.event_id).toBe('Ev-emulate-passive-message')
+    expect(centaur.passiveIngests[0]?.envelope.event).toMatchObject({
+      type: 'message',
+      channel: CHANNEL_ID,
+      text: 'Yonatan asked for this in another channel'
     })
   })
 
@@ -520,6 +566,7 @@ function waitUntilContext(waits: Promise<unknown>[]): any {
 
 async function createFakeCentaur() {
   const workflowRuns: WorkflowRunRequest[] = []
+  const passiveIngests: PassiveIngestRequest[] = []
   const deliveries: FakeDelivery[] = []
   const delivered: string[] = []
   const failed: string[] = []
@@ -531,6 +578,10 @@ async function createFakeCentaur() {
       if (url.pathname === '/workflows/runs') {
         workflowRuns.push((await request.json()) as WorkflowRunRequest)
         return Response.json({ ok: true, run_id: `wfr-${workflowRuns.length}` })
+      }
+      if (url.pathname === '/api/slack/events/ingest') {
+        passiveIngests.push((await request.json()) as PassiveIngestRequest)
+        return Response.json({ ok: true, status: 'ingested' })
       }
       if (url.pathname === '/agent/final-deliveries/claim') {
         return Response.json({ deliveries: deliveries.splice(0) })
@@ -551,11 +602,13 @@ async function createFakeCentaur() {
   return {
     url: `http://localhost:${server.port}`,
     workflowRuns,
+    passiveIngests,
     deliveries,
     delivered,
     failed,
     reset() {
       workflowRuns.length = 0
+      passiveIngests.length = 0
       deliveries.length = 0
       delivered.length = 0
       failed.length = 0

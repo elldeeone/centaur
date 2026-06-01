@@ -91,7 +91,7 @@ def message_thread_ts(message: dict[str, Any]) -> str | None:
 
 def message_row(
     message: dict[str, Any],
-    run_id: str,
+    run_id: str | None,
     parent_message_ts: str | None = None,
 ) -> dict[str, Any]:
     """Project a normalized Slack message into the DB upsert shape."""

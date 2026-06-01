@@ -21,7 +21,10 @@ model behind these jobs.
 
 The ETL path is separate from Slackbot delivery. Slackbot handles live user
 turns in Slack threads; Slack ETL reads Slack history with a dedicated user
-token and writes durable rows into Postgres.
+token and writes durable rows into Postgres. When the Slack app subscribes to
+message events, Slackbot also forwards verified message envelopes to the API's
+passive ingest route so new channel messages can be upserted immediately
+without triggering an agent turn.
 
 ## What it runs
 
@@ -73,6 +76,7 @@ once Slack ETL is enabled, but can be tuned independently.
 | `SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS` | empty | Comma-separated channel-name globs to skip, without needing the leading `#`. |
 | `COMPANY_CONTEXT_DOCUMENTS_ENABLED` | `true` | Enables projection from Slack sync rows into company context documents. |
 | `COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS` | `14400` | How often to project changed Slack rows into documents. |
+| `SLACK_EVENT_INGEST_PROJECT_INLINE` | `true` | Projects company-context documents inline after passive Slack event ingestion. |
 
 Example exclusion list:
 
@@ -98,6 +102,11 @@ The first incremental run reads a small recent window so useful data appears
 quickly, then seeds historical backfill jobs for the configured lookback. Later
 incremental runs resume from each channel checkpoint and re-read a trailing
 thread window so recent edits and replies are picked up.
+
+Passive Slack event ingestion writes rows with `source_run_id = NULL`, because
+the source is the verified Slack Events envelope rather than a scheduled ETL
+workflow run. The scheduled workflows still reconcile channel history, user
+metadata, replies, edits, and any missed events.
 
 The lookback values are read windows, not retention windows. Lowering
 `SLACK_SYNC_BACKFILL_LOOKBACK_DAYS` or `SLACK_SYNC_THREAD_LOOKBACK_DAYS` limits

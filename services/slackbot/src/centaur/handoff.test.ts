@@ -20,6 +20,53 @@ const config: AppConfig = {
 }
 
 describe('CentaurHandoff', () => {
+  it('posts raw Slack envelopes to the passive ingest API', async () => {
+    const originalFetch = globalThis.fetch
+    let capturedInput: string | URL | Request | undefined
+    let capturedInit: RequestInit | undefined
+    const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      capturedInput = input
+      capturedInit = init
+      return new Response(JSON.stringify({ ok: true, status: 'ingested' }), { status: 200 })
+    })
+    globalThis.fetch = fetchMock as any
+    try {
+      const handoff = new CentaurHandoff({
+        ...config,
+        SLACKBOT_API_KEY: 'aiv2-test-slackbot-key'
+      })
+      const envelope = {
+        type: 'event_callback',
+        team_id: 'T123',
+        event_id: 'Ev-passive',
+        event: {
+          type: 'message',
+          user: 'U123',
+          channel: 'C123',
+          ts: '1780000000.000001',
+          text: 'hello'
+        }
+      }
+
+      await handoff.ingestSlackEvent(envelope)
+
+      expect(String(capturedInput)).toBe('http://centaur-api.test/api/slack/events/ingest')
+      expect(capturedInit?.headers).toMatchObject({
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer aiv2-test-slackbot-key'
+      })
+      const bodyText = capturedInit?.body
+      expect(typeof bodyText).toBe('string')
+      if (typeof bodyText !== 'string') throw new Error('expected JSON request body')
+      expect(JSON.parse(bodyText)).toEqual({
+        envelope,
+        project_context: true
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('omits envelope-specific Slack event metadata from idempotent workflow input', async () => {
     const originalFetch = globalThis.fetch
     let capturedInit: RequestInit | undefined

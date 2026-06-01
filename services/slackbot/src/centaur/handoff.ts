@@ -13,6 +13,36 @@ export class CentaurHandoff {
     this.config = config
   }
 
+  async ingestSlackEvent(envelope: Record<string, unknown>): Promise<CentaurHandoffResult> {
+    return withSpan(
+      'centaur.slackbot.passive_ingest',
+      clientSpanOptions({}),
+      async span => {
+        const url = new URL('/api/slack/events/ingest', this.config.CENTAUR_API_URL)
+        const apiKey = centaurApiKey(this.config)
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...injectTraceHeaders(),
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+          },
+          body: JSON.stringify({
+            envelope,
+            project_context: true
+          })
+        })
+
+        spanAttributes(span, {
+          'http.response.status_code': response.status,
+          'centaur.passive_ingest.ok': response.ok
+        })
+        const body = await readResponseBody(response)
+        return { ok: response.ok, status: response.status, body }
+      }
+    )
+  }
+
   async emit(event: NormalizedSlackEvent): Promise<CentaurHandoffResult> {
     return withSpan(
       'centaur.slackbot.handoff',

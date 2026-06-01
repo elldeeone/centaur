@@ -174,6 +174,7 @@ Slack ETL workflows:
 | `SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS` | `api.slackEtlExcludedChannelPatterns`. | Comma-separated channel-name globs to skip. |
 | `SLACK_BACKFILL_ENABLED`, `SLACK_BACKFILL_CHANNEL_BATCH_LIMIT`, `SLACK_BACKFILL_CHANNEL_PAGES_PER_JOB` | `api.extraEnv` or chart batch limit. | Backfill enablement and batch sizing. |
 | `COMPANY_CONTEXT_DOCUMENTS_ENABLED` | `api.extraEnv`. | Enables company-context projection when Slack ETL is on. |
+| `SLACK_EVENT_INGEST_PROJECT_INLINE` | `api.extraEnv`. | Projects company-context documents immediately after passive Slack event ingestion. |
 
 ## Observability and Retention
 

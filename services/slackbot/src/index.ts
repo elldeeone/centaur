@@ -559,6 +559,8 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
         return
       }
 
+      await ingestSlackEvent(envelope)
+
       const { client, installation } = await resolver.resolve({
         teamId: envelope.team_id,
         enterpriseId: envelope.enterprise_id
@@ -588,7 +590,8 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
       if (!normalized.is_mention) {
         spanAttributes(span, {
           'centaur.slackbot.event_ignored': true,
-          'centaur.slackbot.ignore_reason': 'not_mention'
+          'centaur.slackbot.ignore_reason': 'not_mention',
+          'centaur.slackbot.event_action': 'passive_ingest_only'
         })
         return
       }
@@ -618,6 +621,22 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
       }
     }
   )
+}
+
+async function ingestSlackEvent(envelope: SlackEnvelope): Promise<void> {
+  try {
+    const result = await handoff.ingestSlackEvent(envelope as Record<string, unknown>)
+    if (!result.ok) {
+      logWarn('centaur_slack_passive_ingest_failed', {
+        status: result.status,
+        body: result.body
+      })
+    }
+  } catch (error) {
+    logWarn('centaur_slack_passive_ingest_error', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+  }
 }
 
 const TRIVIAL_ACK_REACTION = 'ok_hand'
