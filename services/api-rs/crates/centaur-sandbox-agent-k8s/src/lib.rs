@@ -92,6 +92,8 @@ pub struct IronProxyPodConfig {
     pub op_connect_port: u16,
     pub api_pod_labels: BTreeMap<String, String>,
     pub env_from_secret_names: Vec<String>,
+    pub secret_env_name: Option<String>,
+    pub secret_env_prefix: String,
     pub extra_env: BTreeMap<String, String>,
 }
 
@@ -117,6 +119,8 @@ impl IronProxyPodConfig {
                 "api".to_owned(),
             )]),
             env_from_secret_names: Vec::new(),
+            secret_env_name: None,
+            secret_env_prefix: String::new(),
             extra_env: BTreeMap::new(),
         }
     }
@@ -1105,18 +1109,49 @@ fn spec_env<'a>(spec: &'a SandboxSpec, name: &str) -> Option<&'a str> {
 }
 
 fn iron_proxy_container(iron_proxy: &IronProxyPodConfig) -> Value {
-    let mut env = BTreeMap::new();
-    env.insert(
-        "IRON_MANAGEMENT_API_KEY".to_owned(),
-        "unused-local-sidecar-key".to_owned(),
-    );
+    let mut env = BTreeMap::<String, Value>::new();
+    if let Some(secret_name) = &iron_proxy.secret_env_name {
+        insert_env_secret_ref(
+            &mut env,
+            "IRON_MANAGEMENT_API_KEY",
+            secret_name,
+            &iron_proxy.secret_env_prefix,
+        );
+    } else {
+        insert_env_value(
+            &mut env,
+            "IRON_MANAGEMENT_API_KEY",
+            "unused-local-sidecar-key",
+        );
+    }
     for (name, value) in &iron_proxy.extra_env {
-        env.insert(name.clone(), value.clone());
+        insert_env_value(&mut env, name, value);
+    }
+    if let Some(secret_name) = &iron_proxy.secret_env_name {
+        if matches!(
+            iron_proxy.source_policy.kind,
+            SourceKind::OnePasswordConnect
+        ) {
+            insert_env_secret_ref(
+                &mut env,
+                "OP_CONNECT_TOKEN",
+                secret_name,
+                &iron_proxy.secret_env_prefix,
+            );
+        }
+        if iron_proxy.extra_env.contains_key("IRON_BROKER_URL") {
+            insert_env_secret_ref(
+                &mut env,
+                "IRON_BROKER_TOKEN",
+                secret_name,
+                &iron_proxy.secret_env_prefix,
+            );
+        }
     }
     let mut container = json!({
         "name": "iron-proxy",
         "image": iron_proxy.image,
-        "env": env.into_iter().map(|(name, value)| json!({ "name": name, "value": value })).collect::<Vec<_>>(),
+        "env": env.into_values().collect::<Vec<_>>(),
         "ports": [
             {"containerPort": 8080, "name": "proxy"},
             {"containerPort": 9092, "name": "management"},
@@ -1183,6 +1218,33 @@ fn iron_proxy_container(iron_proxy: &IronProxyPodConfig) -> Value {
         }),
     );
     container
+}
+
+fn insert_env_value(env: &mut BTreeMap<String, Value>, name: &str, value: impl AsRef<str>) {
+    env.insert(
+        name.to_owned(),
+        json!({"name": name, "value": value.as_ref()}),
+    );
+}
+
+fn insert_env_secret_ref(
+    env: &mut BTreeMap<String, Value>,
+    name: &str,
+    secret_name: &str,
+    secret_prefix: &str,
+) {
+    env.insert(
+        name.to_owned(),
+        json!({
+            "name": name,
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": secret_name,
+                    "key": format!("{secret_prefix}{name}"),
+                }
+            }
+        }),
+    );
 }
 
 fn iron_proxy_volumes(id: &SandboxId, iron_proxy: &IronProxyPodConfig) -> Vec<Value> {
@@ -1631,9 +1693,15 @@ mod tests {
         iron_proxy
             .env_from_secret_names
             .push("centaur-infra-env".to_owned());
+        iron_proxy.secret_env_name = Some("centaur-infra-env".to_owned());
+        iron_proxy.secret_env_prefix = "CENT_".to_owned();
         iron_proxy.extra_env.insert(
             "OP_CONNECT_HOST".to_owned(),
             "http://op-connect:8080".to_owned(),
+        );
+        iron_proxy.extra_env.insert(
+            "IRON_BROKER_URL".to_owned(),
+            "http://token-broker:8181".to_owned(),
         );
         let resolved = ResolvedIronProxy {
             config_yaml: "transforms: []\n".to_owned(),
@@ -1676,6 +1744,50 @@ mod tests {
                 .unwrap()
                 .port,
             IntOrString::Int(9090)
+        );
+        let env = container
+            .env
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|item| (item.name.as_str(), item))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            env["IRON_MANAGEMENT_API_KEY"]
+                .value_from
+                .as_ref()
+                .unwrap()
+                .secret_key_ref
+                .as_ref()
+                .unwrap()
+                .key,
+            "CENT_IRON_MANAGEMENT_API_KEY"
+        );
+        assert_eq!(
+            env["OP_CONNECT_TOKEN"]
+                .value_from
+                .as_ref()
+                .unwrap()
+                .secret_key_ref
+                .as_ref()
+                .unwrap()
+                .key,
+            "CENT_OP_CONNECT_TOKEN"
+        );
+        assert_eq!(
+            env["IRON_BROKER_TOKEN"]
+                .value_from
+                .as_ref()
+                .unwrap()
+                .secret_key_ref
+                .as_ref()
+                .unwrap()
+                .key,
+            "CENT_IRON_BROKER_TOKEN"
+        );
+        assert_eq!(
+            env["IRON_BROKER_URL"].value.as_deref(),
+            Some("http://token-broker:8181")
         );
         let volumes = pod.spec.as_ref().unwrap().volumes.as_ref().unwrap();
         assert!(

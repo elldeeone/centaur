@@ -198,6 +198,10 @@ fn iron_proxy_config_from_env() -> Result<Option<IronProxyPodConfig>, ServerErro
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
     {
+        config.secret_env_name = Some(secret_name.clone());
+        config.secret_env_prefix = env::var("SESSION_SANDBOX_IRON_PROXY_ENV_SECRET_PREFIX")
+            .or_else(|_| env::var("KUBERNETES_SECRET_ENV_PREFIX"))
+            .unwrap_or_default();
         config.env_from_secret_names.push(secret_name);
     }
     if matches!(config.source_policy.kind, SourceKind::OnePassword) {
