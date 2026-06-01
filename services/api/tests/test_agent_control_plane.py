@@ -1156,15 +1156,16 @@ async def test_mark_execution_terminal_skips_durable_delivery_after_live_answer(
 
 
 @pytest.mark.asyncio
-async def test_mark_execution_terminal_falls_back_after_cut_off_live_answer(db_pool):
+async def test_mark_execution_terminal_suppresses_outbox_for_live_delivery_even_without_full_char_count(
+    db_pool,
+):
     from api.runtime_control import _mark_execution_terminal
 
     execution_id = f"exe-{uuid.uuid4().hex[:10]}"
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
     runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
     streamed_prefix = "Partial Slack prefix.\n\n"
-    remaining_report = "Full report remainder with the details Slack never received."
-    result_text = streamed_prefix + remaining_report
+    result_text = streamed_prefix + "Full report remainder."
     await db_pool.execute(
         "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state) "
         "VALUES ($1, $2, 'codex', 'codex', 'idle')",
@@ -1224,18 +1225,14 @@ async def test_mark_execution_terminal_falls_back_after_cut_off_live_answer(db_p
         execution_id,
     )
     assert outbox is not None
-    assert outbox["state"] == "pending"
-    final_payload = outbox["final_payload"]
-    if isinstance(final_payload, str):
-        final_payload = json.loads(final_payload)
-    assert final_payload["result_text"] == result_text
-    assert final_payload["slackbot_streamed_answer_chars"] == len(streamed_prefix)
+    assert outbox["state"] == "awaiting_terminal"
+    assert outbox["final_payload"] is None
     ready_events = await db_pool.fetchval(
         "SELECT COUNT(*) FROM agent_execution_events "
         "WHERE execution_id = $1 AND event_kind = 'final_delivery_ready'",
         execution_id,
     )
-    assert int(ready_events or 0) == 1
+    assert int(ready_events or 0) == 0
 
 
 @pytest.mark.asyncio
@@ -1557,7 +1554,7 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
 
 
 @pytest.mark.asyncio
-async def test_worker_sends_final_result_when_live_slack_only_streamed_placeholder(
+async def test_worker_suppresses_final_outbox_when_live_slack_reports_no_answer_chars(
     db_pool,
 ):
     from api.runtime_control import _process_execution
@@ -1692,11 +1689,8 @@ async def test_worker_sends_final_result_when_live_slack_only_streamed_placehold
         execution_id,
     )
     assert outbox is not None
-    assert outbox["state"] == "pending"
-    final_payload = outbox["final_payload"]
-    if isinstance(final_payload, str):
-        final_payload = json.loads(final_payload)
-    assert final_payload["result_text"] == final_text
+    assert outbox["state"] == "awaiting_terminal"
+    assert outbox["final_payload"] is None
 
 
 @pytest.mark.asyncio
