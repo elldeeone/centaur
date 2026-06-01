@@ -1156,7 +1156,7 @@ async def test_mark_execution_terminal_skips_durable_delivery_after_live_answer(
 
 
 @pytest.mark.asyncio
-async def test_mark_execution_terminal_suppresses_outbox_for_live_delivery_even_without_full_char_count(
+async def test_mark_execution_terminal_queues_outbox_for_incomplete_live_delivery(
     db_pool,
 ):
     from api.runtime_control import _mark_execution_terminal
@@ -1225,14 +1225,18 @@ async def test_mark_execution_terminal_suppresses_outbox_for_live_delivery_even_
         execution_id,
     )
     assert outbox is not None
-    assert outbox["state"] == "awaiting_terminal"
-    assert outbox["final_payload"] is None
+    assert outbox["state"] == "pending"
+    final_payload = outbox["final_payload"]
+    if isinstance(final_payload, str):
+        final_payload = json.loads(final_payload)
+    assert final_payload["result_text"] == result_text
+    assert final_payload["slackbot_streamed_answer_chars"] == len(streamed_prefix)
     ready_events = await db_pool.fetchval(
         "SELECT COUNT(*) FROM agent_execution_events "
         "WHERE execution_id = $1 AND event_kind = 'final_delivery_ready'",
         execution_id,
     )
-    assert int(ready_events or 0) == 0
+    assert int(ready_events or 0) == 1
 
 
 @pytest.mark.asyncio
@@ -1554,7 +1558,7 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
 
 
 @pytest.mark.asyncio
-async def test_worker_suppresses_final_outbox_when_live_slack_reports_no_answer_chars(
+async def test_worker_queues_final_outbox_when_live_slack_reports_no_answer_chars(
     db_pool,
 ):
     from api.runtime_control import _process_execution
@@ -1689,8 +1693,12 @@ async def test_worker_suppresses_final_outbox_when_live_slack_reports_no_answer_
         execution_id,
     )
     assert outbox is not None
-    assert outbox["state"] == "awaiting_terminal"
-    assert outbox["final_payload"] is None
+    assert outbox["state"] == "pending"
+    final_payload = outbox["final_payload"]
+    if isinstance(final_payload, str):
+        final_payload = json.loads(final_payload)
+    assert final_payload["result_text"] == final_text
+    assert "slackbot_streamed_answer_chars" not in final_payload
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,69 @@ import pytest
 
 
 @pytest.mark.asyncio
+async def test_tool_server_pool_uses_single_statement_reset(monkeypatch) -> None:
+    """Sidecar pools must not use asyncpg's multi-statement reset through iron-proxy."""
+    from api import db
+
+    captured: dict[str, object] = {}
+    sentinel_pool = object()
+
+    async def fake_asyncpg_create_pool(database_url, **kwargs):
+        captured["database_url"] = database_url
+        captured.update(kwargs)
+        return sentinel_pool
+
+    def fail_migrations(_database_url):
+        raise AssertionError("tool-server pool should not run migrations")
+
+    monkeypatch.setattr(db.asyncpg, "create_pool", fake_asyncpg_create_pool)
+    monkeypatch.setattr(db, "run_migrations", fail_migrations)
+
+    pool = await db.create_pool(
+        "postgres://localhost/db",
+        apply_migrations=False,
+        min_size=1,
+        max_size=1,
+    )
+
+    assert pool is sentinel_pool
+    assert captured["database_url"] == "postgres://localhost/db"
+    assert captured["min_size"] == 1
+    assert captured["max_size"] == 1
+    assert captured["command_timeout"] == 60
+    assert captured["reset"] is db._iron_proxy_safe_reset
+
+
+@pytest.mark.asyncio
+async def test_api_pool_keeps_default_asyncpg_reset(monkeypatch) -> None:
+    """The schema-owner API pool keeps asyncpg defaults and still migrates."""
+    from api import db
+
+    captured: dict[str, object] = {}
+    migrated: list[str] = []
+    sentinel_pool = object()
+
+    async def fake_asyncpg_create_pool(database_url, **kwargs):
+        captured["database_url"] = database_url
+        captured.update(kwargs)
+        return sentinel_pool
+
+    def fake_migrations(database_url):
+        migrated.append(database_url)
+
+    monkeypatch.setattr(db.asyncpg, "create_pool", fake_asyncpg_create_pool)
+    monkeypatch.setattr(db, "run_migrations", fake_migrations)
+
+    pool = await db.create_pool("postgres://localhost/db", apply_migrations=True)
+
+    assert pool is sentinel_pool
+    assert migrated == ["postgres://localhost/db"]
+    assert captured["database_url"] == "postgres://localhost/db"
+    assert captured["command_timeout"] == 60
+    assert "reset" not in captured
+
+
+@pytest.mark.asyncio
 async def test_retries_until_endpoint_accepts(monkeypatch) -> None:
     """ConnectionRefusedError on early attempts is retried, then succeeds."""
     from api import db

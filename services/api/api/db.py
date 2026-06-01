@@ -109,14 +109,20 @@ async def create_pool(
     # apply_migrations=False. The API (and shared tool-server) own migrations.
     if apply_migrations:
         run_migrations(database_url)
-    pool = await asyncpg.create_pool(
-        database_url,
-        min_size=min_size,
-        max_size=max_size,
-        command_timeout=60,
-    )
+    kwargs = {
+        "min_size": min_size,
+        "max_size": max_size,
+        "command_timeout": 60,
+    }
+    if not apply_migrations:
+        kwargs["reset"] = _iron_proxy_safe_reset
+    pool = await asyncpg.create_pool(database_url, **kwargs)
     assert pool is not None
     return pool
+
+
+async def _iron_proxy_safe_reset(connection: asyncpg.Connection) -> None:
+    await connection.execute("RESET ALL")
 
 
 async def create_pool_with_retry(

@@ -2109,8 +2109,23 @@ async def _mark_execution_terminal(
         decode_jsonb(row["delivery"], {}) if row else {}
     )
     suppress_no_input_delivery = terminal_reason == "no_input"
+    slackbot_agent_session_id = str(metadata.get("slackbot_agent_session_id") or "")
+    if suppress_legacy_delivery and not _slackbot_live_delivery_covers_result(
+        result_text, slackbot_streamed_answer_chars
+    ):
+        log.warning(
+            "slackbot_live_delivery_incomplete_final_fallback_enabled",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            status=status,
+            terminal_reason=terminal_reason,
+            agent_thread_id=agent_thread_id or None,
+            slackbot_agent_session_id=slackbot_agent_session_id or None,
+            slackbot_streamed_answer_chars=slackbot_streamed_answer_chars,
+            result_size_bytes=payload_size_bytes(result_text),
+        )
+        suppress_legacy_delivery = False
     if delivery_platform == "dev" or suppress_legacy_delivery or suppress_no_input_delivery:
-        slackbot_agent_session_id = str(metadata.get("slackbot_agent_session_id") or "")
         result_size = payload_size_bytes(result_text)
         if suppress_legacy_delivery and result_size > 0 and slackbot_streamed_answer_chars <= 0:
             log.warning(
