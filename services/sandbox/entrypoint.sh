@@ -3,6 +3,7 @@ set -e
 
 HOME_DIR="$(eval echo ~)"
 FIREWALL_HOSTNAME="${FIREWALL_HOST:-firewall}"
+FIREWALL_PROXY_PORT="${FIREWALL_PROXY_PORT:-8080}"
 STATE_DIR="${CENTAUR_STATE_DIR:-$HOME_DIR/state}"
 
 if [ -d "$STATE_DIR" ] && [ -w "$STATE_DIR" ]; then
@@ -21,7 +22,7 @@ mkdir -p "$HOME_DIR/.config/amp"
 cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
 {
   "amp.experimental.compaction": 95,
-  "amp.proxy": "http://${FIREWALL_HOSTNAME}:8080",
+  "amp.proxy": "http://${FIREWALL_HOSTNAME}:${FIREWALL_PROXY_PORT}",
   "amp.git.commit.coauthor.enabled": false
 }
 EOF

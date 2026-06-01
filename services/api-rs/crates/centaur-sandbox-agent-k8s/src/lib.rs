@@ -1055,6 +1055,7 @@ fn proxy_env(
     let proxy_url = format!("http://{proxy_host}:{proxy_port}");
     let no_proxy = no_proxy_value(proxy_host, api_host, no_proxy_extra);
     env.insert("FIREWALL_HOST".to_owned(), proxy_host.to_owned());
+    env.insert("FIREWALL_PROXY_PORT".to_owned(), proxy_port.to_string());
     env.insert("HTTP_PROXY".to_owned(), proxy_url.clone());
     env.insert("HTTPS_PROXY".to_owned(), proxy_url.clone());
     env.insert("http_proxy".to_owned(), proxy_url.clone());
@@ -1716,6 +1717,7 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         assert_eq!(agent_env["OPENAI_API_KEY"], "OPENAI_API_KEY");
         assert_eq!(agent_env["FIREWALL_HOST"], "asbx-test-proxy");
+        assert_eq!(agent_env["FIREWALL_PROXY_PORT"], "18080");
         assert_eq!(agent_env["HTTPS_PROXY"], "http://asbx-test-proxy:18080");
         assert!(agent_env["NO_PROXY"].contains("asbx-test-proxy"));
         assert!(agent_env["NO_PROXY"].contains("centaur-centaur-api"));
