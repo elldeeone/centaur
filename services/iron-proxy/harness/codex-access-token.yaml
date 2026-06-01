@@ -1,0 +1,17 @@
+transforms:
+  - name: secrets
+    config:
+      secrets:
+        - source:
+            type: token_broker
+            credential_id: openai-codex
+            ttl: 1m
+          inject:
+            header: Authorization
+            formatter: "Bearer {{.Value}}"
+          rules: [{ host: chatgpt.com }]
+        - source:
+            placeholder: OPENAI_CODEX_ACCOUNT_ID
+          inject:
+            header: chatgpt-account-id
+          rules: [{ host: chatgpt.com }]

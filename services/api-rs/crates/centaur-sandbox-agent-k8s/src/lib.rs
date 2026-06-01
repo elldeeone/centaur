@@ -14,11 +14,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use centaur_iron_proxy::ProxyFragment;
 use centaur_sandbox_core::{
     ExecCommand, ExecResult, MountKind, ObservedSandbox, ReadOptions, ReadResult, SandboxBackend,
     SandboxError, SandboxHandle, SandboxId, SandboxResult, SandboxSpec, SandboxStatus, WriteAck,
 };
-use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod};
+use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Status;
 use kube::api::{
     AttachParams, AttachedProcess, DeleteParams, ListParams, Patch, PatchParams, PostParams,
@@ -50,6 +51,7 @@ pub struct AgentSandboxConfig {
     pub annotations: BTreeMap<String, String>,
     pub image_pull_policy: Option<String>,
     pub state_volume: Option<StateVolumeConfig>,
+    pub iron_proxy: Option<IronProxyPodConfig>,
     pub ready_timeout: Duration,
 }
 
@@ -63,6 +65,7 @@ impl AgentSandboxConfig {
             annotations: BTreeMap::new(),
             image_pull_policy: None,
             state_volume: None,
+            iron_proxy: None,
             ready_timeout: Duration::from_secs(60),
         }
     }
@@ -70,6 +73,46 @@ impl AgentSandboxConfig {
     pub fn state_volume(mut self, state_volume: StateVolumeConfig) -> Self {
         self.state_volume = Some(state_volume);
         self
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IronProxyPodConfig {
+    pub image: String,
+    pub image_pull_policy: Option<String>,
+    pub config_yaml: String,
+    pub placeholder_env: BTreeMap<String, String>,
+    pub ca_secret_name: String,
+    pub env_from_secret_name: Option<String>,
+    pub extra_env: BTreeMap<String, String>,
+}
+
+impl IronProxyPodConfig {
+    pub fn new(
+        image: impl Into<String>,
+        config_yaml: impl Into<String>,
+        ca_secret_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            image: image.into(),
+            image_pull_policy: None,
+            config_yaml: config_yaml.into(),
+            placeholder_env: BTreeMap::new(),
+            ca_secret_name: ca_secret_name.into(),
+            env_from_secret_name: None,
+            extra_env: BTreeMap::new(),
+        }
+    }
+
+    pub fn from_fragments(
+        image: impl Into<String>,
+        config_yaml: impl Into<String>,
+        ca_secret_name: impl Into<String>,
+        fragments: &[ProxyFragment],
+    ) -> Self {
+        let mut config = Self::new(image, config_yaml, ca_secret_name);
+        config.placeholder_env = centaur_iron_proxy::placeholder_env(fragments);
+        config
     }
 }
 
@@ -137,6 +180,10 @@ impl AgentSandboxBackend {
         Api::namespaced(self.client.clone(), &self.config.namespace)
     }
 
+    fn config_maps(&self) -> Api<ConfigMap> {
+        Api::namespaced(self.client.clone(), &self.config.namespace)
+    }
+
     async fn get_sandbox(&self, id: &SandboxId) -> SandboxResult<Option<crd::Sandbox>> {
         match self.sandboxes().get(id.as_str()).await {
             Ok(sandbox) => Ok(Some(sandbox)),
@@ -175,6 +222,48 @@ impl AgentSandboxBackend {
             Ok(_) => Ok(()),
             Err(err) if is_not_found(&err) => Ok(()),
             Err(err) => Err(map_kube_error("delete sandbox state pvc", err)),
+        }
+    }
+
+    async fn create_iron_proxy_configmap(&self, id: &SandboxId) -> SandboxResult<()> {
+        let Some(iron_proxy) = &self.config.iron_proxy else {
+            return Ok(());
+        };
+        let name = iron_proxy_configmap_name(id);
+        let _ = self.delete_iron_proxy_configmap(id).await;
+        let mut data = BTreeMap::new();
+        data.insert("proxy.yaml".to_owned(), iron_proxy.config_yaml.clone());
+        let mut labels = BTreeMap::new();
+        labels.insert(MANAGED_BY_LABEL.to_owned(), MANAGED_BY_VALUE.to_owned());
+        labels.insert(SANDBOX_ID_LABEL.to_owned(), id.as_str().to_owned());
+        let body = ConfigMap {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some(name),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        };
+        self.config_maps()
+            .create(&PostParams::default(), &body)
+            .await
+            .map(|_| ())
+            .map_err(|err| map_kube_error("create iron-proxy configmap", err))
+    }
+
+    async fn delete_iron_proxy_configmap(&self, id: &SandboxId) -> SandboxResult<()> {
+        if self.config.iron_proxy.is_none() {
+            return Ok(());
+        }
+        match self
+            .config_maps()
+            .delete(&iron_proxy_configmap_name(id), &DeleteParams::default())
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(err) if is_not_found(&err) => Ok(()),
+            Err(err) => Err(map_kube_error("delete iron-proxy configmap", err)),
         }
     }
 
@@ -260,13 +349,17 @@ impl SandboxBackend for AgentSandboxBackend {
 
     async fn create(&self, spec: SandboxSpec) -> SandboxResult<SandboxHandle> {
         let id = SandboxId::new(next_sandbox_name());
+        self.create_iron_proxy_configmap(&id).await?;
         let sandbox = build_agent_sandbox(&id, &spec, &self.config)?;
         let create_result = self
             .sandboxes()
             .create(&PostParams::default(), &sandbox)
             .await
             .map_err(|err| map_kube_error("create sandbox", err));
-        create_result?;
+        if let Err(err) = create_result {
+            let _ = self.delete_iron_proxy_configmap(&id).await;
+            return Err(err);
+        }
         if let Err(err) = self.wait_until_running(&id).await {
             let _ = self.stop(&id).await;
             return Err(err);
@@ -388,7 +481,8 @@ impl SandboxBackend for AgentSandboxBackend {
             Ok(_) => self.delete_state_pvc(id).await,
             Err(err) if is_not_found(&err) => self.delete_state_pvc(id).await,
             Err(err) => Err(map_kube_error("delete sandbox", err)),
-        }
+        }?;
+        self.delete_iron_proxy_configmap(id).await
     }
 
     async fn pause(&self, id: &SandboxId) -> SandboxResult<()> {
@@ -571,12 +665,7 @@ fn build_agent_sandbox(
     insert_optional(
         &mut container,
         "env",
-        (!spec.env.is_empty()).then(|| {
-            spec.env
-                .iter()
-                .map(|env| json!({ "name": env.name, "value": env.value }))
-                .collect::<Vec<_>>()
-        }),
+        (!spec.env.is_empty() || config.iron_proxy.is_some()).then(|| env_json(spec, config)),
     );
     insert_optional(&mut container, "workingDir", spec.working_dir.clone());
     insert_optional(&mut container, "resources", resources_json(spec));
@@ -588,14 +677,24 @@ fn build_agent_sandbox(
             "mountPath": state_volume.mount_path,
         }));
     }
+    if config.iron_proxy.is_some() {
+        volume_mounts.push(json!({
+            "name": "iron-proxy-certs",
+            "mountPath": "/firewall-certs",
+            "readOnly": true,
+        }));
+    }
     insert_optional(
         &mut container,
         "volumeMounts",
         (!volume_mounts.is_empty()).then_some(volume_mounts),
     );
+    if let Some(iron_proxy) = &config.iron_proxy {
+        volumes.extend(iron_proxy_volumes(id, iron_proxy));
+    }
 
     let mut pod_spec = json!({
-        "containers": [container],
+        "containers": pod_containers(container, config),
         "restartPolicy": "Never",
         "automountServiceAccountToken": false,
     });
@@ -664,6 +763,158 @@ fn mount_json(spec: &SandboxSpec) -> (Vec<Value>, Vec<Value>) {
     (volumes, mounts)
 }
 
+fn env_json(spec: &SandboxSpec, config: &AgentSandboxConfig) -> Vec<Value> {
+    let mut env = BTreeMap::<String, String>::new();
+    for item in &spec.env {
+        env.insert(item.name.clone(), item.value.clone());
+    }
+    if let Some(iron_proxy) = &config.iron_proxy {
+        for (name, value) in &iron_proxy.placeholder_env {
+            env.entry(name.clone()).or_insert_with(|| value.clone());
+        }
+        for (name, value) in proxy_env() {
+            env.insert(name, value);
+        }
+    }
+    env.into_iter()
+        .map(|(name, value)| json!({ "name": name, "value": value }))
+        .collect()
+}
+
+fn proxy_env() -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    env.insert("HTTP_PROXY".to_owned(), "http://127.0.0.1:8080".to_owned());
+    env.insert("HTTPS_PROXY".to_owned(), "http://127.0.0.1:8080".to_owned());
+    env.insert("http_proxy".to_owned(), "http://127.0.0.1:8080".to_owned());
+    env.insert("https_proxy".to_owned(), "http://127.0.0.1:8080".to_owned());
+    env.insert(
+        "NO_PROXY".to_owned(),
+        "localhost,127.0.0.1,::1,api".to_owned(),
+    );
+    env.insert(
+        "no_proxy".to_owned(),
+        "localhost,127.0.0.1,::1,api".to_owned(),
+    );
+    env.insert(
+        "NODE_EXTRA_CA_CERTS".to_owned(),
+        "/firewall-certs/ca-cert.pem".to_owned(),
+    );
+    env.insert(
+        "REQUESTS_CA_BUNDLE".to_owned(),
+        "/firewall-certs/ca-cert.pem".to_owned(),
+    );
+    env.insert(
+        "SSL_CERT_FILE".to_owned(),
+        "/firewall-certs/ca-cert.pem".to_owned(),
+    );
+    env.insert(
+        "GIT_SSL_CAINFO".to_owned(),
+        "/firewall-certs/ca-cert.pem".to_owned(),
+    );
+    env
+}
+
+fn pod_containers(agent_container: Value, config: &AgentSandboxConfig) -> Vec<Value> {
+    let mut containers = vec![agent_container];
+    if let Some(iron_proxy) = &config.iron_proxy {
+        containers.push(iron_proxy_container(iron_proxy));
+    }
+    containers
+}
+
+fn iron_proxy_container(iron_proxy: &IronProxyPodConfig) -> Value {
+    let mut env = BTreeMap::new();
+    env.insert(
+        "IRON_MANAGEMENT_API_KEY".to_owned(),
+        "unused-local-sidecar-key".to_owned(),
+    );
+    for (name, value) in &iron_proxy.extra_env {
+        env.insert(name.clone(), value.clone());
+    }
+    let mut container = json!({
+        "name": "iron-proxy",
+        "image": iron_proxy.image,
+        "env": env.into_iter().map(|(name, value)| json!({ "name": name, "value": value })).collect::<Vec<_>>(),
+        "ports": [
+            {"containerPort": 8080, "name": "proxy"},
+            {"containerPort": 9092, "name": "management"},
+            {"containerPort": 9093, "name": "health"}
+        ],
+        "readinessProbe": {
+            "httpGet": {
+                "path": "/healthz",
+                "port": 9093
+            },
+            "periodSeconds": 5,
+            "failureThreshold": 30
+        },
+        "livenessProbe": {
+            "httpGet": {
+                "path": "/healthz",
+                "port": 9093
+            }
+        },
+        "securityContext": {
+            "allowPrivilegeEscalation": false,
+            "capabilities": {"drop": ["ALL"]},
+            "seccompProfile": {"type": "RuntimeDefault"}
+        },
+        "volumeMounts": [
+            {
+                "name": "iron-proxy-config-rendered",
+                "mountPath": "/etc/iron-proxy-rendered",
+                "readOnly": true
+            },
+            {
+                "name": "iron-proxy-config",
+                "mountPath": "/etc/iron-proxy"
+            },
+            {
+                "name": "iron-proxy-certs",
+                "mountPath": "/certs"
+            },
+            {
+                "name": "iron-proxy-ca",
+                "mountPath": "/etc/iron-proxy-ca",
+                "readOnly": true
+            }
+        ],
+        "command": ["/bin/sh", "-ec"],
+        "args": [
+            "cp /etc/iron-proxy-rendered/proxy.yaml /etc/iron-proxy/proxy.yaml && exec /entrypoint.sh"
+        ]
+    });
+    insert_optional(
+        &mut container,
+        "imagePullPolicy",
+        iron_proxy.image_pull_policy.clone(),
+    );
+    insert_optional(
+        &mut container,
+        "envFrom",
+        iron_proxy
+            .env_from_secret_name
+            .as_ref()
+            .map(|name| vec![json!({ "secretRef": { "name": name } })]),
+    );
+    container
+}
+
+fn iron_proxy_volumes(id: &SandboxId, iron_proxy: &IronProxyPodConfig) -> Vec<Value> {
+    vec![
+        json!({
+            "name": "iron-proxy-config-rendered",
+            "configMap": {"name": iron_proxy_configmap_name(id)}
+        }),
+        json!({"name": "iron-proxy-config", "emptyDir": {}}),
+        json!({"name": "iron-proxy-certs", "emptyDir": {}}),
+        json!({
+            "name": "iron-proxy-ca",
+            "secret": {"secretName": iron_proxy.ca_secret_name}
+        }),
+    ]
+}
+
 fn resources_json(spec: &SandboxSpec) -> Option<Value> {
     let resources = spec.resources.as_ref()?;
     let mut limits = serde_json::Map::new();
@@ -700,6 +951,10 @@ fn state_volume_claim_json(state_volume: &StateVolumeConfig) -> Vec<Value> {
 
 fn state_pvc_name(id: &SandboxId) -> String {
     format!("state-{}", id.as_str())
+}
+
+fn iron_proxy_configmap_name(id: &SandboxId) -> String {
+    format!("{}-iron-proxy", id.as_str())
 }
 
 fn insert_optional<T>(target: &mut Value, key: &str, value: Option<T>)

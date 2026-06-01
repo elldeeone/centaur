@@ -280,11 +280,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "centaur-iron-proxy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_yaml",
+ "thiserror",
+]
+
+[[package]]
 name = "centaur-sandbox-agent-k8s"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "centaur-iron-proxy",
  "centaur-sandbox-core",
  "k8s-openapi",
  "kube",

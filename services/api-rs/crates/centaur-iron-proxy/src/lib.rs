@@ -1,0 +1,675 @@
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
+
+use serde::{Deserialize, Serialize};
+use serde_yaml::{Mapping, Value};
+use thiserror::Error;
+
+pub const DEFAULT_PROXY_BASE_CONFIG: &str =
+    include_str!("../../../../api/api/iron-proxy.base.yaml");
+pub const CENTAUR_CORE_PG_LISTENER: &str = "centaur_core";
+pub const DEFAULT_CORE_PG_PORT: u16 = 5432;
+pub const CLAUDE_CODE_API_KEY_FRAGMENT: &str =
+    include_str!("../../../../iron-proxy/harness/claude-code-api-key.yaml");
+pub const CLAUDE_CODE_ACCESS_TOKEN_FRAGMENT: &str =
+    include_str!("../../../../iron-proxy/harness/claude-code-access-token.yaml");
+pub const CODEX_API_KEY_FRAGMENT: &str =
+    include_str!("../../../../iron-proxy/harness/codex-api-key.yaml");
+pub const CODEX_ACCESS_TOKEN_FRAGMENT: &str =
+    include_str!("../../../../iron-proxy/harness/codex-access-token.yaml");
+
+const MANAGED_TRANSFORMS: &[&str] = &["secrets", "gcp_auth", "oauth_token", "hmac_sign"];
+
+#[derive(Debug, Error)]
+pub enum IronProxyConfigError {
+    #[error("failed to read {path}: {source}")]
+    ReadFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to parse iron-proxy fragment {path}: {source}")]
+    ParseFragment {
+        path: PathBuf,
+        source: serde_yaml::Error,
+    },
+    #[error("failed to parse iron-proxy base yaml: {0}")]
+    ParseBase(serde_yaml::Error),
+    #[error("iron-proxy base config must be a mapping")]
+    BaseNotMapping,
+    #[error("failed to serialize iron-proxy yaml: {0}")]
+    Serialize(serde_yaml::Error),
+}
+
+pub type Result<T> = std::result::Result<T, IronProxyConfigError>;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourcePolicy {
+    pub kind: SourceKind,
+    pub op_vault: String,
+    pub ttl: String,
+}
+
+impl SourcePolicy {
+    pub fn env() -> Self {
+        Self {
+            kind: SourceKind::Env,
+            op_vault: "ai-agents".to_owned(),
+            ttl: "10m".to_owned(),
+        }
+    }
+
+    pub fn onepassword(op_vault: impl Into<String>, ttl: impl Into<String>) -> Self {
+        Self {
+            kind: SourceKind::OnePassword,
+            op_vault: op_vault.into(),
+            ttl: ttl.into(),
+        }
+    }
+
+    pub fn onepassword_connect(op_vault: impl Into<String>, ttl: impl Into<String>) -> Self {
+        Self {
+            kind: SourceKind::OnePasswordConnect,
+            op_vault: op_vault.into(),
+            ttl: ttl.into(),
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let kind = match std::env::var("FIREWALL_MANAGER_SECRET_SOURCE")
+            .unwrap_or_else(|_| "env".to_owned())
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "onepassword" => SourceKind::OnePassword,
+            "onepassword-connect" => SourceKind::OnePasswordConnect,
+            _ => SourceKind::Env,
+        };
+        Self {
+            kind,
+            op_vault: std::env::var("OP_VAULT").unwrap_or_else(|_| "ai-agents".to_owned()),
+            ttl: std::env::var("FIREWALL_MANAGER_SECRET_TTL").unwrap_or_else(|_| "10m".to_owned()),
+        }
+    }
+
+    fn source_for(&self, placeholder: &str, json_key: Option<&str>) -> Value {
+        let mut source = Mapping::new();
+        match self.kind {
+            SourceKind::Env => {
+                source.insert(string_value("type"), string_value("env"));
+                source.insert(string_value("var"), string_value(placeholder));
+            }
+            SourceKind::OnePassword => {
+                source.insert(string_value("type"), string_value("1password"));
+                source.insert(
+                    string_value("secret_ref"),
+                    string_value(format!("op://{}/{placeholder}/credential", self.op_vault)),
+                );
+                source.insert(string_value("ttl"), string_value(&self.ttl));
+            }
+            SourceKind::OnePasswordConnect => {
+                source.insert(string_value("type"), string_value("1password_connect"));
+                source.insert(
+                    string_value("secret_ref"),
+                    string_value(format!("op://{}/{placeholder}/credential", self.op_vault)),
+                );
+                source.insert(string_value("ttl"), string_value(&self.ttl));
+            }
+        }
+        if let Some(json_key) = json_key {
+            source.insert(string_value("json_key"), string_value(json_key));
+        }
+        Value::Mapping(source)
+    }
+}
+
+impl Default for SourcePolicy {
+    fn default() -> Self {
+        Self::env()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceKind {
+    Env,
+    OnePassword,
+    OnePasswordConnect,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProxyFragment {
+    #[serde(default)]
+    pub transforms: Vec<Value>,
+    #[serde(default)]
+    pub postgres: Vec<Value>,
+    #[serde(default, flatten)]
+    pub top_level: BTreeMap<String, Value>,
+}
+
+impl ProxyFragment {
+    pub fn is_empty(&self) -> bool {
+        self.transforms.is_empty() && self.postgres.is_empty() && self.top_level.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CorePgListener {
+    pub port: u16,
+    pub dsn_env_var: String,
+    pub password_env: String,
+}
+
+impl CorePgListener {
+    pub fn new(port: u16, dsn_env_var: impl Into<String>, password_env: impl Into<String>) -> Self {
+        Self {
+            port,
+            dsn_env_var: dsn_env_var.into(),
+            password_env: password_env.into(),
+        }
+    }
+}
+
+pub fn load_fragment_file(path: impl AsRef<Path>) -> Result<ProxyFragment> {
+    let path = path.as_ref();
+    let contents = fs::read_to_string(path).map_err(|source| IronProxyConfigError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_yaml::from_str(&contents).map_err(|source| IronProxyConfigError::ParseFragment {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+pub fn load_fragment_str(contents: &str) -> Result<ProxyFragment> {
+    serde_yaml::from_str(contents).map_err(|source| IronProxyConfigError::ParseFragment {
+        path: PathBuf::from("<inline>"),
+        source,
+    })
+}
+
+pub fn load_fragment_files(paths: &[PathBuf]) -> Result<Vec<ProxyFragment>> {
+    paths
+        .iter()
+        .map(load_fragment_file)
+        .collect::<Result<Vec<_>>>()
+}
+
+pub fn harness_fragment(engine: &str, auth_mode: &str) -> Result<Option<ProxyFragment>> {
+    let contents = match (engine, auth_mode) {
+        ("claude-code", "access_token") => CLAUDE_CODE_ACCESS_TOKEN_FRAGMENT,
+        ("claude-code", _) => CLAUDE_CODE_API_KEY_FRAGMENT,
+        ("codex", "access_token") => CODEX_ACCESS_TOKEN_FRAGMENT,
+        ("codex", _) => CODEX_API_KEY_FRAGMENT,
+        _ => return Ok(None),
+    };
+    load_fragment_str(contents).map(Some)
+}
+
+pub fn placeholder_env(fragments: &[ProxyFragment]) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    for fragment in fragments {
+        for transform in &fragment.transforms {
+            if transform_name(transform) != Some("secrets") {
+                continue;
+            }
+            for secret in transform["config"]["secrets"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+            {
+                let Some(proxy_value) = secret["replace"]["proxy_value"].as_str() else {
+                    continue;
+                };
+                if proxy_value.is_empty() || proxy_value.contains('=') {
+                    continue;
+                }
+                env.entry(proxy_value.to_owned())
+                    .or_insert_with(|| proxy_value.to_owned());
+            }
+        }
+    }
+    env
+}
+
+pub fn render_proxy_yaml(
+    base_config: Option<&str>,
+    fragments: &[ProxyFragment],
+    core_pg: Option<&CorePgListener>,
+) -> Result<String> {
+    render_proxy_yaml_with_source_policy(base_config, fragments, core_pg, &SourcePolicy::default())
+}
+
+pub fn render_proxy_yaml_with_source_policy(
+    base_config: Option<&str>,
+    fragments: &[ProxyFragment],
+    core_pg: Option<&CorePgListener>,
+    source_policy: &SourcePolicy,
+) -> Result<String> {
+    let mut cfg: Value = serde_yaml::from_str(base_config.unwrap_or(DEFAULT_PROXY_BASE_CONFIG))
+        .map_err(IronProxyConfigError::ParseBase)?;
+    let Value::Mapping(cfg_map) = &mut cfg else {
+        return Err(IronProxyConfigError::BaseNotMapping);
+    };
+
+    for fragment in fragments {
+        for (key, value) in &fragment.top_level {
+            cfg_map.insert(string_value(key), value.clone());
+        }
+    }
+
+    let mut transforms = existing_unmanaged_transforms(cfg_map);
+    let managed = fragments
+        .iter()
+        .flat_map(|fragment| fragment.transforms.iter().cloned())
+        .map(|transform| resolve_fragment_transform_sources(transform, source_policy))
+        .collect::<Vec<_>>();
+    if !managed.is_empty() {
+        insert_before_header_allowlist(&mut transforms, managed);
+    }
+    cfg_map.insert(string_value("transforms"), Value::Sequence(transforms));
+
+    let mut postgres = fragments
+        .iter()
+        .flat_map(|fragment| fragment.postgres.iter().cloned())
+        .collect::<Vec<_>>();
+    if let Some(core_pg) = core_pg {
+        postgres.push(core_pg_listener_value(core_pg));
+    }
+    if postgres.is_empty() {
+        cfg_map.remove(&string_value("postgres"));
+    } else {
+        cfg_map.insert(string_value("postgres"), Value::Sequence(postgres));
+    }
+
+    serde_yaml::to_string(&cfg).map_err(IronProxyConfigError::Serialize)
+}
+
+fn resolve_fragment_transform_sources(mut transform: Value, source_policy: &SourcePolicy) -> Value {
+    fill_missing_secret_sources(&mut transform, source_policy);
+    resolve_placeholder_source_values(&mut transform, source_policy);
+    transform
+}
+
+fn fill_missing_secret_sources(transform: &mut Value, source_policy: &SourcePolicy) {
+    if transform_name(transform) != Some("secrets") {
+        return;
+    }
+    let Some(secrets) = transform
+        .as_mapping_mut()
+        .and_then(|map| map.get_mut(&string_value("config")))
+        .and_then(Value::as_mapping_mut)
+        .and_then(|map| map.get_mut(&string_value("secrets")))
+        .and_then(Value::as_sequence_mut)
+    else {
+        return;
+    };
+    for secret in secrets {
+        let Some(secret_map) = secret.as_mapping_mut() else {
+            continue;
+        };
+        if secret_map.contains_key(&string_value("source")) {
+            continue;
+        }
+        let Some(proxy_value) = secret_map
+            .get(&string_value("replace"))
+            .and_then(Value::as_mapping)
+            .and_then(|map| map.get(&string_value("proxy_value")))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        secret_map.insert(
+            string_value("source"),
+            source_policy.source_for(proxy_value, None),
+        );
+    }
+}
+
+fn resolve_placeholder_source_values(value: &mut Value, source_policy: &SourcePolicy) {
+    match value {
+        Value::Mapping(map) => {
+            if let Some(placeholder) = map
+                .get(&string_value("placeholder"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+            {
+                let json_key = map
+                    .get(&string_value("json_key"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                *value = source_policy.source_for(&placeholder, json_key.as_deref());
+                return;
+            }
+            for child in map.values_mut() {
+                resolve_placeholder_source_values(child, source_policy);
+            }
+        }
+        Value::Sequence(values) => {
+            for child in values {
+                resolve_placeholder_source_values(child, source_policy);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn existing_unmanaged_transforms(cfg: &Mapping) -> Vec<Value> {
+    cfg.get(&string_value("transforms"))
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter(|transform| {
+            transform_name(transform).is_none_or(|name| !MANAGED_TRANSFORMS.contains(&name))
+        })
+        .cloned()
+        .collect()
+}
+
+fn insert_before_header_allowlist(transforms: &mut Vec<Value>, managed: Vec<Value>) {
+    if let Some(index) = transforms
+        .iter()
+        .position(|transform| transform_name(transform) == Some("header_allowlist"))
+    {
+        transforms.splice(index..index, managed);
+    } else {
+        transforms.extend(managed);
+    }
+}
+
+fn transform_name(value: &Value) -> Option<&str> {
+    value
+        .as_mapping()
+        .and_then(|map| map.get(&string_value("name")))
+        .and_then(Value::as_str)
+}
+
+fn core_pg_listener_value(core_pg: &CorePgListener) -> Value {
+    mapping([
+        ("name", string_value(CENTAUR_CORE_PG_LISTENER)),
+        ("listen", string_value(format!("0.0.0.0:{}", core_pg.port))),
+        (
+            "upstream",
+            mapping([(
+                "dsn",
+                mapping([
+                    ("type", string_value("env")),
+                    ("var", string_value(&core_pg.dsn_env_var)),
+                ]),
+            )]),
+        ),
+        (
+            "client",
+            mapping([
+                ("user", string_value("app_user")),
+                ("password_env", string_value(&core_pg.password_env)),
+            ]),
+        ),
+    ])
+}
+
+fn mapping<const N: usize>(items: [(&str, Value); N]) -> Value {
+    let mut map = Mapping::new();
+    for (key, value) in items {
+        map.insert(string_value(key), value);
+    }
+    Value::Mapping(map)
+}
+
+fn string_value(value: impl AsRef<str>) -> Value {
+    Value::String(value.as_ref().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_rendered(rendered: &str) -> Value {
+        serde_yaml::from_str(rendered).unwrap()
+    }
+
+    fn transform_names(cfg: &Value) -> Vec<&str> {
+        cfg["transforms"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|value| value["name"].as_str().unwrap())
+            .collect()
+    }
+
+    fn fragment_yaml(yaml: &str) -> ProxyFragment {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn inserts_fragment_transforms_before_header_allowlist() {
+        let fragment = fragment_yaml(
+            r#"
+transforms:
+  - name: secrets
+    config:
+      secrets: []
+  - name: gcp_auth
+    config:
+      keyfile: { type: env, var: GCP }
+      scopes: ["scope"]
+      rules: [{ host: "*.googleapis.com" }]
+  - name: oauth_token
+    config:
+      tokens: []
+  - name: hmac_sign
+    config:
+      rules: [{ host: api.example.com }]
+"#,
+        );
+        let rendered = render_proxy_yaml(None, &[fragment], None).unwrap();
+        let cfg = parse_rendered(&rendered);
+        assert_eq!(
+            transform_names(&cfg),
+            vec![
+                "allowlist",
+                "secrets",
+                "gcp_auth",
+                "oauth_token",
+                "hmac_sign",
+                "header_allowlist",
+            ]
+        );
+    }
+
+    #[test]
+    fn replaces_managed_transforms_from_base_config() {
+        let base = r#"
+transforms:
+  - name: allowlist
+    config: { domains: ["*"] }
+  - name: secrets
+    config: { secrets: [{ old: true }] }
+  - name: header_allowlist
+    config: { headers: ["host"] }
+"#;
+        let fragment = fragment_yaml(
+            r#"
+transforms:
+  - name: secrets
+    config:
+      secrets:
+        - source: { type: env, var: OPENAI_API_KEY }
+          replace:
+            proxy_value: OPENAI_API_KEY
+            match_headers: ["Authorization"]
+          rules: [{ host: api.openai.com }]
+"#,
+        );
+        let rendered = render_proxy_yaml(Some(base), &[fragment], None).unwrap();
+        let cfg = parse_rendered(&rendered);
+        assert_eq!(
+            transform_names(&cfg),
+            vec!["allowlist", "secrets", "header_allowlist"]
+        );
+        assert_eq!(
+            cfg["transforms"][1]["config"]["secrets"][0]["source"]["var"],
+            "OPENAI_API_KEY"
+        );
+        assert!(cfg["transforms"][1]["config"]["secrets"][0]["old"].is_null());
+    }
+
+    #[test]
+    fn appends_core_pg_listener_after_fragment_postgres() {
+        let fragment = fragment_yaml(
+            r#"
+postgres:
+  - name: analytics
+    listen: 0.0.0.0:5432
+    upstream:
+      dsn: { type: env, var: ANALYTICS_DSN }
+    client:
+      user: app_user
+      password_env: PG_PROXY_PASSWORD_ANALYTICS
+"#,
+        );
+        let rendered = render_proxy_yaml(
+            None,
+            &[fragment],
+            Some(&CorePgListener::new(
+                5433,
+                "CENTAUR_DATABASE_URL",
+                "PG_PROXY_PASSWORD_CENTAUR_CORE",
+            )),
+        )
+        .unwrap();
+        let cfg = parse_rendered(&rendered);
+        let postgres = cfg["postgres"].as_sequence().unwrap();
+        assert_eq!(postgres[0]["name"], "analytics");
+        assert_eq!(postgres[1]["name"], CENTAUR_CORE_PG_LISTENER);
+        assert_eq!(postgres[1]["listen"], "0.0.0.0:5433");
+        assert_eq!(postgres[1]["upstream"]["dsn"]["type"], "env");
+        assert_eq!(
+            postgres[1]["upstream"]["dsn"]["var"],
+            "CENTAUR_DATABASE_URL"
+        );
+    }
+
+    #[test]
+    fn preserves_extra_top_level_config_from_fragments() {
+        let fragment = fragment_yaml(
+            r#"
+mcp:
+  servers:
+    - name: github
+      rules: [{ host: mcp.github.com }]
+      tools:
+        - name: search_repositories
+"#,
+        );
+        let rendered = render_proxy_yaml(None, &[fragment], None).unwrap();
+        let cfg = parse_rendered(&rendered);
+        assert_eq!(cfg["mcp"]["servers"][0]["name"], "github");
+    }
+
+    #[test]
+    fn extracts_placeholder_env_from_replace_mode_secrets() {
+        let fragment = fragment_yaml(
+            r#"
+transforms:
+  - name: secrets
+    config:
+      secrets:
+        - source: { type: env, var: OPENAI_API_KEY }
+          replace:
+            proxy_value: OPENAI_API_KEY
+            match_headers: ["Authorization"]
+          rules: [{ host: api.openai.com }]
+        - source: { type: token_broker, credential_id: openai-codex, ttl: 1m }
+          inject:
+            header: Authorization
+            formatter: "Bearer {{.Value}}"
+          rules: [{ host: chatgpt.com }]
+"#,
+        );
+        assert_eq!(
+            placeholder_env(&[fragment]),
+            BTreeMap::from([("OPENAI_API_KEY".to_owned(), "OPENAI_API_KEY".to_owned())])
+        );
+    }
+
+    #[test]
+    fn fills_missing_sources_from_operator_policy() {
+        let fragment = fragment_yaml(
+            r#"
+transforms:
+  - name: secrets
+    config:
+      secrets:
+        - replace:
+            proxy_value: SLACK_BOT_TOKEN
+            match_headers: ["Authorization"]
+          rules: [{ host: slack.com }]
+        - source:
+            placeholder: OPENAI_CODEX_ACCOUNT_ID
+          inject:
+            header: chatgpt-account-id
+          rules: [{ host: chatgpt.com }]
+  - name: oauth_token
+    config:
+      tokens:
+        - grant: refresh_token
+          refresh_token:
+            placeholder: GOOGLE_TOKEN_JSON
+            json_key: refresh_token
+          token_endpoint: https://oauth2.googleapis.com/token
+          rules: [{ host: gmail.googleapis.com }]
+"#,
+        );
+        let rendered = render_proxy_yaml_with_source_policy(
+            None,
+            &[fragment],
+            None,
+            &SourcePolicy::onepassword_connect("engineering", "5m"),
+        )
+        .unwrap();
+        let cfg = parse_rendered(&rendered);
+        let secrets = cfg["transforms"][1]["config"]["secrets"]
+            .as_sequence()
+            .unwrap();
+        assert_eq!(secrets[0]["source"]["type"], "1password_connect");
+        assert_eq!(
+            secrets[0]["source"]["secret_ref"],
+            "op://engineering/SLACK_BOT_TOKEN/credential"
+        );
+        assert_eq!(
+            secrets[1]["source"]["secret_ref"],
+            "op://engineering/OPENAI_CODEX_ACCOUNT_ID/credential"
+        );
+        let token = &cfg["transforms"][2]["config"]["tokens"][0];
+        assert_eq!(
+            token["refresh_token"]["secret_ref"],
+            "op://engineering/GOOGLE_TOKEN_JSON/credential"
+        );
+        assert_eq!(token["refresh_token"]["json_key"], "refresh_token");
+        assert!(!rendered.contains("placeholder:"));
+    }
+
+    #[test]
+    fn loads_builtin_harness_fragments() {
+        let codex = harness_fragment("codex", "api_key").unwrap().unwrap();
+        assert_eq!(
+            placeholder_env(&[codex]),
+            BTreeMap::from([("OPENAI_API_KEY".to_owned(), "OPENAI_API_KEY".to_owned())])
+        );
+        let codex_access = harness_fragment("codex", "access_token").unwrap().unwrap();
+        let rendered = render_proxy_yaml_with_source_policy(
+            None,
+            &[codex_access],
+            None,
+            &SourcePolicy::onepassword("ai-agents", "10m"),
+        )
+        .unwrap();
+        assert!(rendered.contains("token_broker"));
+        assert!(rendered.contains("chatgpt-account-id"));
+        assert!(!rendered.contains("placeholder:"));
+    }
+}
