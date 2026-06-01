@@ -132,6 +132,7 @@ struct ResolvedIronProxy {
     config_yaml: String,
     placeholder_env: BTreeMap<String, String>,
     proxy_host: String,
+    proxy_pod_name: String,
     listen_ports: Vec<u16>,
 }
 
@@ -290,6 +291,7 @@ impl AgentSandboxBackend {
             config_yaml,
             placeholder_env,
             proxy_host: iron_proxy_service_name(id),
+            proxy_pod_name: new_iron_proxy_pod_name(id),
             listen_ports,
         }))
     }
@@ -350,8 +352,8 @@ impl AgentSandboxBackend {
         self.create_iron_proxy_service(id, resolved).await?;
         self.create_iron_proxy_network_policies(id, resolved)
             .await?;
-        self.create_iron_proxy_pod(id).await?;
-        self.wait_until_proxy_running(id).await
+        self.create_iron_proxy_pod(id, resolved).await?;
+        self.wait_until_proxy_running(resolved).await
     }
 
     async fn create_iron_proxy_service(
@@ -367,11 +369,15 @@ impl AgentSandboxBackend {
             .map_err(|err| map_kube_error("create iron-proxy service", err))
     }
 
-    async fn create_iron_proxy_pod(&self, id: &SandboxId) -> SandboxResult<()> {
+    async fn create_iron_proxy_pod(
+        &self,
+        id: &SandboxId,
+        resolved: &ResolvedIronProxy,
+    ) -> SandboxResult<()> {
         let Some(iron_proxy) = &self.config.iron_proxy else {
             return Ok(());
         };
-        let pod = build_iron_proxy_pod(id, iron_proxy)?;
+        let pod = build_iron_proxy_pod(id, &resolved.proxy_pod_name, iron_proxy)?;
         self.pods()
             .create(&PostParams::default(), &pod)
             .await
@@ -404,6 +410,7 @@ impl AgentSandboxBackend {
             .pods()
             .delete(&iron_proxy_pod_name(id), &DeleteParams::default())
             .await;
+        let _ = self.delete_iron_proxy_pods_for_sandbox(id).await;
         let _ = self
             .services()
             .delete(&iron_proxy_service_name(id), &DeleteParams::default())
@@ -418,6 +425,24 @@ impl AgentSandboxBackend {
                 .await;
         }
         self.delete_iron_proxy_configmap(id).await
+    }
+
+    async fn delete_iron_proxy_pods_for_sandbox(&self, id: &SandboxId) -> SandboxResult<()> {
+        let params = ListParams::default().labels(&format!(
+            "centaur.ai/iron-proxy=true,{SANDBOX_ID_LABEL}={}",
+            id.as_str()
+        ));
+        let pods = self
+            .pods()
+            .list(&params)
+            .await
+            .map_err(|err| map_kube_error("list iron-proxy pods", err))?;
+        for pod in pods.items {
+            if let Some(name) = pod.metadata.name {
+                let _ = self.pods().delete(&name, &DeleteParams::default()).await;
+            }
+        }
+        Ok(())
     }
 
     async fn wait_until_running(&self, id: &SandboxId) -> SandboxResult<()> {
@@ -442,11 +467,11 @@ impl AgentSandboxBackend {
         }
     }
 
-    async fn wait_until_proxy_running(&self, id: &SandboxId) -> SandboxResult<()> {
+    async fn wait_until_proxy_running(&self, resolved: &ResolvedIronProxy) -> SandboxResult<()> {
         let deadline = Instant::now() + self.config.ready_timeout;
-        let pod_name = iron_proxy_pod_name(id);
+        let pod_name = &resolved.proxy_pod_name;
         loop {
-            match self.pods().get(&pod_name).await {
+            match self.pods().get(pod_name).await {
                 Ok(pod) if sandbox_status_from_pod(1, Some(&pod)) == SandboxStatus::Running => {
                     return Ok(());
                 }
@@ -1175,13 +1200,17 @@ fn iron_proxy_volumes(id: &SandboxId, iron_proxy: &IronProxyPodConfig) -> Vec<Va
     ]
 }
 
-fn build_iron_proxy_pod(id: &SandboxId, iron_proxy: &IronProxyPodConfig) -> SandboxResult<Pod> {
+fn build_iron_proxy_pod(
+    id: &SandboxId,
+    pod_name: &str,
+    iron_proxy: &IronProxyPodConfig,
+) -> SandboxResult<Pod> {
     let labels = iron_proxy_labels(id);
     let pod = json!({
         "apiVersion": "v1",
         "kind": "Pod",
         "metadata": {
-            "name": iron_proxy_pod_name(id),
+            "name": pod_name,
             "labels": labels,
         },
         "spec": {
@@ -1379,6 +1408,15 @@ fn iron_proxy_pod_name(id: &SandboxId) -> String {
     format!("{}-proxy", id.as_str())
 }
 
+fn new_iron_proxy_pod_name(id: &SandboxId) -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    format!("{}-proxy-{millis}-{sequence}", id.as_str())
+}
+
 fn iron_proxy_service_name(id: &SandboxId) -> String {
     format!("{}-proxy", id.as_str())
 }
@@ -1509,6 +1547,7 @@ mod tests {
                 "OPENAI_API_KEY".to_owned(),
             )]),
             proxy_host: "asbx-test-proxy".to_owned(),
+            proxy_pod_name: "asbx-test-proxy-123".to_owned(),
             listen_ports: vec![8080],
         };
         let spec = SandboxSpec::new("centaur-agent:latest")
@@ -1600,11 +1639,12 @@ mod tests {
             config_yaml: "transforms: []\n".to_owned(),
             placeholder_env: BTreeMap::new(),
             proxy_host: "asbx-test-proxy".to_owned(),
+            proxy_pod_name: "asbx-test-proxy-123".to_owned(),
             listen_ports: vec![5432, 8080],
         };
 
-        let pod = build_iron_proxy_pod(&id, &iron_proxy).unwrap();
-        assert_eq!(pod.metadata.name.as_deref(), Some("asbx-test-proxy"));
+        let pod = build_iron_proxy_pod(&id, &resolved.proxy_pod_name, &iron_proxy).unwrap();
+        assert_eq!(pod.metadata.name.as_deref(), Some("asbx-test-proxy-123"));
         let pod_labels = pod.metadata.labels.as_ref().unwrap();
         assert_eq!(
             pod_labels.get("centaur.ai/iron-proxy"),
