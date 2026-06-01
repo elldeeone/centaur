@@ -137,6 +137,7 @@ struct ResolvedIronProxy {
     placeholder_env: BTreeMap<String, String>,
     proxy_host: String,
     proxy_pod_name: String,
+    proxy_port: u16,
     listen_ports: Vec<u16>,
 }
 
@@ -289,6 +290,8 @@ impl AgentSandboxBackend {
         )
         .map_err(|err| SandboxError::InvalidSpec(format!("iron-proxy config: {err}")))?;
         let placeholder_env = centaur_iron_proxy::placeholder_env(&fragments);
+        let proxy_port = centaur_iron_proxy::proxy_listen_port_from_yaml(&config_yaml)
+            .map_err(|err| SandboxError::InvalidSpec(format!("iron-proxy proxy port: {err}")))?;
         let listen_ports = centaur_iron_proxy::listen_ports_from_yaml(&config_yaml)
             .map_err(|err| SandboxError::InvalidSpec(format!("iron-proxy listen ports: {err}")))?;
         Ok(Some(ResolvedIronProxy {
@@ -296,6 +299,7 @@ impl AgentSandboxBackend {
             placeholder_env,
             proxy_host: iron_proxy_service_name(id),
             proxy_pod_name: new_iron_proxy_pod_name(id),
+            proxy_port,
             listen_ports,
         }))
     }
@@ -1006,6 +1010,7 @@ fn env_json(spec: &SandboxSpec, resolved_iron_proxy: Option<&ResolvedIronProxy>)
             .collect::<Vec<_>>();
         for (name, value) in proxy_env(
             &resolved_iron_proxy.proxy_host,
+            resolved_iron_proxy.proxy_port,
             api_host.as_deref(),
             &no_proxy_extra,
         ) {
@@ -1019,11 +1024,12 @@ fn env_json(spec: &SandboxSpec, resolved_iron_proxy: Option<&ResolvedIronProxy>)
 
 fn proxy_env(
     proxy_host: &str,
+    proxy_port: u16,
     api_host: Option<&str>,
     no_proxy_extra: &[&str],
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    let proxy_url = format!("http://{proxy_host}:8080");
+    let proxy_url = format!("http://{proxy_host}:{proxy_port}");
     let no_proxy = no_proxy_value(proxy_host, api_host, no_proxy_extra);
     env.insert("FIREWALL_HOST".to_owned(), proxy_host.to_owned());
     env.insert("HTTP_PROXY".to_owned(), proxy_url.clone());
@@ -1292,15 +1298,15 @@ fn build_iron_proxy_service(
 ) -> SandboxResult<Service> {
     let mut ports = vec![json!({
         "name": "proxy",
-        "port": 8080,
-        "targetPort": 8080,
+        "port": resolved.proxy_port,
+        "targetPort": resolved.proxy_port,
         "protocol": "TCP",
     })];
     for port in resolved
         .listen_ports
         .iter()
         .copied()
-        .filter(|port| *port != 8080)
+        .filter(|port| *port != resolved.proxy_port)
     {
         ports.push(json!({
             "name": format!("tcp-{port}"),
@@ -1330,12 +1336,12 @@ fn build_iron_proxy_network_policies(
     resolved: &ResolvedIronProxy,
     iron_proxy: &IronProxyPodConfig,
 ) -> SandboxResult<Vec<NetworkPolicy>> {
-    let mut sandbox_to_proxy_ports = vec![json!({"protocol": "TCP", "port": 8080})];
+    let mut sandbox_to_proxy_ports = vec![json!({"protocol": "TCP", "port": resolved.proxy_port})];
     for port in resolved
         .listen_ports
         .iter()
         .copied()
-        .filter(|port| *port != 8080)
+        .filter(|port| *port != resolved.proxy_port)
     {
         sandbox_to_proxy_ports.push(json!({"protocol": "TCP", "port": port}));
     }
@@ -1610,6 +1616,7 @@ mod tests {
             )]),
             proxy_host: "asbx-test-proxy".to_owned(),
             proxy_pod_name: "asbx-test-proxy-123".to_owned(),
+            proxy_port: 18080,
             listen_ports: vec![8080],
         };
         let spec = SandboxSpec::new("centaur-agent:latest")
@@ -1648,7 +1655,7 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         assert_eq!(agent_env["OPENAI_API_KEY"], "OPENAI_API_KEY");
         assert_eq!(agent_env["FIREWALL_HOST"], "asbx-test-proxy");
-        assert_eq!(agent_env["HTTPS_PROXY"], "http://asbx-test-proxy:8080");
+        assert_eq!(agent_env["HTTPS_PROXY"], "http://asbx-test-proxy:18080");
         assert!(agent_env["NO_PROXY"].contains("asbx-test-proxy"));
         assert!(agent_env["NO_PROXY"].contains("centaur-centaur-api"));
         assert!(agent_env["NO_PROXY"].contains("otel.local"));
@@ -1708,7 +1715,8 @@ mod tests {
             placeholder_env: BTreeMap::new(),
             proxy_host: "asbx-test-proxy".to_owned(),
             proxy_pod_name: "asbx-test-proxy-123".to_owned(),
-            listen_ports: vec![5432, 8080],
+            proxy_port: 18080,
+            listen_ports: vec![5432, 8080, 18080],
         };
 
         let pod = build_iron_proxy_pod(&id, &resolved.proxy_pod_name, &iron_proxy).unwrap();
@@ -1811,7 +1819,8 @@ mod tests {
             .iter()
             .map(|port| (port.name.as_deref().unwrap_or(""), port.port))
             .collect::<BTreeMap<_, _>>();
-        assert_eq!(service_ports["proxy"], 8080);
+        assert_eq!(service_ports["proxy"], 18080);
+        assert_eq!(service_ports["tcp-8080"], 8080);
         assert_eq!(service_ports["tcp-5432"], 5432);
 
         let policies = build_iron_proxy_network_policies(&id, &resolved, &iron_proxy).unwrap();

@@ -300,9 +300,7 @@ pub fn placeholder_env(fragments: &[ProxyFragment]) -> BTreeMap<String, String> 
 pub fn listen_ports_from_yaml(config_yaml: &str) -> Result<Vec<u16>> {
     let cfg: Value = serde_yaml::from_str(config_yaml).map_err(IronProxyConfigError::ParseBase)?;
     let mut ports = Vec::new();
-    if let Some(port) = cfg["proxy"]["tunnel_listen"].as_str().and_then(listen_port) {
-        ports.push(port);
-    }
+    ports.push(proxy_listen_port_from_value(&cfg));
     for listener in cfg["postgres"].as_sequence().into_iter().flatten() {
         if let Some(port) = listener["listen"].as_str().and_then(listen_port) {
             ports.push(port);
@@ -311,6 +309,18 @@ pub fn listen_ports_from_yaml(config_yaml: &str) -> Result<Vec<u16>> {
     ports.sort_unstable();
     ports.dedup();
     Ok(ports)
+}
+
+pub fn proxy_listen_port_from_yaml(config_yaml: &str) -> Result<u16> {
+    let cfg: Value = serde_yaml::from_str(config_yaml).map_err(IronProxyConfigError::ParseBase)?;
+    Ok(proxy_listen_port_from_value(&cfg))
+}
+
+fn proxy_listen_port_from_value(cfg: &Value) -> u16 {
+    cfg["proxy"]["tunnel_listen"]
+        .as_str()
+        .and_then(listen_port)
+        .unwrap_or(8080)
 }
 
 fn listen_port(value: &str) -> Option<u16> {
@@ -772,6 +782,21 @@ postgres:
             listen_ports_from_yaml(&rendered).unwrap(),
             vec![5432, 5433, 8080]
         );
+        assert_eq!(proxy_listen_port_from_yaml(&rendered).unwrap(), 8080);
+        let rendered = render_proxy_yaml(
+            Some(
+                r#"
+proxy:
+  tunnel_listen: ":18080"
+transforms: []
+"#,
+            ),
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(listen_ports_from_yaml(&rendered).unwrap(), vec![18080]);
+        assert_eq!(proxy_listen_port_from_yaml(&rendered).unwrap(), 18080);
     }
 
     #[test]
