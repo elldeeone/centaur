@@ -453,7 +453,7 @@ describe('AgentSessionRenderer', () => {
       status: 'in_progress'
     })
     await renderer.text(sessionId, 'Live answer body.')
-    await renderer.done(sessionId, {
+    const result = await renderer.done(sessionId, {
       answerMarkdown: 'Live answer body.'
     })
 
@@ -465,6 +465,7 @@ describe('AgentSessionRenderer', () => {
     expect(blocks.some((block: any) => block.type === 'context')).toBe(false)
     expect(stopStreamFallbackText(stop?.params).trim()).toBe('')
     expect(calls.some(call => call.method === 'chat.appendStream')).toBe(true)
+    expect(result.streamedTextChars).toBe(0)
   })
 
   it('keeps a durable final answer when the answer did not stream live', async () => {

@@ -1719,7 +1719,10 @@ describe('CodexSessionRenderer', () => {
       delta: 'Done: five tools called.'
     })
     await sleep(300)
-    await renderer.event(sessionId, { type: 'turn.completed', result: 'Done: five tools called.' })
+    const result = await renderer.event(sessionId, {
+      type: 'turn.completed',
+      result: 'Done: five tools called.'
+    })
 
     const streamed = calls
       .filter(call => call.method === 'chat.startStream' || call.method === 'chat.appendStream')
@@ -1735,6 +1738,7 @@ describe('CodexSessionRenderer', () => {
     expect(stop?.params.chunks).toBeUndefined()
     expect(blocks.some((block: any) => block.type === 'context')).toBe(false)
     expect(blocks.some((block: any) => block.type === 'markdown')).toBe(false)
+    expect(result.streamedAnswerChars).toBe(0)
   })
 
   it('treats an unphased terminal agent message after tool use as the final answer', async () => {

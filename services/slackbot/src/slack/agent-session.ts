@@ -234,9 +234,11 @@ export class AgentSessionRenderer {
             await this.flushTask(state, segment, task)
           }
         }
-        await this.closeTextStream(state, segment)
+        const { streamedTextDurable } = await this.closeTextStream(state, segment)
+        if (streamedTextDurable) {
+          streamedTextChars += segment.streamedTextSourceChars
+        }
       }
-      streamedTextChars = streamedTextSourceChars(state)
       closed = true
     } finally {
       if (!state.statusCleared) {
@@ -282,15 +284,18 @@ export class AgentSessionRenderer {
     }
   }
 
-  private async closeTextStream(state: AgentSessionState, segment: Segment): Promise<void> {
+  private async closeTextStream(
+    state: AgentSessionState,
+    segment: Segment
+  ): Promise<{ streamedTextDurable: boolean }> {
     raiseStreamError(segment)
-    if (segment.closed) return
+    if (segment.closed) return { streamedTextDurable: true }
     const hasFinalText = Boolean(state.finalAnswerMarkdown?.trim())
     if (!segment.streamTs && !segment.textParts.length && !segment.tasks.size && !hasFinalText) {
-      return
+      return { streamedTextDurable: true }
     }
     await this.ensureStream(state, segment, [])
-    if (!segment.streamTs) return
+    if (!segment.streamTs) return { streamedTextDurable: false }
     const originalTasks = finalTaskSnapshot(segment)
     const tasks = compactFinalTasks(originalTasks)
     const answerSource =
@@ -323,6 +328,7 @@ export class AgentSessionRenderer {
     })
     if (!stopResponse.ok) throw new Error(stopResponse.error ?? 'chat.stopStream failed')
     segment.closed = true
+    return { streamedTextDurable: !streamedTextLive || originalTasks.length === 0 }
   }
 
   private async streamChunks(
