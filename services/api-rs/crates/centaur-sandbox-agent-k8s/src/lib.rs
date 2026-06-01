@@ -255,7 +255,10 @@ impl AgentSandboxBackend {
         let Some(iron_proxy) = &self.config.iron_proxy else {
             return Ok(None);
         };
-        let mut fragments = iron_proxy.fragments.clone();
+        let mut fragments = vec![centaur_iron_proxy::infra_fragment().map_err(|err| {
+            SandboxError::InvalidSpec(format!("iron-proxy infra fragment: {err}"))
+        })?];
+        fragments.extend(iron_proxy.fragments.clone());
         if let Some(harness) = spec_env(spec, "CENTAUR_HARNESS_KIND") {
             let auth_mode = iron_proxy
                 .harness_auth_modes

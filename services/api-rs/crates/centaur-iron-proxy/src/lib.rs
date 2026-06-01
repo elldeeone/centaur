@@ -12,6 +12,7 @@ pub const DEFAULT_PROXY_BASE_CONFIG: &str =
     include_str!("../../../../api/api/iron-proxy.base.yaml");
 pub const CENTAUR_CORE_PG_LISTENER: &str = "centaur_core";
 pub const DEFAULT_CORE_PG_PORT: u16 = 5432;
+pub const INFRA_FRAGMENT: &str = include_str!("../../../../iron-proxy/infra.yaml");
 pub const CLAUDE_CODE_API_KEY_FRAGMENT: &str =
     include_str!("../../../../iron-proxy/harness/claude-code-api-key.yaml");
 pub const CLAUDE_CODE_ACCESS_TOKEN_FRAGMENT: &str =
@@ -207,6 +208,10 @@ pub fn harness_fragment(engine: &str, auth_mode: &str) -> Result<Option<ProxyFra
         _ => return Ok(None),
     };
     load_fragment_str(contents).map(Some)
+}
+
+pub fn infra_fragment() -> Result<ProxyFragment> {
+    load_fragment_str(INFRA_FRAGMENT)
 }
 
 pub fn placeholder_env(fragments: &[ProxyFragment]) -> BTreeMap<String, String> {
@@ -765,5 +770,20 @@ transforms:
         assert!(rendered.contains("token_broker"));
         assert!(rendered.contains("chatgpt-account-id"));
         assert!(!rendered.contains("placeholder:"));
+    }
+
+    #[test]
+    fn loads_builtin_infra_fragment() {
+        let fragment = infra_fragment().unwrap();
+        let placeholders = placeholder_env(&[fragment]);
+        for name in [
+            "AMP_API_KEY",
+            "GEMINI_API_KEY",
+            "GITHUB_TOKEN",
+            "SLACK_BOT_TOKEN",
+            "XAI_API_KEY",
+        ] {
+            assert_eq!(placeholders.get(name).map(String::as_str), Some(name));
+        }
     }
 }
