@@ -5,7 +5,6 @@ transforms:
         - source:
             type: token_broker
             credential_id: openai-codex
-            ttl: 1m
           inject:
             header: Authorization
             formatter: "Bearer {{.Value}}"

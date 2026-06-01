@@ -31,6 +31,11 @@ pub enum IronProxyConfigError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("failed to read directory {path}: {source}")]
+    ReadDir {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("failed to parse iron-proxy fragment {path}: {source}")]
     ParseFragment {
         path: PathBuf,
@@ -51,6 +56,7 @@ pub struct SourcePolicy {
     pub kind: SourceKind,
     pub op_vault: String,
     pub ttl: String,
+    pub token_broker_ttl: String,
 }
 
 impl SourcePolicy {
@@ -59,6 +65,7 @@ impl SourcePolicy {
             kind: SourceKind::Env,
             op_vault: "ai-agents".to_owned(),
             ttl: "10m".to_owned(),
+            token_broker_ttl: "1m".to_owned(),
         }
     }
 
@@ -67,6 +74,7 @@ impl SourcePolicy {
             kind: SourceKind::OnePassword,
             op_vault: op_vault.into(),
             ttl: ttl.into(),
+            token_broker_ttl: "1m".to_owned(),
         }
     }
 
@@ -75,7 +83,13 @@ impl SourcePolicy {
             kind: SourceKind::OnePasswordConnect,
             op_vault: op_vault.into(),
             ttl: ttl.into(),
+            token_broker_ttl: "1m".to_owned(),
         }
+    }
+
+    pub fn with_token_broker_ttl(mut self, ttl: impl Into<String>) -> Self {
+        self.token_broker_ttl = ttl.into();
+        self
     }
 
     pub fn from_env() -> Self {
@@ -93,6 +107,8 @@ impl SourcePolicy {
             kind,
             op_vault: std::env::var("OP_VAULT").unwrap_or_else(|_| "ai-agents".to_owned()),
             ttl: std::env::var("FIREWALL_MANAGER_SECRET_TTL").unwrap_or_else(|_| "10m".to_owned()),
+            token_broker_ttl: std::env::var("FIREWALL_MANAGER_TOKEN_BROKER_TTL")
+                .unwrap_or_else(|_| "1m".to_owned()),
         }
     }
 
@@ -197,6 +213,47 @@ pub fn load_fragment_files(paths: &[PathBuf]) -> Result<Vec<ProxyFragment>> {
         .iter()
         .map(load_fragment_file)
         .collect::<Result<Vec<_>>>()
+}
+
+pub fn discover_fragment_files(dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for dir in dirs {
+        visit_fragment_dir(dir, &mut paths)?;
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn visit_fragment_dir(dir: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let entries = fs::read_dir(dir).map_err(|source| IronProxyConfigError::ReadDir {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| IronProxyConfigError::ReadDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|source| IronProxyConfigError::ReadDir {
+                path: path.clone(),
+                source,
+            })?;
+        if file_type.is_dir() {
+            visit_fragment_dir(&path, paths)?;
+        } else if file_type.is_file()
+            && path.file_name().and_then(|name| name.to_str()) == Some("iron.yaml")
+        {
+            paths.push(path);
+        }
+    }
+    Ok(())
 }
 
 pub fn harness_fragment(engine: &str, auth_mode: &str) -> Result<Option<ProxyFragment>> {
@@ -375,6 +432,14 @@ fn resolve_placeholder_source_values(value: &mut Value, source_policy: &SourcePo
                 *value = source_policy.source_for(&placeholder, json_key.as_deref());
                 return;
             }
+            if map.get(&string_value("type")).and_then(Value::as_str) == Some("token_broker")
+                && !map.contains_key(&string_value("ttl"))
+            {
+                map.insert(
+                    string_value("ttl"),
+                    string_value(&source_policy.token_broker_ttl),
+                );
+            }
             for child in map.values_mut() {
                 resolve_placeholder_source_values(child, source_policy);
             }
@@ -457,6 +522,7 @@ fn string_value(value: impl AsRef<str>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn parse_rendered(rendered: &str) -> Value {
         serde_yaml::from_str(rendered).unwrap()
@@ -473,6 +539,19 @@ mod tests {
 
     fn fragment_yaml(yaml: &str) -> ProxyFragment {
         serde_yaml::from_str(yaml).unwrap()
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "centaur-iron-proxy-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
@@ -768,8 +847,38 @@ transforms:
         )
         .unwrap();
         assert!(rendered.contains("token_broker"));
+        assert!(rendered.contains("ttl: 1m"));
         assert!(rendered.contains("chatgpt-account-id"));
         assert!(!rendered.contains("placeholder:"));
+    }
+
+    #[test]
+    fn renders_token_broker_ttl_from_source_policy() {
+        let fragment = fragment_yaml(
+            r#"
+transforms:
+  - name: secrets
+    config:
+      secrets:
+        - source:
+            type: token_broker
+            credential_id: openai-codex
+          inject:
+            header: Authorization
+            formatter: "Bearer {{.Value}}"
+          rules: [{ host: chatgpt.com }]
+"#,
+        );
+        let rendered = render_proxy_yaml_with_source_policy(
+            None,
+            &[fragment],
+            None,
+            &SourcePolicy::env().with_token_broker_ttl("30s"),
+        )
+        .unwrap();
+        let cfg = parse_rendered(&rendered);
+        let secret = &cfg["transforms"][1]["config"]["secrets"][0];
+        assert_eq!(secret["source"]["ttl"], "30s");
     }
 
     #[test]
@@ -785,5 +894,33 @@ transforms:
         ] {
             assert_eq!(placeholders.get(name).map(String::as_str), Some(name));
         }
+    }
+
+    #[test]
+    fn discovers_tool_local_iron_yaml_fragments() {
+        let root = temp_dir("discover");
+        let base_tool = root.join("tools").join("base").join("websearch");
+        let overlay_tool = root.join("overlay").join("tools").join("slack");
+        fs::create_dir_all(&base_tool).unwrap();
+        fs::create_dir_all(&overlay_tool).unwrap();
+        fs::write(base_tool.join("iron.yaml"), "transforms: []\n").unwrap();
+        fs::write(overlay_tool.join("iron.yaml"), "transforms: []\n").unwrap();
+        fs::write(root.join("iron-proxy.yaml"), "transforms: []\n").unwrap();
+
+        let discovered = discover_fragment_files(&[root.join("tools"), root.join("overlay")])
+            .unwrap()
+            .into_iter()
+            .map(|path| path.strip_prefix(&root).unwrap().to_path_buf())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            discovered,
+            vec![
+                PathBuf::from("overlay/tools/slack/iron.yaml"),
+                PathBuf::from("tools/base/websearch/iron.yaml"),
+            ]
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 }
