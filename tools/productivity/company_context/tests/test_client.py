@@ -263,6 +263,147 @@ def test_search_uses_or_terms_and_drops_stop_words(monkeypatch):
     )
 
 
+def test_query_slack_messages_filters_user_and_orders_newest(monkeypatch):
+    occurred_at = dt.datetime(2026, 5, 10, 14, 0, tzinfo=dt.UTC)
+    updated_at = dt.datetime(2026, 5, 10, 14, 1, tzinfo=dt.UTC)
+    fake = _FakeConnection(
+        rows=[
+            {
+                "channel_id": "C123",
+                "channel_name": "hello-world",
+                "message_ts": "1770000000.000000",
+                "occurred_at": occurred_at,
+                "thread_ts": "1770000000.000000",
+                "parent_message_ts": None,
+                "is_thread_root": True,
+                "user_id": "U_LUKE",
+                "user_name": "dunshea.luke",
+                "real_name": "Luke",
+                "display_name": "Luke",
+                "bot_id": "",
+                "text": "latest workspace-wide context",
+                "permalink": "https://slack.example/archives/C123/p1770000000000000",
+                "reply_count": 0,
+                "updated_at": updated_at,
+                "score": None,
+            }
+        ],
+    )
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+
+    result = CompanyContextClient("postgresql://example").query_slack_messages(
+        user="Luke",
+        order="newest",
+        limit=1,
+    )
+
+    assert result["status"] == "ok"
+    assert result["count"] == 1
+    assert result["filters"] == {
+        "channel": None,
+        "user": "Luke",
+        "thread_ts": None,
+        "before": None,
+        "after": None,
+        "order": "newest",
+    }
+    assert result["results"] == [
+        {
+            "source": "slack",
+            "source_type": "slack_message",
+            "channel_id": "C123",
+            "channel_name": "hello-world",
+            "user_id": "U_LUKE",
+            "user_name": "Luke",
+            "bot_id": "",
+            "message_ts": "1770000000.000000",
+            "thread_ts": "1770000000.000000",
+            "parent_message_ts": None,
+            "is_thread_root": True,
+            "text": "latest workspace-wide context",
+            "permalink": "https://slack.example/archives/C123/p1770000000000000",
+            "reply_count": 0,
+            "occurred_at": "2026-05-10T14:00:00+00:00",
+            "updated_at": "2026-05-10T14:01:00+00:00",
+            "score": None,
+        }
+    ]
+    query, args = fake.fetch_calls[0]
+    assert "FROM slack_sync_messages m" in query
+    assert "m.user_id = $1" in query
+    assert "lower(coalesce(u.real_name, '')) = lower($1)" in query
+    assert "ORDER BY m.occurred_at DESC NULLS LAST, m.message_ts DESC" in query
+    assert "LIMIT $2" in query
+    assert args == ("Luke", 1)
+    assert fake.closed is True
+
+
+def test_query_slack_messages_searches_text_channel_time_and_relevance(monkeypatch):
+    fake = _FakeConnection(rows=[])
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+
+    result = CompanyContextClient("postgresql://example").query_slack_messages(
+        query="Centaur Slack memory",
+        channel="#intendo",
+        after="2026-05-01T00:00:00Z",
+        before="1780303286.801179",
+        limit=12,
+    )
+
+    assert result["status"] == "ok"
+    assert result["filters"] == {
+        "channel": "intendo",
+        "user": None,
+        "thread_ts": None,
+        "before": "2026-06-01T08:41:26.801179+00:00",
+        "after": "2026-05-01T00:00:00+00:00",
+        "order": "relevance",
+    }
+    query, args = fake.fetch_calls[0]
+    assert "websearch_to_tsquery('english', $1)" in query
+    assert "lower(coalesce(c.channel_name, '')) = lower($2)" in query
+    assert "m.occurred_at < $3" in query
+    assert "m.occurred_at >= $4" in query
+    assert "ORDER BY ts_rank_cd(" in query
+    assert "LIMIT $5" in query
+    assert args == (
+        "Centaur Slack memory",
+        "intendo",
+        dt.datetime(2026, 6, 1, 8, 41, 26, 801179, tzinfo=dt.UTC),
+        dt.datetime(2026, 5, 1, 0, 0, tzinfo=dt.UTC),
+        12,
+    )
+    assert fake.closed is True
+
+
+def test_query_slack_messages_rejects_bad_order(monkeypatch):
+    fake = _FakeConnection(rows=[])
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+
+    result = CompanyContextClient("postgresql://example").query_slack_messages(
+        order="random",
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "order must be one of: relevance, newest, oldest",
+    }
+    assert fake.fetch_calls == []
+    assert fake.closed is True
+
+
 
 def test_latest_date_returns_latest_indexed_slack_timestamp(monkeypatch):
     fake = _FakeConnection(

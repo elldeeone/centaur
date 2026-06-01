@@ -24,7 +24,10 @@ THREAD_SCORE_MULTIPLIER = 1.25
 CHANNEL_DAY_SCORE_MULTIPLIER = 0.75
 DEFAULT_PREVIEW_CHARS = 280
 MAX_RELATED_CHILDREN = 25
+DEFAULT_SLACK_MESSAGE_LIMIT = 20
+MAX_SLACK_MESSAGE_LIMIT = 100
 SLACK_LIVE_SOURCE_TYPE = "slack_live_message"
+SLACK_MESSAGE_SOURCE_TYPE = "slack_message"
 _SLACK_AFTER_RE = re.compile(r"\bafter:\d{4}-\d{2}-\d{2}\b", re.IGNORECASE)
 
 _SEARCH_TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*")
@@ -202,6 +205,24 @@ def _slack_ts_to_iso(ts: str | None) -> str | None:
         return None
 
 
+def _parse_time_filter(value: str | None) -> datetime | None:
+    """Parse a Slack timestamp or ISO datetime into UTC for DB filtering."""
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return datetime.fromtimestamp(float(normalized), tz=UTC)
+    except (TypeError, ValueError, OSError):
+        pass
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid time filter: {value}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def _slack_after_query(query: str, latest_date: str | None) -> str:
     """Append a Slack after:YYYY-MM-DD modifier unless the query already has one."""
     if not latest_date or _SLACK_AFTER_RE.search(query):
@@ -264,6 +285,43 @@ def _live_slack_result(message: dict[str, Any]) -> dict[str, Any]:
             "thread_ts": message.get("thread_ts"),
             "reply_count": int(message.get("reply_count") or 0),
         },
+    }
+
+
+def _slack_message_result(row: Any) -> dict[str, Any]:
+    """Normalize one raw Slack ETL message row for agent-facing results."""
+    channel_name = str(_row_value(row, "channel_name", "") or "")
+    user_name = str(
+        _row_value(row, "real_name", "")
+        or _row_value(row, "display_name", "")
+        or _row_value(row, "user_name", "")
+        or _row_value(row, "user_id", "")
+        or ""
+    )
+    message_ts = str(_row_value(row, "message_ts", "") or "")
+    thread_ts = str(_row_value(row, "thread_ts", "") or "") or None
+    return {
+        "source": "slack",
+        "source_type": SLACK_MESSAGE_SOURCE_TYPE,
+        "channel_id": str(_row_value(row, "channel_id", "") or ""),
+        "channel_name": channel_name,
+        "user_id": str(_row_value(row, "user_id", "") or ""),
+        "user_name": user_name,
+        "bot_id": str(_row_value(row, "bot_id", "") or ""),
+        "message_ts": message_ts,
+        "thread_ts": thread_ts,
+        "parent_message_ts": str(_row_value(row, "parent_message_ts", "") or "") or None,
+        "is_thread_root": bool(_row_value(row, "is_thread_root", False)),
+        "text": str(_row_value(row, "text", "") or ""),
+        "permalink": str(_row_value(row, "permalink", "") or ""),
+        "reply_count": int(_row_value(row, "reply_count", 0) or 0),
+        "occurred_at": _isoformat(_row_value(row, "occurred_at")),
+        "updated_at": _isoformat(_row_value(row, "updated_at")),
+        "score": (
+            float(_row_value(row, "score"))
+            if _row_value(row, "score") is not None
+            else None
+        ),
     }
 
 
@@ -451,6 +509,175 @@ class CompanyContextClient:
                     limit=_clamp(limit, minimum=1, maximum=MAX_SEARCH_LIMIT),
                     source=source.strip() if source else None,
                     source_type=source_type.strip() if source_type else None,
+                )
+            )
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+
+    async def _query_slack_messages_async(
+        self,
+        *,
+        query: str | None,
+        limit: int,
+        channel: str | None,
+        user: str | None,
+        before: str | None,
+        after: str | None,
+        thread_ts: str | None,
+        order: str,
+    ) -> dict[str, Any]:
+        conn = await self._connect()
+        try:
+            normalized_query = (query or "").strip()
+            normalized_channel = (channel or "").strip().lstrip("#")
+            normalized_user = (user or "").strip().lstrip("@")
+            normalized_thread_ts = (thread_ts or "").strip()
+            order_key = (order or "relevance").strip().lower()
+            if order_key not in {"relevance", "newest", "oldest"}:
+                return {
+                    "status": "error",
+                    "error": "order must be one of: relevance, newest, oldest",
+                }
+
+            before_dt = _parse_time_filter(before)
+            after_dt = _parse_time_filter(after)
+
+            args: list[Any] = []
+
+            def add_arg(value: Any) -> str:
+                args.append(value)
+                return f"${len(args)}"
+
+            where = ["TRUE"]
+            score_expr = "NULL::double precision"
+            if normalized_query:
+                query_param = add_arg(normalized_query)
+                score_expr = (
+                    "ts_rank_cd("
+                    "to_tsvector('english', coalesce(m.text, '')), "
+                    f"websearch_to_tsquery('english', {query_param})"
+                    ")"
+                )
+                where.append(
+                    "to_tsvector('english', coalesce(m.text, '')) "
+                    f"@@ websearch_to_tsquery('english', {query_param})"
+                )
+
+            if normalized_channel:
+                channel_param = add_arg(normalized_channel)
+                where.append(
+                    "("
+                    f"m.channel_id = {channel_param} "
+                    f"OR lower(coalesce(c.channel_name, '')) = lower({channel_param})"
+                    ")"
+                )
+
+            if normalized_user:
+                user_param = add_arg(normalized_user)
+                where.append(
+                    "("
+                    f"m.user_id = {user_param} "
+                    f"OR lower(coalesce(u.user_name, '')) = lower({user_param}) "
+                    f"OR lower(coalesce(u.real_name, '')) = lower({user_param}) "
+                    f"OR lower(coalesce(u.display_name, '')) = lower({user_param})"
+                    ")"
+                )
+
+            if normalized_thread_ts:
+                thread_param = add_arg(normalized_thread_ts)
+                where.append(f"m.thread_ts = {thread_param}")
+            if before_dt is not None:
+                before_param = add_arg(before_dt)
+                where.append(f"m.occurred_at < {before_param}")
+            if after_dt is not None:
+                after_param = add_arg(after_dt)
+                where.append(f"m.occurred_at >= {after_param}")
+
+            limit_param = add_arg(limit)
+            if order_key == "oldest":
+                order_sql = "m.occurred_at ASC NULLS LAST, m.message_ts ASC"
+            elif order_key == "newest" or not normalized_query:
+                order_sql = "m.occurred_at DESC NULLS LAST, m.message_ts DESC"
+            else:
+                order_sql = f"{score_expr} DESC NULLS LAST, m.occurred_at DESC NULLS LAST"
+
+            rows = await conn.fetch(
+                f"""
+                SELECT
+                    m.channel_id,
+                    c.channel_name,
+                    m.message_ts,
+                    m.occurred_at,
+                    m.thread_ts,
+                    m.parent_message_ts,
+                    m.is_thread_root,
+                    m.user_id,
+                    u.user_name,
+                    u.real_name,
+                    u.display_name,
+                    m.bot_id,
+                    m.text,
+                    m.permalink,
+                    m.reply_count,
+                    m.updated_at,
+                    {score_expr} AS score
+                FROM slack_sync_messages m
+                LEFT JOIN slack_sync_channels c ON c.channel_id = m.channel_id
+                LEFT JOIN slack_sync_users u ON u.user_id = m.user_id
+                WHERE {" AND ".join(where)}
+                ORDER BY {order_sql}
+                LIMIT {limit_param}
+                """,
+                *args,
+            )
+            return {
+                "status": "ok",
+                "source": "slack",
+                "query": normalized_query or None,
+                "filters": {
+                    "channel": normalized_channel or None,
+                    "user": normalized_user or None,
+                    "thread_ts": normalized_thread_ts or None,
+                    "before": _isoformat(before_dt),
+                    "after": _isoformat(after_dt),
+                    "order": order_key,
+                },
+                "count": len(rows),
+                "results": [_slack_message_result(row) for row in rows],
+            }
+        finally:
+            await conn.close()
+
+    def query_slack_messages(
+        self,
+        query: str | None = None,
+        limit: int = DEFAULT_SLACK_MESSAGE_LIMIT,
+        channel: str | None = None,
+        user: str | None = None,
+        before: str | None = None,
+        after: str | None = None,
+        thread_ts: str | None = None,
+        order: str = "relevance",
+    ) -> dict:
+        """Query the indexed Slack corpus in Postgres with general filters.
+
+        Use this for Slack-wide memory questions. The current Slack thread
+        remains the task focus, but this method can retrieve relevant messages
+        from any indexed channel without live Slack API scans. Combine free-text
+        query, channel, user, thread_ts, before/after, and order=newest/oldest/
+        relevance instead of looking for a question-specific Slack helper.
+        """
+        try:
+            return asyncio.run(
+                self._query_slack_messages_async(
+                    query=query,
+                    limit=_clamp(limit, minimum=1, maximum=MAX_SLACK_MESSAGE_LIMIT),
+                    channel=channel,
+                    user=user,
+                    before=before,
+                    after=after,
+                    thread_ts=thread_ts,
+                    order=order,
                 )
             )
         except Exception as exc:
