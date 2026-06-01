@@ -90,6 +90,7 @@ pub struct IronProxyPodConfig {
     pub ca_key_secret_name: String,
     pub op_connect_app_name: String,
     pub op_connect_port: u16,
+    pub api_pod_labels: BTreeMap<String, String>,
     pub env_from_secret_names: Vec<String>,
     pub extra_env: BTreeMap<String, String>,
 }
@@ -111,6 +112,10 @@ impl IronProxyPodConfig {
             ca_key_secret_name: ca_key_secret_name.into(),
             op_connect_app_name: "onepassword-connect".to_owned(),
             op_connect_port: 8080,
+            api_pod_labels: BTreeMap::from([(
+                "app.kubernetes.io/component".to_owned(),
+                "api".to_owned(),
+            )]),
             env_from_secret_names: Vec::new(),
             extra_env: BTreeMap::new(),
         }
@@ -1259,7 +1264,7 @@ fn build_iron_proxy_network_policies(
                     "ports": sandbox_to_proxy_ports.clone(),
                 },
                 {
-                    "to": [{"podSelector": {}}],
+                    "to": [{"podSelector": {"matchLabels": iron_proxy.api_pod_labels.clone()}}],
                     "ports": [{"protocol": "TCP", "port": 8000}],
                 },
                 {
@@ -1279,7 +1284,7 @@ fn build_iron_proxy_network_policies(
             ],
         }),
         json!({
-            "to": [{"podSelector": {}}],
+            "to": [{"podSelector": {"matchLabels": iron_proxy.api_pod_labels.clone()}}],
             "ports": [{"protocol": "TCP", "port": 8000}],
         }),
         json!({
@@ -1676,6 +1681,11 @@ mod tests {
         assert_eq!(
             policy_json["asbx-test-proxy-net"]["spec"]["podSelector"]["matchLabels"]["centaur.ai/iron-proxy"],
             "true"
+        );
+        assert_eq!(
+            policy_json["asbx-test-sandbox-egress"]["spec"]["egress"][1]["to"][0]["podSelector"]["matchLabels"]
+                ["app.kubernetes.io/component"],
+            "api"
         );
         assert!(
             policy_json["asbx-test-proxy-net"]["spec"]["egress"]
