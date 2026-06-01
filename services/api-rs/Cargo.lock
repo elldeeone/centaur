@@ -301,6 +301,7 @@ dependencies = [
  "kube",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
