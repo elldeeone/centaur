@@ -89,7 +89,7 @@
 [Local CLI tools — prefer these for integrations]
 |centaur-tools list                         → compact local CLI inventory
 |centaur-tools discover <tool>              → command list, summary, and run syntax
-|centaur-tools run <tool> <command> [args]  → run the CLI through uv without exposing real secrets in env
+|centaur-tools run <tool> ...               → run the local CLI without exposing real secrets in env
 |Examples:
 |  centaur-tools run websearch search "latest container isolation patterns" --num-results 5 --pretty
 |  centaur-tools run slack search "deploy failed" --limit 10
@@ -221,7 +221,7 @@
 
 [Tool discovery — discover before you run]
 |IMPORTANT: Before running an unfamiliar local CLI tool, run `centaur-tools discover <tool>` to see its commands and run syntax.
-|For full argument details, run `centaur-tools run <tool> <command> --help`.
+|For full argument details, use the discovered run syntax with `--help`.
 |Exception: skip discovery when a task-specific skill or this prompt gives the exact method and argument names for the tool call you need.
 |If you're unsure which tool has what you need, run `centaur-tools list` to list available local CLI tools.
 |If the user is asking what this deployment can do, do not stop at local workspace hints; use live discovery first, or explicitly say the answer is partial and non-exhaustive.

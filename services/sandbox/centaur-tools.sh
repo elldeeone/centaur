@@ -8,7 +8,7 @@ Usage:
   centaur-tools discover <tool>
   centaur-tools run <tool> [args...]
 
-Lists and runs local CLI tools from mounted tools/**/cli.py directories.
+Lists and runs local CLI tools from mounted tools/**/{cli,cli.py,cli.sh,cli.js} directories.
 EOF
 }
 
@@ -24,7 +24,11 @@ candidate_roots() {
 }
 
 extract_summary() {
-  local cli="$1"
+  local runner="$1"
+  if [ "${runner##*.}" != "py" ]; then
+    printf 'CLI tool'
+    return
+  fi
   local summary
   summary="$(
     perl -0777 -ne '
@@ -38,13 +42,14 @@ extract_summary() {
       $s =~ s/\s+/ /g;
       $s =~ s/,/;/g;
       print substr($s, 0, 160);
-    ' "$cli"
+    ' "$runner"
   )"
   printf '%s' "${summary:-CLI tool}"
 }
 
 extract_commands() {
-  local cli="$1"
+  local runner="$1"
+  [ "${runner##*.}" = "py" ] || return 0
   perl -ne '
     if (/^\s*@\w+\.command\s*\(\s*(?:(["'"'"'"])([^"'"'"'"]+)\1)?/) {
       $pending = $2 // "";
@@ -57,20 +62,38 @@ extract_commands() {
       print "$cmd\n";
       $want = 0;
     }
-  ' "$cli" | sort -u
+  ' "$runner" | sort -u
+}
+
+runner_for_dir() {
+  local dir="$1"
+  for candidate in "$dir/cli" "$dir/cli.sh" "$dir/cli.js" "$dir/cli.py"; do
+    [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+runner_kind() {
+  case "$1" in
+    *.py) printf 'python' ;;
+    *.sh) printf 'shell' ;;
+    *.js) printf 'node' ;;
+    *) printf 'exec' ;;
+  esac
 }
 
 discover_rows() {
   candidate_roots | while IFS= read -r root; do
-    find "$root" -mindepth 1 -maxdepth 3 -type f -name cli.py 2>/dev/null
-  done | while IFS= read -r cli; do
-    local dir tool summary commands command_count
-    dir="$(dirname "$cli")"
+    find "$root" -mindepth 1 -maxdepth 2 -type d 2>/dev/null
+  done | while IFS= read -r dir; do
+    local runner tool kind summary commands command_count
+    runner="$(runner_for_dir "$dir")" || continue
     tool="$(basename "$dir")"
-    summary="$(extract_summary "$cli")"
-    commands="$(extract_commands "$cli" | paste -sd, -)"
+    kind="$(runner_kind "$runner")"
+    summary="$(extract_summary "$runner")"
+    commands="$(extract_commands "$runner" | paste -sd, -)"
     command_count="$(awk -v cmds="$commands" 'BEGIN { if (cmds == "") print 0; else print split(cmds, arr, ",") }')"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$tool" "$dir" "$summary" "$commands" "$command_count"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$tool" "$dir" "$summary" "$command_count" "$kind" "$runner" "$commands"
   done | awk -F '\t' '{ rows[$1] = $0 } END { for (tool in rows) print rows[tool] }' | sort -t "$(printf '\t')" -k1,1
 }
 
@@ -83,22 +106,28 @@ list_tools() {
   local rows count
   rows="$(discover_rows)"
   count="$(printf '%s\n' "$rows" | sed '/^$/d' | wc -l | tr -d ' ')"
-  printf '[%s]{tool,commands,summary}:\n' "$count"
-  printf '%s\n' "$rows" | awk -F '\t' 'NF {printf "  %s,%s,%s\n", $1, $5, $3}'
+  printf '[%s]{tool,type,commands,summary}:\n' "$count"
+  printf '%s\n' "$rows" | awk -F '\t' 'NF {printf "  %s,%s,%s,%s\n", $1, $5, $4, $3}'
 }
 
 discover_tool() {
   local tool="$1"
-  local row name dir summary commands count
+  local row name dir summary count kind runner commands
   if ! row="$(find_tool_row "$tool")"; then
     printf '{"error":"unknown_tool","tool":"%s"}\n' "$tool"
     return 1
   fi
-  IFS=$'\t' read -r name dir summary commands count <<<"$row"
+  IFS=$'\t' read -r name dir summary count kind runner commands <<<"$row"
   printf 'tool: %s\n' "$name"
+  printf 'type: %s\n' "$kind"
   printf 'summary: %s\n' "$summary"
   printf 'dir: %s\n' "$dir"
-  printf 'run: centaur-tools run %s <command> [args...]\n' "$name"
+  printf 'runner: %s\n' "$runner"
+  if [ "$kind" = "python" ]; then
+    printf 'run: centaur-tools run %s <command> [args...]\n' "$name"
+  else
+    printf 'run: centaur-tools run %s [args...]\n' "$name"
+  fi
   printf '[%s]{command}:\n' "$count"
   printf '%s' "$commands" | tr ',' '\n' | sed '/^$/d; s/^/  /'
   printf '\n'
@@ -107,13 +136,26 @@ discover_tool() {
 run_tool() {
   local tool="$1"
   shift || true
-  local row name dir _summary _commands _count
+  local row name dir _summary _count kind runner _commands
   if ! row="$(find_tool_row "$tool")"; then
     printf '{"error":"unknown_tool","tool":"%s"}\n' "$tool"
     return 1
   fi
-  IFS=$'\t' read -r name dir _summary _commands _count <<<"$row"
+  IFS=$'\t' read -r name dir _summary _count kind runner _commands <<<"$row"
   cd "$dir"
+  if [ "$kind" != "python" ]; then
+    case "$kind" in
+      shell) exec sh "$runner" "$@" ;;
+      node) exec node "$runner" "$@" ;;
+      exec)
+        if [ ! -x "$runner" ]; then
+          printf '{"error":"runner_not_executable","tool":"%s","runner":"%s"}\n' "$name" "$runner"
+          return 1
+        fi
+        exec "$runner" "$@"
+        ;;
+    esac
+  fi
   local env_dir path_key
   path_key="$(printf '%s' "$dir" | cksum | awk '{print $1}')"
   env_dir="${XDG_CACHE_HOME:-$HOME/.cache}/centaur-tools/${name}-${path_key}"
