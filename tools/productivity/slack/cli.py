@@ -103,6 +103,35 @@ def search(
         console.print(table)
 
 
+@app.command("latest-user-message")
+def latest_user_message_cmd(
+    user_id: str = typer.Argument(..., help="Slack user ID, e.g. U123ABC"),
+    before: str = typer.Option(
+        None,
+        "--before",
+        help="Optional upper timestamp bound: Slack ts, epoch, ISO datetime, or YYYY-MM-DD",
+    ),
+    channels: str = typer.Option(
+        None, "--channels", "-c", help="Comma-separated channel names/IDs to scan"
+    ),
+    depth: int = typer.Option(25, "--depth", "-d", help="Messages per channel to scan"),
+):
+    """Return the newest visible Slack message by a user, sorted by timestamp."""
+    from .client import latest_user_message
+
+    channel_list = [c.strip() for c in channels.split(",")] if channels else None
+    result = latest_user_message(
+        user_id=user_id,
+        before=before,
+        channels=channel_list,
+        messages_per_channel=depth,
+    )
+    if not result:
+        console.print("[yellow]No visible messages found.[/]")
+        raise typer.Exit()
+    console.print_json(json.dumps(result))
+
+
 @app.command()
 def channel(
     name: str = typer.Argument(..., help="Channel name (without #)"),

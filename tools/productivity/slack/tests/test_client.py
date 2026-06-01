@@ -488,6 +488,62 @@ def test_search_messages_parses_channel_and_user_modifiers_locally() -> None:
     assert results[0]["user_id"] == "UGZCSQTPE"
 
 
+def test_latest_user_message_scans_channels_and_sorts_by_timestamp() -> None:
+    client, fake_web_client = _make_client()
+    client._get_user_cache = lambda: {"U_LUKE": "luke", "U_OTHER": "other"}  # type: ignore[method-assign]
+    client.list_bot_channels = lambda **_: [  # type: ignore[method-assign]
+        {"id": "C_OLDER", "name": "older"},
+        {"id": "C_NEWER", "name": "newer"},
+    ]
+    history_by_channel = {
+        "C_OLDER": {
+            "messages": [
+                {"user": "U_LUKE", "text": "older luke", "ts": "100.000000"},
+                {"user": "U_OTHER", "text": "newer other", "ts": "300.000000"},
+            ]
+        },
+        "C_NEWER": {
+            "messages": [{"user": "U_LUKE", "text": "newer luke", "ts": "200.000000"}]
+        },
+    }
+
+    def history(**kwargs):
+        fake_web_client.history_calls.append(kwargs)
+        return history_by_channel[kwargs["channel"]]
+
+    fake_web_client.conversations_history = history  # type: ignore[method-assign]
+
+    result = client.latest_user_message("U_LUKE")
+
+    assert result is not None
+    assert result["text"] == "newer luke"
+    assert result["channel"] == "newer"
+    assert result["timestamp"] == "200.000000"
+    assert sorted(call["channel"] for call in fake_web_client.history_calls) == [
+        "C_NEWER",
+        "C_OLDER",
+    ]
+
+
+def test_latest_user_message_honors_before_timestamp() -> None:
+    client, fake_web_client = _make_client()
+    client._get_user_cache = lambda: {"U_LUKE": "luke"}  # type: ignore[method-assign]
+    client.list_bot_channels = lambda **_: [{"id": "C1", "name": "general"}]  # type: ignore[method-assign]
+    fake_web_client.history_pages = [
+        {
+            "messages": [
+                {"user": "U_LUKE", "text": "current request", "ts": "300.000000"},
+                {"user": "U_LUKE", "text": "previous message", "ts": "200.000000"},
+            ]
+        }
+    ]
+
+    result = client.latest_user_message("U_LUKE", before="300.000000")
+
+    assert result is not None
+    assert result["text"] == "previous message"
+
+
 def test_list_channels_returns_cache_when_slack_rate_limited() -> None:
     client, fake_web_client = _make_client()
     cached_channels = [{"id": "C123", "name": "cached", "is_private": False}]

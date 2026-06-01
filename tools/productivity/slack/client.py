@@ -945,6 +945,70 @@ class SlackClient:
 
         return scored_results[:max_results]
 
+    def latest_user_message(
+        self,
+        user_id: str,
+        before: str | int | float | None = None,
+        channels: list[str] | None = None,
+        messages_per_channel: int = 25,
+        include_bot_messages: bool = False,
+    ) -> dict | None:
+        """Return the newest visible Slack message posted by one user.
+
+        Use this for questions like "what was the last message I posted?"
+        It scans recent history for bot-visible channels, filters by Slack
+        ``user_id``, and sorts by Slack timestamp descending.
+        """
+        normalized_user_id = user_id.strip()
+        if not normalized_user_id:
+            raise ValueError("user_id is required")
+
+        if channels:
+            bot_channels = self._channel_refs_for_search(channels)
+        else:
+            bot_channels = self.list_bot_channels()
+        if not bot_channels:
+            return None
+
+        user_cache = self._get_user_cache()
+        normalized_before = self._normalize_ts(before)
+        effective_limit = max(1, min(int(messages_per_channel), self._MAX_PAGE_SIZE))
+
+        all_messages: list[dict] = []
+        with ThreadPoolExecutor(max_workers=min(6, len(bot_channels))) as executor:
+            futures = {
+                executor.submit(
+                    self._fetch_channel_history,
+                    self._client,
+                    ch["id"],
+                    ch["name"],
+                    effective_limit,
+                    user_cache,
+                ): ch
+                for ch in bot_channels
+            }
+            for future in as_completed(futures):
+                try:
+                    all_messages.extend(future.result())
+                except Exception:
+                    pass
+
+        matches = []
+        before_float = float(normalized_before) if normalized_before is not None else None
+        for msg in all_messages:
+            if msg.get("user_id") != normalized_user_id:
+                continue
+            if not include_bot_messages and msg.get("bot_id"):
+                continue
+            timestamp = str(msg.get("timestamp") or "")
+            if before_float is not None and timestamp and float(timestamp) >= before_float:
+                continue
+            msg["user"] = user_cache.get(normalized_user_id, normalized_user_id)
+            matches.append(msg)
+
+        matches.sort(key=lambda msg: float(msg.get("timestamp") or 0), reverse=True)
+        return matches[0] if matches else None
+
     def get_channel_history_page(
         self,
         channel: str,
@@ -2438,6 +2502,10 @@ def resolve_mentions(
 
 def search_messages(*args, **kwargs):
     return _client().search_messages(*args, **kwargs)
+
+
+def latest_user_message(*args, **kwargs):
+    return _client().latest_user_message(*args, **kwargs)
 
 
 def get_channel_history_page(*args, **kwargs):
