@@ -241,10 +241,11 @@ fi
 # Wait for the tool-server sidecar before signalling readiness, so the harness
 # doesn't issue its first tool call before the server is listening.
 if [ -n "${CENTAUR_TOOLS_URL:-}" ]; then
-    _tools_deadline=$(( $(date +%s) + ${CENTAUR_TOOLS_WAIT_SECONDS:-10} ))
+    _tools_wait_seconds="${CENTAUR_TOOLS_WAIT_SECONDS:-120}"
+    _tools_deadline=$(( $(date +%s) + _tools_wait_seconds ))
     until curl -fsS --noproxy '*' --max-time 2 "${CENTAUR_TOOLS_URL}/healthz" >/dev/null 2>&1; do
         if [ "$(date +%s)" -ge "$_tools_deadline" ]; then
-            echo "tool-server /healthz not ready after ${CENTAUR_TOOLS_WAIT_SECONDS:-10}s; continuing" >&2
+            echo "tool-server /healthz not ready after ${_tools_wait_seconds}s; continuing" >&2
             break
         fi
         sleep 0.5

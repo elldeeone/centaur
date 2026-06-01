@@ -43,6 +43,29 @@ if [ -n "${_KEY}" ]; then
   auth_headers=(-H "$A")
 fi
 
+wait_for_tools() {
+  local url="$1"
+  if [ -z "${CENTAUR_TOOLS_URL:-}" ]; then
+    return 0
+  fi
+  case "$url" in
+    "${CENTAUR_TOOLS_URL}"/*) ;;
+    *) return 0 ;;
+  esac
+
+  local wait_s="${CENTAUR_TOOLS_WAIT_SECONDS:-120}"
+  local deadline=$(( $(date +%s) + wait_s ))
+  until curl -fsS --noproxy '*' --max-time 2 "${CENTAUR_TOOLS_URL}/healthz" >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      printf '{"error":"tool_server_unavailable","url":%s,"waited_seconds":%s}\n' \
+        "$(printf '%s' "${CENTAUR_TOOLS_URL}/healthz" | jq -Rs .)" \
+        "$wait_s"
+      return 1
+    fi
+    sleep 0.5
+  done
+}
+
 request() {
   local http_method="$1"
   local url="$2"
@@ -77,6 +100,10 @@ request() {
   fi
   if [ -n "$data" ]; then
     curl_args+=(-H "$J" -d "$data")
+  fi
+
+  if ! wait_for_tools "$url"; then
+    return 1
   fi
 
   local response
