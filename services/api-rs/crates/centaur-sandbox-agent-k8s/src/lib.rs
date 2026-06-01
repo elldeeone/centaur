@@ -531,8 +531,13 @@ impl SandboxBackend for AgentSandboxBackend {
     async fn create(&self, spec: SandboxSpec) -> SandboxResult<SandboxHandle> {
         let id = SandboxId::new(next_sandbox_name());
         let resolved_iron_proxy = self.resolve_iron_proxy(&id, &spec)?;
-        self.create_iron_proxy_resources(&id, resolved_iron_proxy.as_ref())
-            .await?;
+        if let Err(err) = self
+            .create_iron_proxy_resources(&id, resolved_iron_proxy.as_ref())
+            .await
+        {
+            let _ = self.delete_iron_proxy_resources(&id).await;
+            return Err(err);
+        }
         let sandbox = build_agent_sandbox(&id, &spec, &self.config, resolved_iron_proxy.as_ref())?;
         let create_result = self
             .sandboxes()
