@@ -465,7 +465,7 @@ describe('AgentSessionRenderer', () => {
     expect(blocks.some((block: any) => block.type === 'context')).toBe(false)
     expect(stopStreamFallbackText(stop?.params).trim()).toBe('')
     expect(calls.some(call => call.method === 'chat.appendStream')).toBe(true)
-    expect(result.streamedTextChars).toBe(0)
+    expect(result.streamedTextChars).toBe('Live answer body.'.length)
   })
 
   it('does not duplicate streamed answer markdown when many tasks finalize', async () => {

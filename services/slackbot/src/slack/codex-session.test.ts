@@ -1738,7 +1738,7 @@ describe('CodexSessionRenderer', () => {
     expect(stop?.params.chunks).toBeUndefined()
     expect(blocks.some((block: any) => block.type === 'context')).toBe(false)
     expect(blocks.some((block: any) => block.type === 'markdown')).toBe(false)
-    expect(result.streamedAnswerChars).toBe(0)
+    expect(result.streamedAnswerChars).toBe('Done: five tools called.'.length)
   })
 
   it('treats an unphased terminal agent message after tool use as the final answer', async () => {

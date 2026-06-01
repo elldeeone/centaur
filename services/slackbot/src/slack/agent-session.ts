@@ -233,10 +233,8 @@ export class AgentSessionRenderer {
             await this.flushTask(state, segment, task)
           }
         }
-        const { streamedTextDurable } = await this.closeTextStream(state, segment)
-        if (streamedTextDurable) {
-          streamedTextChars += segment.streamedTextSourceChars
-        }
+        await this.closeTextStream(state, segment)
+        streamedTextChars += segment.streamedTextSourceChars
       }
       closed = true
     } finally {

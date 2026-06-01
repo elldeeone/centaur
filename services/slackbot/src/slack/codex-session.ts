@@ -247,11 +247,12 @@ export class CodexSessionRenderer {
     completeOpenTasks(state)
     await this.publishActivitySummary(agentSessionId, state, { final: true })
     await this.publishPendingAssistantText(agentSessionId, state, { force: true })
+    const visibleAnswerChars = state.deliveredAnswerChars
     const { streamedTextChars } = await this.renderer.done(agentSessionId, {
       streamFinalUpdates: true,
       answerMarkdown: state.answerText
     })
-    state.deliveredAnswerChars = streamedTextChars
+    state.deliveredAnswerChars = Math.max(visibleAnswerChars, streamedTextChars)
     state.done = true
     completedStates.set(agentSessionId, {
       threadId: state.threadId,
