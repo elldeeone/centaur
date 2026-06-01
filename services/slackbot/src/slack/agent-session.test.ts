@@ -468,6 +468,65 @@ describe('AgentSessionRenderer', () => {
     expect(result.streamedTextChars).toBe(0)
   })
 
+  it('does not duplicate streamed answer markdown when many tasks finalize', async () => {
+    const calls: Array<{ method: string; params: any }> = []
+    const client = {
+      assistant: {
+        threads: {
+          setStatus: async () => ({ ok: true })
+        }
+      },
+      chat: {
+        startStream: async (params: any) => {
+          calls.push({ method: 'chat.startStream', params })
+          return { ok: true, ts: '1778866940.295499' }
+        },
+        appendStream: async (params: any) => {
+          calls.push({ method: 'chat.appendStream', params })
+          return { ok: true }
+        },
+        stopStream: async (params: any) => {
+          calls.push({ method: 'chat.stopStream', params })
+          return { ok: true }
+        },
+        update: async () => ({ ok: true })
+      }
+    }
+
+    const renderer = new AgentSessionRenderer(client as any)
+    const { sessionId } = await renderer.open({
+      channel: 'C123',
+      parentTs: '1778866921.505479',
+      recipientTeamId: 'T123',
+      recipientUserId: 'U123',
+      title: 'Centaur execution'
+    })
+
+    for (let index = 0; index < 18; index += 1) {
+      await renderer.step(sessionId, {
+        id: `cmd-${index}`,
+        title: `${index + 1}. Command execution`,
+        status: 'complete'
+      })
+    }
+    await renderer.text(sessionId, 'Live answer body.')
+    await renderer.done(sessionId, {
+      answerMarkdown: 'Live answer body.'
+    })
+
+    const streamedText = calls
+      .flatMap(call => call.params.chunks ?? [])
+      .filter((chunk: any) => chunk.type === 'markdown_text')
+      .map((chunk: any) => String(chunk.text ?? ''))
+      .join('')
+    const stop = calls.find(call => call.method === 'chat.stopStream')
+    const stopBlocksText = JSON.stringify(stop?.params.blocks ?? [])
+
+    expect(streamedText).toContain('Live answer body.')
+    expect(stopBlocksText).not.toContain('Live answer body.')
+    expect(stopStreamFallbackText(stop?.params).trim()).toBe('')
+  })
+
   it('keeps a durable final answer when the answer did not stream live', async () => {
     const calls: Array<{ method: string; params: any }> = []
     const client = {

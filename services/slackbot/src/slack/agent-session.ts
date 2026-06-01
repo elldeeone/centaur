@@ -117,7 +117,6 @@ const FINAL_PLAN_TITLE_CHARS = slackReplyLimits.finalPlan.taskTitleChars
 const FINAL_PLAN_DETAILS_LINES = slackReplyLimits.finalPlan.taskDetailsCodeBlockLines
 const FINAL_PLAN_OUTPUT_LINES = slackReplyLimits.finalPlan.taskOutputCodeBlockLines
 const MAX_LIVE_TEXT_CHARS = slackReplyLimits.stream.maxLiveTextChars
-const DURABLE_STREAMED_ANSWER_TASK_THRESHOLD = 10
 
 export class AgentSessionRenderer {
   constructor(private readonly client: WebClient) {}
@@ -300,9 +299,7 @@ export class AgentSessionRenderer {
     const tasks = compactFinalTasks(originalTasks)
     const answerSource =
       state.finalAnswerMarkdown?.trim() || segment.streamedText.trim() || segment.textParts.join('')
-    const answerMarkdown = finalMarkdownForFinalBlocks(answerSource, segment, {
-      includeStreamedText: originalTasks.length >= DURABLE_STREAMED_ANSWER_TASK_THRESHOLD
-    })
+    const answerMarkdown = finalMarkdownForFinalBlocks(answerSource, segment)
     const streamedTextLive =
       Boolean(segment.streamedText.trim()) && segment.streamedText.length < MAX_LIVE_TEXT_CHARS
     // Slack accumulates appendStream chunks; stopStream blocks are the composed final layout.
