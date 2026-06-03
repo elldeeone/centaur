@@ -1280,6 +1280,43 @@ async def test_final_delivery_claim_filters_platform(client, db_pool, api_key: s
 
 
 @pytest.mark.asyncio
+async def test_final_delivery_claim_filters_slack_channel_ids(client, db_pool, api_key: str):
+    included_execution_id = f"exe-{uuid.uuid4().hex[:10]}"
+    excluded_execution_id = f"exe-{uuid.uuid4().hex[:10]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+
+    for execution_id, channel in [
+        (included_execution_id, "C-allowed"),
+        (excluded_execution_id, "C-other"),
+    ]:
+        await db_pool.execute(
+            "INSERT INTO agent_final_delivery_outbox ("
+            "execution_id, thread_key, delivery, state, final_payload, next_attempt_at"
+            ") VALUES ($1, $2, $3::jsonb, 'pending', $4::jsonb, NOW())",
+            execution_id,
+            thread_key,
+            json.dumps({"platform": "slack", "channel": channel}),
+            json.dumps({"type": "final", "result_text": "done"}),
+        )
+
+    claim = await client.post(
+        "/agent/final-deliveries/claim",
+        headers=_auth(api_key),
+        json={
+            "consumer_id": "slackbot:test",
+            "limit": 10,
+            "lease_seconds": 30,
+            "platform": "slack",
+            "slack_channel_ids": ["C-allowed"],
+        },
+    )
+
+    assert claim.status_code == 200
+    deliveries = claim.json()["deliveries"]
+    assert [delivery["execution_id"] for delivery in deliveries] == [included_execution_id]
+
+
+@pytest.mark.asyncio
 async def test_final_delivery_non_retryable_failure_dead_letters_immediately(
     client,
     db_pool,

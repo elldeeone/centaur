@@ -123,7 +123,7 @@ def test_search_queries_bm25_and_returns_compact_results(monkeypatch):
     assert "WHEN 'slack_channel_day' THEN 0.75" in query
     assert "END DESC" in query
     assert "paradedb.score(document_id)" in query
-    assert args == ("ParadeDB BM25", "ParadeDB", "BM25", "slack", "slack_thread", 5)
+    assert args == ("ParadeDB BM25", "ParadeDB", "BM25", "slack", "slack_thread", None, 5)
     assert fake.closed is True
 
 
@@ -257,6 +257,7 @@ def test_search_uses_or_terms_and_drops_stop_words(monkeypatch):
         "root",
         "mismatch",
         "prod",
+        None,
         None,
         None,
         3,
@@ -404,6 +405,99 @@ def test_query_slack_messages_rejects_bad_order(monkeypatch):
     assert fake.closed is True
 
 
+def test_search_scopes_slack_documents_to_active_thread_channel(monkeypatch):
+    fake = _FakeConnection(rows=[])
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    monkeypatch.setenv("CENTAUR_THREAD_KEY", "slack:T123:C_SCOPE:1778883099.579529")
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+
+    result = CompanyContextClient("postgresql://example").search(
+        "channel only",
+        source="slack",
+        limit=4,
+    )
+
+    assert result["status"] == "ok"
+    assert result["slack_scope"] == {
+        "team_id": "T123",
+        "channel_id": "C_SCOPE",
+        "thread_ts": "1778883099.579529",
+    }
+    query, args = fake.fetch_calls[0]
+    assert "OR metadata->>'channel_id' = $" in query
+    assert args == ("channel only", "channel", "only", "slack", None, "C_SCOPE", 4)
+    assert fake.closed is True
+
+
+def test_query_slack_messages_scopes_to_active_thread_channel(monkeypatch):
+    fake = _FakeConnection(rows=[])
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    monkeypatch.setenv("CENTAUR_THREAD_KEY", "slack:T123:C_SCOPE:1778883099.579529")
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+
+    result = CompanyContextClient("postgresql://example").query_slack_messages(
+        user="Luke",
+        order="newest",
+        limit=2,
+    )
+
+    assert result["status"] == "ok"
+    assert result["slack_scope"] == {
+        "team_id": "T123",
+        "channel_id": "C_SCOPE",
+        "thread_ts": "1778883099.579529",
+    }
+    query, args = fake.fetch_calls[0]
+    assert "m.channel_id = $1" in query
+    assert "m.user_id = $2" in query
+    assert "LIMIT $3" in query
+    assert args == ("C_SCOPE", "Luke", 2)
+    assert fake.closed is True
+
+
+def test_read_document_rejects_slack_document_outside_active_channel(monkeypatch):
+    fake = _FakeConnection(
+        row={
+            "document_id": "slack:channel_day:C_OTHER:2026-05-08",
+            "source": "slack",
+            "source_type": "slack_channel_day",
+            "title": "#other - 2026-05-08",
+            "body": "outside",
+            "url": "",
+            "occurred_at": None,
+            "source_updated_at": None,
+            "metadata": '{"channel_id": "C_OTHER", "channel_name": "other"}',
+        }
+    )
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    monkeypatch.setenv("CENTAUR_THREAD_KEY", "slack:T123:C_SCOPE:1778883099.579529")
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+
+    result = CompanyContextClient("postgresql://example").read_document(
+        "slack:channel_day:C_OTHER:2026-05-08",
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "document is outside the active Slack channel scope",
+        "slack_scope": {
+            "team_id": "T123",
+            "channel_id": "C_SCOPE",
+            "thread_ts": "1778883099.579529",
+        },
+    }
+    assert fake.closed is True
+
+
 
 def test_latest_date_returns_latest_indexed_slack_timestamp(monkeypatch):
     fake = _FakeConnection(
@@ -435,7 +529,7 @@ def test_latest_date_returns_latest_indexed_slack_timestamp(monkeypatch):
         "latest_occurred_at": "2026-05-10T14:00:00+00:00",
     }
     _, args = fake.fetchrow_calls[0]
-    assert args == ("slack", "slack_thread")
+    assert args == ("slack", "slack_thread", None)
     assert fake.closed is True
 
 

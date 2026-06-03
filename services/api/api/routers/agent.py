@@ -760,6 +760,7 @@ class ClaimFinalDeliveryRequest(BaseModel):
     limit: int = 1
     lease_seconds: int = 60
     platform: str | None = None
+    slack_channel_ids: list[str] | None = None
 
 
 @router.post("/final-deliveries/claim", dependencies=[Depends(require_scope("agent:execute"))])
@@ -771,6 +772,11 @@ async def claim_final_delivery(request: Request, body: ClaimFinalDeliveryRequest
     limit = max(1, min(body.limit, 20))
     lease_seconds = max(15, min(body.lease_seconds, 600))
     platform = body.platform.strip() if body.platform else None
+    slack_channel_ids = [
+        channel.strip()
+        for channel in (body.slack_channel_ids or [])
+        if isinstance(channel, str) and channel.strip()
+    ] or None
     rows = await pool.fetch(
         "WITH candidates AS ("
         "  SELECT execution_id FROM agent_final_delivery_outbox "
@@ -779,6 +785,9 @@ async def claim_final_delivery(request: Request, body: ClaimFinalDeliveryRequest
         "         OR state = 'sending') "
         "    AND (lease_expires_at IS NULL OR lease_expires_at <= NOW()) "
         "    AND ($4::text IS NULL OR delivery->>'platform' = $4) "
+        "    AND ($5::text[] IS NULL "
+        "         OR delivery->>'channel' = ANY($5::text[]) "
+        "         OR delivery->>'channel_id' = ANY($5::text[])) "
         "  ORDER BY created_at ASC "
         "  LIMIT $1 "
         "  FOR UPDATE SKIP LOCKED"
@@ -799,6 +808,7 @@ async def claim_final_delivery(request: Request, body: ClaimFinalDeliveryRequest
         body.consumer_id,
         lease_seconds,
         platform,
+        slack_channel_ids,
     )
     deliveries = []
     for row in rows:

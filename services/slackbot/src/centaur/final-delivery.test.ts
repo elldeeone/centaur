@@ -134,6 +134,13 @@ describe("final delivery polling", () => {
         ),
       ).toHaveLength(2);
       expect(
+        fetchCalls.find((call) => call.path === "/agent/final-deliveries/claim")
+          ?.body,
+      ).toMatchObject({
+        platform: "slack",
+        slack_channel_ids: [],
+      });
+      expect(
         fetchCalls.filter(
           (call) =>
             call.path ===
@@ -168,6 +175,42 @@ describe("final delivery polling", () => {
           text: "done [once](https://example.com) with **bold** text",
         },
       ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("sends configured Slack channel ids when claiming final deliveries", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchCalls: Array<{ path: string; body: unknown }> = [];
+    const fetchMock = mock(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        fetchCalls.push({
+          path: url.pathname,
+          body: init?.body ? JSON.parse(init.body as string) : undefined,
+        });
+        if (url.pathname === "/agent/final-deliveries/claim") {
+          return jsonResponse({ deliveries: [] });
+        }
+        throw new Error(`unexpected request: ${url.pathname}`);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await pollFinalDeliveriesOnce(
+        {
+          ...config,
+          CENTAUR_SLACK_FINAL_DELIVERY_CHANNELS: "C_MAIN,C_PRIVATE",
+        },
+        {} as any,
+      );
+
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0].body).toMatchObject({
+        slack_channel_ids: ["C_MAIN", "C_PRIVATE"],
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }

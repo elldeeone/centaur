@@ -44,6 +44,7 @@ export class CentaurHandoff {
   }
 
   async emit(event: NormalizedSlackEvent): Promise<CentaurHandoffResult> {
+    const persona = this.config.CENTAUR_SLACK_PERSONA?.trim() || undefined
     return withSpan(
       'centaur.slackbot.handoff',
       clientSpanOptions({
@@ -75,6 +76,7 @@ export class CentaurHandoff {
               history_messages: event.history_messages ?? [],
               message_id: event.message_id,
               user_id: event.user_id,
+              persona,
               metadata: {
                 source: 'slackbot',
                 slack: {

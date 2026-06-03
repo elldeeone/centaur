@@ -34,6 +34,12 @@ export function startFinalDeliveryPoller(
   client: WebClient,
 ): void {
   if (!centaurApiKey(config)) return;
+  if (
+    config.CENTAUR_SLACK_PERSONA?.trim() &&
+    slackFinalDeliveryChannels(config).length === 0
+  ) {
+    return;
+  }
   const tick = async () => {
     try {
       await pollFinalDeliveriesOnce(config, client);
@@ -61,6 +67,7 @@ export async function pollFinalDeliveriesOnce(
         platform: "slack",
         limit: 5,
         lease_seconds: 60,
+        slack_channel_ids: slackFinalDeliveryChannels(config),
       });
       spanAttributes(span, {
         "centaur.final_delivery.claimed_count": Array.isArray(result.deliveries)
@@ -122,6 +129,13 @@ export async function pollFinalDeliveriesOnce(
       );
     });
   }
+}
+
+function slackFinalDeliveryChannels(config: AppConfig): string[] {
+  return (config.CENTAUR_SLACK_FINAL_DELIVERY_CHANNELS ?? "")
+    .split(/[\s,]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 async function deliver(client: WebClient, delivery: any): Promise<void> {

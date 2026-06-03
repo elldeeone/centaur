@@ -29,6 +29,9 @@ MAX_SLACK_MESSAGE_LIMIT = 100
 SLACK_LIVE_SOURCE_TYPE = "slack_live_message"
 SLACK_MESSAGE_SOURCE_TYPE = "slack_message"
 _SLACK_AFTER_RE = re.compile(r"\bafter:\d{4}-\d{2}-\d{2}\b", re.IGNORECASE)
+_SLACK_THREAD_KEY_RE = re.compile(
+    r"^slack:(?P<team_id>[^:]+):(?P<channel_id>[^:]+):(?P<thread_ts>.+)$"
+)
 
 _SEARCH_TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*")
 _STOP_WORDS = {
@@ -230,6 +233,27 @@ def _slack_after_query(query: str, latest_date: str | None) -> str:
     return f"{query} after:{latest_date[:10]}"
 
 
+def _active_slack_scope() -> dict[str, str] | None:
+    """Return the current Slack runtime scope from Centaur's thread key."""
+    thread_key = os.getenv("CENTAUR_THREAD_KEY", "").strip()  # noqa: TID251
+    match = _SLACK_THREAD_KEY_RE.match(thread_key)
+    if not match:
+        return None
+    return {
+        "team_id": match.group("team_id"),
+        "channel_id": match.group("channel_id"),
+        "thread_ts": match.group("thread_ts"),
+    }
+
+
+def _slack_document_in_scope(row: Any, scope: dict[str, str] | None) -> bool:
+    """Return whether a company-context row is visible in this Slack runtime."""
+    if not scope or str(_row_value(row, "source", "")) != "slack":
+        return True
+    metadata = _as_dict(_row_value(row, "metadata", {}))
+    return str(metadata.get("channel_id") or "") == scope["channel_id"]
+
+
 def _load_slack_client() -> Any:
     """Load the sibling Slack tool client without making company_context import it eagerly."""
     candidate_roots = [
@@ -351,13 +375,15 @@ class CompanyContextClient:
         source: str | None,
         source_type: str | None,
     ) -> dict[str, Any]:
+        slack_scope = _active_slack_scope()
         conn = await self._connect()
         try:
             terms = _search_terms(query)
             search_terms = [query, *terms]
             source_param = len(search_terms) + 1
             source_type_param = len(search_terms) + 2
-            limit_param = len(search_terms) + 3
+            slack_scope_channel_param = len(search_terms) + 3
+            limit_param = len(search_terms) + 4
             rows = await conn.fetch(
                 f"""
                 SELECT
@@ -380,6 +406,11 @@ class CompanyContextClient:
                 WHERE {_search_where_clause(len(terms))}
                   AND (${source_param}::text IS NULL OR source = ${source_param})
                   AND (${source_type_param}::text IS NULL OR source_type = ${source_type_param})
+                  AND (
+                    ${slack_scope_channel_param}::text IS NULL
+                    OR source <> 'slack'
+                    OR metadata->>'channel_id' = ${slack_scope_channel_param}
+                  )
                 ORDER BY
                     paradedb.score(document_id)
                     * CASE source_type
@@ -393,6 +424,7 @@ class CompanyContextClient:
                 *search_terms,
                 source,
                 source_type,
+                slack_scope["channel_id"] if slack_scope else None,
                 limit,
             )
             results = []
@@ -425,7 +457,12 @@ class CompanyContextClient:
                         live_query,
                         max_results=limit,
                     )
-                    live_results = [_live_slack_result(message) for message in live_messages]
+                    live_results = [
+                        result
+                        for result in (_live_slack_result(message) for message in live_messages)
+                        if not slack_scope
+                        or result["metadata"].get("channel_id") == slack_scope["channel_id"]
+                    ]
                 except Exception as exc:
                     live_error = str(exc)
 
@@ -434,6 +471,7 @@ class CompanyContextClient:
                 "query": query,
                 "source": source,
                 "source_type": source_type,
+                "slack_scope": slack_scope,
                 "count": len(results) + len(live_results),
                 "indexed_count": len(results),
                 "live_count": len(live_results),
@@ -456,6 +494,7 @@ class CompanyContextClient:
         source_type: str | None,
     ) -> dict[str, Any]:
         """Return latest indexed date using an existing DB connection."""
+        slack_scope = _active_slack_scope()
         row = await conn.fetchrow(
             """
             SELECT
@@ -466,9 +505,15 @@ class CompanyContextClient:
             FROM company_context_documents
             WHERE ($1::text IS NULL OR source = $1)
               AND ($2::text IS NULL OR source_type = $2)
+              AND (
+                $3::text IS NULL
+                OR source <> 'slack'
+                OR metadata->>'channel_id' = $3
+              )
             """,
             source,
             source_type,
+            slack_scope["channel_id"] if slack_scope else None,
         )
         if not row or int(row["document_count"] or 0) == 0:
             return {
@@ -526,6 +571,7 @@ class CompanyContextClient:
         thread_ts: str | None,
         order: str,
     ) -> dict[str, Any]:
+        slack_scope = _active_slack_scope()
         conn = await self._connect()
         try:
             normalized_query = (query or "").strip()
@@ -549,6 +595,9 @@ class CompanyContextClient:
                 return f"${len(args)}"
 
             where = ["TRUE"]
+            if slack_scope:
+                scope_channel_param = add_arg(slack_scope["channel_id"])
+                where.append(f"m.channel_id = {scope_channel_param}")
             score_expr = "NULL::double precision"
             if normalized_query:
                 query_param = add_arg(normalized_query)
@@ -642,6 +691,7 @@ class CompanyContextClient:
                     "after": _isoformat(after_dt),
                     "order": order_key,
                 },
+                "slack_scope": slack_scope,
                 "count": len(rows),
                 "results": [_slack_message_result(row) for row in rows],
             }
@@ -811,6 +861,13 @@ class CompanyContextClient:
                 return {
                     "status": "error",
                     "error": f"document not found: {document_id}",
+                }
+            slack_scope = _active_slack_scope()
+            if not _slack_document_in_scope(row, slack_scope):
+                return {
+                    "status": "error",
+                    "error": "document is outside the active Slack channel scope",
+                    "slack_scope": slack_scope,
                 }
 
             body = str(row["body"] or "")
