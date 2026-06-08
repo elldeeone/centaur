@@ -226,9 +226,9 @@ def container_env(
         [
             f"FIREWALL_HOST={firewall_host}",
             f"HTTPS_PROXY=http://{firewall_host}:8080",
-            f"HTTP_PROXY=http://{firewall_host}:8080",
+            f"HTTP_PROXY=http://{firewall_host}:80",
             f"https_proxy=http://{firewall_host}:8080",
-            f"http_proxy=http://{firewall_host}:8080",
+            f"http_proxy=http://{firewall_host}:80",
             f"NO_PROXY={no_proxy}",
             f"no_proxy={no_proxy}",
             "NODE_EXTRA_CA_CERTS=/firewall-certs/ca-cert.pem",

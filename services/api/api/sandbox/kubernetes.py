@@ -136,6 +136,10 @@ def _proxy_health_port() -> int:
     return _env_int("KUBERNETES_IRON_PROXY_HEALTH_PORT", 9090)
 
 
+def _proxy_http_port() -> int:
+    return _env_int("KUBERNETES_IRON_PROXY_HTTP_PORT", 80)
+
+
 def _op_connect_app_name() -> str:
     return os.getenv("KUBERNETES_OP_CONNECT_APP_NAME", "onepassword-connect").strip()
 
@@ -478,7 +482,8 @@ def _build_tool_server_container(
         raise RuntimeError("_build_tool_server_container called without an image")
 
     secret_name = _secret_env_name()
-    proxy_url = f"http://{firewall_host}:{_proxy_port()}"
+    http_proxy_url = f"http://{firewall_host}:{_proxy_http_port()}"
+    https_proxy_url = f"http://{firewall_host}:{_proxy_port()}"
     api_host = urlsplit(api_url).hostname or ""
     no_proxy_hosts = [
         "localhost",
@@ -501,10 +506,10 @@ def _build_tool_server_container(
                 }
             },
         },
-        {"name": "HTTPS_PROXY", "value": proxy_url},
-        {"name": "HTTP_PROXY", "value": proxy_url},
-        {"name": "https_proxy", "value": proxy_url},
-        {"name": "http_proxy", "value": proxy_url},
+        {"name": "HTTPS_PROXY", "value": https_proxy_url},
+        {"name": "HTTP_PROXY", "value": http_proxy_url},
+        {"name": "https_proxy", "value": https_proxy_url},
+        {"name": "http_proxy", "value": http_proxy_url},
         {"name": "NO_PROXY", "value": no_proxy},
         {"name": "no_proxy", "value": no_proxy},
         {"name": "REQUESTS_CA_BUNDLE", "value": "/firewall-certs/ca-cert.pem"},
@@ -1019,6 +1024,12 @@ class KubernetesExecutorBackend(SandboxBackend):
                 "port": _proxy_port(),
                 "targetPort": _proxy_port(),
                 "protocol": "TCP",
+            },
+            {
+                "name": "http-proxy",
+                "port": _proxy_http_port(),
+                "targetPort": _proxy_http_port(),
+                "protocol": "TCP",
             }
         ]
         for name, port in sorted(pg_listen_ports.items(), key=lambda item: item[1]):
@@ -1070,7 +1081,10 @@ class KubernetesExecutorBackend(SandboxBackend):
         await self._delete_network_policy(_sandbox_egress_policy_name(sandbox_id))
         await self._delete_network_policy(_proxy_policy_name(sandbox_id))
 
-        sandbox_to_proxy_ports = [{"protocol": "TCP", "port": _proxy_port()}]
+        sandbox_to_proxy_ports = [
+            {"protocol": "TCP", "port": _proxy_port()},
+            {"protocol": "TCP", "port": _proxy_http_port()},
+        ]
         for _, port in sorted(pg_listen_ports.items(), key=lambda item: item[1]):
             sandbox_to_proxy_ports.append({"protocol": "TCP", "port": port})
         if core_port is not None:
@@ -1211,6 +1225,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             env_from.append({"secretRef": {"name": bootstrap_secret_name}})
         proxy_ports: list[dict[str, Any]] = [
             {"containerPort": _proxy_port(), "name": "proxy"},
+            {"containerPort": _proxy_http_port(), "name": "http-proxy"},
             {"containerPort": _proxy_management_port(), "name": "management"},
             {"containerPort": _proxy_health_port(), "name": "health"},
         ]

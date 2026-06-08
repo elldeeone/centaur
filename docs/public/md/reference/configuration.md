@@ -113,7 +113,7 @@ API-set variables:
 | `AGENT_API_URL` | Chart-rendered API service URL. | Source for sandbox `CENTAUR_API_URL`; required by Kubernetes backend. |
 | `CENTAUR_API_URL`, `CENTAUR_API_KEY`, `CENTAUR_THREAD_KEY`, `CENTAUR_TRACE_ID` | API sandbox creation. | API callback, short-lived sandbox token, thread key, and trace id. |
 | `AMP_MODE`, `AMP_THREAD_VISIBILITY`, `AMP_CONTINUE_THREAD_ID` | API env or resume path. | Amp mode and resume behavior. |
-| `FIREWALL_HOST`, `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and lowercase variants | API sandbox creation. | Routes sandbox egress through per-sandbox iron-proxy. |
+| `FIREWALL_HOST`, `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and lowercase variants | API sandbox creation. | Routes sandbox egress through per-sandbox iron-proxy. Plain HTTP uses iron-proxy's HTTP listener; HTTPS uses the CONNECT tunnel listener. |
 | `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`, `GIT_SSL_CAINFO` | API sandbox creation. | Trust bundle for proxied TLS. |
 | `PG_PROXY_PASSWORD_<SECRET_NAME>`, `<PG_DSN_SECRET_NAME>` | API per-sandbox proxy creation. | Proxied Postgres credentials for tools that declare `pg_dsn` secrets. |
 
@@ -129,7 +129,7 @@ Kubernetes backend:
 | `KUBERNETES_SANDBOX_EXTRA_ENV` | `sandbox.extraEnv`. | JSON list copied into each sandbox. |
 | `KUBERNETES_FIREWALL_CA_SECRET_NAME`, `KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME` | `firewall.existingCa*` or generated CA Secrets. | CA material for sandbox/proxy TLS interception. |
 | `KUBERNETES_SECRET_ENV_NAME`, `KUBERNETES_SECRET_ENV_PREFIX`, `KUBERNETES_BOOTSTRAP_SECRET_NAME` | `secretManager.*`, `secrets.bootstrapSecretName`. | Secrets read by API-created proxy/sandbox pods. |
-| `KUBERNETES_IRON_PROXY_IMAGE`, `KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY`, `KUBERNETES_IRON_PROXY_PORT`, `KUBERNETES_IRON_PROXY_MANAGEMENT_PORT`, `KUBERNETES_IRON_PROXY_HEALTH_PORT` | `ironProxy.*`. | Per-sandbox iron-proxy image and ports. |
+| `KUBERNETES_IRON_PROXY_IMAGE`, `KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY`, `KUBERNETES_IRON_PROXY_PORT`, `KUBERNETES_IRON_PROXY_HTTP_PORT`, `KUBERNETES_IRON_PROXY_MANAGEMENT_PORT`, `KUBERNETES_IRON_PROXY_HEALTH_PORT` | `ironProxy.*` or `api.extraEnv`. | Per-sandbox iron-proxy image and ports. `KUBERNETES_IRON_PROXY_PORT` is the HTTPS/CONNECT tunnel listener; `KUBERNETES_IRON_PROXY_HTTP_PORT` defaults to `80` for plain HTTP proxying. |
 | `FIREWALL_MANAGER_SECRET_SOURCE`, `FIREWALL_MANAGER_SECRET_TTL`, `KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE` | `ironProxy.secretSource`, `ironProxy.secretTtl`. | Secret source and cache TTL for rendered proxy config. |
 | `KUBERNETES_OP_CONNECT_HOST`, `KUBERNETES_OP_CONNECT_APP_NAME`, `KUBERNETES_OP_CONNECT_PORT` | Chart helper or `api.extraEnv`. | 1Password Connect endpoint details. |
 | `KUBERNETES_API_POD_LABEL_SELECTOR` | Chart-rendered labels or `api.extraEnv`. | API pod selector for API-managed proxy policies. |
