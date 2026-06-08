@@ -435,6 +435,45 @@ def _build_hmac_sign_transforms(
     return transforms
 
 
+def _secret_header_names(secrets: list[SecretDef]) -> list[str]:
+    headers: dict[str, str] = {}
+    for secret in secrets:
+        if isinstance(secret, HttpSecret):
+            for header in secret.match_headers:
+                headers.setdefault(header.lower(), header)
+            if secret.inject_header:
+                headers.setdefault(secret.inject_header.lower(), secret.inject_header)
+        elif isinstance(secret, HmacSignSecret):
+            for header in secret.headers:
+                headers.setdefault(header.name.lower(), header.name)
+    return [headers[key] for key in sorted(headers)]
+
+
+def _ensure_header_allowlist(transforms: list[dict[str, Any]], secrets: list[SecretDef]) -> None:
+    headers_to_add = _secret_header_names(secrets)
+    if not headers_to_add:
+        return
+
+    for transform in transforms:
+        if (transform or {}).get("name") != "header_allowlist":
+            continue
+        config = transform.setdefault("config", {})
+        headers = config.setdefault("headers", [])
+        seen = {str(header).lower() for header in headers}
+        for header in headers_to_add:
+            if header.lower() not in seen:
+                headers.append(header)
+                seen.add(header.lower())
+        return
+
+    transforms.append(
+        {
+            "name": "header_allowlist",
+            "config": {"headers": headers_to_add},
+        }
+    )
+
+
 def _build_postgres_listeners(
     secrets: list[SecretDef],
     pg_listen_ports: dict[str, int],
@@ -507,6 +546,7 @@ def render_proxy_yaml(
                 break
         else:
             transforms.extend(new_transforms)
+    _ensure_header_allowlist(transforms, secrets)
     cfg["transforms"] = transforms
 
     listeners = _build_postgres_listeners(secrets, pg_listen_ports)
