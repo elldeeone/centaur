@@ -391,7 +391,8 @@ def test_container_env_extra_env_cannot_override_pinned_proxy_vars(
     env_map = dict(item.split("=", 1) for item in env)
 
     assert env_map["HTTPS_PROXY"] == "http://firewall.internal:8080"
-    assert env_map["http_proxy"] == "http://firewall.internal:8080"
+    assert env_map["HTTP_PROXY"] == "http://firewall.internal:80"
+    assert env_map["http_proxy"] == "http://firewall.internal:80"
     assert env_map["REQUESTS_CA_BUNDLE"] == "/firewall-certs/ca-cert.pem"
     assert env_map["FIREWALL_HOST"] == "firewall.internal"
 
@@ -649,6 +650,7 @@ def test_tool_server_container_inherits_sandbox_extra_env(
     )
     assert env["LAMINAR_PROJECT_ID"] == "project-staging"
     assert env["HTTPS_PROXY"] == "http://firewall.internal:8080"
+    assert env["HTTP_PROXY"] == "http://firewall.internal:80"
     assert "firewall.internal" in env["NO_PROXY"]
     assert "api.internal" in env["NO_PROXY"]
     assert "stg-laminar-app-server" in env["NO_PROXY"]
@@ -915,6 +917,12 @@ async def test_create_builds_per_sandbox_proxy_resources(
     )
     assert sandbox_env["FIREWALL_HOST"] == proxy_service_name
     assert sandbox_env["HTTPS_PROXY"] == f"http://{proxy_service_name}:8080"
+    assert sandbox_env["HTTP_PROXY"] == f"http://{proxy_service_name}:80"
+    proxy_service_ports = {
+        port["name"]: port["port"] for port in proxy_service["spec"]["ports"]
+    }
+    assert proxy_service_ports["proxy"] == 8080
+    assert proxy_service_ports["http-proxy"] == 80
     no_proxy_hosts = sandbox_env["NO_PROXY"].split(",")
     assert no_proxy_hosts[:6] == [
         "localhost",
@@ -934,6 +942,12 @@ async def test_create_builds_per_sandbox_proxy_resources(
         "iron-proxy",
     ]
     assert proxy_pod["spec"]["containers"][0]["image"] == "centaur-iron-proxy:test"
+    proxy_container_ports = {
+        port["name"]: port["containerPort"]
+        for port in proxy_pod["spec"]["containers"][0]["ports"]
+    }
+    assert proxy_container_ports["proxy"] == 8080
+    assert proxy_container_ports["http-proxy"] == 80
     assert proxy_pod["spec"]["containers"][0]["readinessProbe"]["periodSeconds"] == 5
     assert (
         proxy_pod["spec"]["containers"][0]["readinessProbe"]["failureThreshold"] == 30
@@ -960,6 +974,20 @@ async def test_create_builds_per_sandbox_proxy_resources(
         "centaur.ai/iron-proxy": "true",
         "centaur.ai/sandbox-id": session.sandbox_id,
     }
+    sandbox_proxy_ports = {
+        port["port"]
+        for port in fake_networking.created_network_policies[0][1]["spec"]["egress"][
+            1
+        ]["ports"]
+    }
+    proxy_ingress_ports = {
+        port["port"]
+        for port in fake_networking.created_network_policies[1][1]["spec"]["ingress"][
+            0
+        ]["ports"]
+    }
+    assert {80, 8080}.issubset(sandbox_proxy_ports)
+    assert {80, 8080}.issubset(proxy_ingress_ports)
     assert not any(
         egress.get("to", [{}])[0]
         .get("podSelector", {})

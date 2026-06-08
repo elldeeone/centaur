@@ -16,6 +16,7 @@ from api.sandbox.kubernetes import (
 def test_build_core_pg_points_at_proxy_listener(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db:5432/ai_v2")
     monkeypatch.delenv("KUBERNETES_SECRET_ENV_PREFIX", raising=False)
+    monkeypatch.setattr("api.sandbox.kubernetes._core_db_name", lambda: "ai_v2")
 
     core = _build_core_pg("proxy-host", {"TOOLDB": PG_LISTEN_PORT_BASE})
 
@@ -35,6 +36,7 @@ def test_build_core_pg_respects_secret_env_prefix(
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db:5432/ai_v2")
     monkeypatch.setenv("KUBERNETES_SECRET_ENV_PREFIX", "CENTAUR_")
+    monkeypatch.setattr("api.sandbox.kubernetes._core_db_name", lambda: "ai_v2")
 
     core = _build_core_pg("proxy-host", {})
 
