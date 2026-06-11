@@ -1,0 +1,3 @@
+telemetry = false
+shell-emulator=true
+node-options='--disable-warning=ExperimentalWarning --disable-warning=DeprecationWarning'

@@ -127,7 +127,33 @@ The Slackbot accepts Slack events at `/api/webhooks/slack`. It also registers
 compatibility paths for `/api/slack/events`, `/api/slack/actions`,
 `/api/slack/options`, and `/api/slack/commands`.
 
-## 5. Deploy with Helm
+## 5. Optional: Configure Zulip
+
+Zulipbot is an optional chat adapter that follows the same thin-client pattern
+as Slackbot. Configure it as a separate service so Slack, Cockpit, and any other
+frontend remain available while Zulip is evaluated.
+
+Create a Zulip outgoing webhook bot and store these values in your deployment
+Secret:
+
+1. `ZULIP_SITE`, for example `https://acme.zulipchat.com`.
+2. `ZULIP_BOT_EMAIL`.
+3. `ZULIP_API_KEY`.
+4. `ZULIP_WEBHOOK_TOKEN`, from the outgoing webhook bot configuration.
+
+Point the Zulip outgoing webhook bot at:
+
+```text
+https://<your-zulipbot-host>/api/webhooks/zulip
+```
+
+The Zulipbot accepts channel mentions and direct/group direct messages, then
+starts an `agent_turn` workflow with `delivery.platform=zulip`. Its final
+delivery poller claims only `platform=zulip` outbox rows and posts the final
+answer back to the same Zulip topic or DM. Do not enable broad Zulip event-queue
+or history ingestion unless you explicitly need that richer client behavior.
+
+## 6. Deploy with Helm
 
 The chart lives at `contrib/chart`. Select service images, [iron-proxy](https://docs.iron.sh) secret
 source, sandbox image, and optional runtime class in your values file:

@@ -5,7 +5,7 @@ description: How Centaur runs agents with an API, Postgres, sandbox pods, tools,
 
 # Architecture
 
-Centaur accepts Slack and API requests, stores each turn, assigns an isolated
+Centaur accepts Slack, Zulip, and API requests, stores each turn, assigns an isolated
 runtime, exposes approved tools, injects credentials through a proxy, and keeps
 an event trail clients can replay.
 
@@ -17,7 +17,7 @@ an event trail clients can replay.
 
 | Plane | Responsibility | Main components |
 |-------|----------------|-----------------|
-| Ingress | Accept user and client input. | Slack Events API, Slackbot webhook, external API clients. |
+| Ingress | Accept user and client input. | Slack Events API, Slackbot webhook, Zulipbot webhook, external API clients. |
 | Control | Persist requests and coordinate runtime state. | FastAPI, Postgres, execution worker. |
 | Execution | Run one assigned agent session per thread. | Kubernetes sandbox pods. |
 | Capabilities | Give agents approved actions. | Tool plugins, workflow engine, overlays. |
@@ -41,7 +41,7 @@ pod replacement, or worker failover does not erase the run. The event stream is
 the client contract; Slack and other clients should reconnect with
 `after_event_id` instead of trying to reconstruct state locally.
 
-## Slackbot ingress
+## Chat ingress
 
 Slack talks to Centaur through the Slack Events API. The public request URL is
 the Slackbot webhook, usually:
@@ -62,6 +62,12 @@ During a Slack delivery, the API owns the execution state while Slackbot owns
 Slack rendering: opening or updating the thread UI, streaming chunks, rendering
 steps, and posting the final answer. The landing page preview shows that Slack
 thread surface; the durable API lifecycle above is the system underneath it.
+
+Zulipbot follows the same thin-client boundary for Zulip outgoing webhooks. It
+validates the webhook token, normalizes the Zulip message into a durable
+`zulip:` or `zulipdm:` thread key, starts an `agent_turn` workflow, and claims
+only `delivery.platform=zulip` final-delivery rows. Cockpit, Slackbot, CLI, and
+Zulipbot are independent clients over the same API-owned runtime state.
 
 ## Execution path
 

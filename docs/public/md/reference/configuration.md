@@ -15,6 +15,7 @@ Use these as the main extension points:
 | `secretManager.existingSecretName` | Required runtime secrets such as database, Slack, sandbox signing, and 1Password credentials. |
 | `api.extraEnv` | API feature flags, worker tuning, retention, observability, and deployment-specific overrides. |
 | `slackbot.extraEnv` | Slackbot HTTP, Slack, feedback, and cross-org behavior. |
+| Zulipbot deployment env | Zulip HTTP webhook, Zulip API, and final-delivery behavior. |
 | `sandbox.extraEnv` | Extra variables copied into every sandbox pod through `KUBERNETES_SANDBOX_EXTRA_ENV`. |
 | `overlay.*` | Overlay mount path and overlay image passed to the API and sandboxes. |
 
@@ -102,6 +103,28 @@ Execution tuning:
 | `SLACK_FEEDBACK_LINEAR_TEAM_ID`, `SLACK_FEEDBACK_LINEAR_PROJECT_ID` | `slackbot.extraEnv`. | Linear destination for feedback issues. |
 | `SLACKBOT_EXTERNAL_ORG_ALLOWLIST` | `slackbot.extraEnv`. | Slack team ids allowed for external org handoff. |
 | `COMMIT_SHA` | Build/deploy env. | Commit shown in Slackbot metadata. |
+
+## Zulipbot
+
+Zulipbot is an optional chat adapter service. It is not part of the default
+Helm chart yet; deploy it as an extra service beside Slackbot when evaluating or
+operating Zulip as a chat surface.
+
+| Env var | Set from | Controls |
+| --- | --- | --- |
+| `NODE_ENV` | Runtime env. | Telemetry environment fallback. |
+| `PORT` | Runtime env. | Zulipbot HTTP port. Defaults to `3002`. |
+| `CENTAUR_API_URL` | Deployment env. | API base URL used by Zulipbot. |
+| `CENTAUR_API_KEY` | Secret/env. | API key for workflow handoff and final-delivery claims. |
+| `ZULIP_EVENTS_PATH` | Deployment env. | Outgoing webhook route; defaults to `/api/webhooks/zulip`. |
+| `ZULIP_SITE` | Secret/env. | Zulip organization URL, for example `https://acme.zulipchat.com`. |
+| `ZULIP_BOT_EMAIL` | Secret/env. | Bot email used for Zulip API authentication and self-message filtering. |
+| `ZULIP_API_KEY` | Secret/env. | Zulip bot API key used to post final replies. |
+| `ZULIP_WEBHOOK_TOKEN` | Secret/env. | Token checked against incoming outgoing-webhook payloads. |
+| `ZULIP_PERSONA` | Deployment env. | Optional persona override for Zulip-triggered turns. |
+| `ZULIP_HARNESS` | Deployment env. | Optional harness override for Zulip-triggered turns. |
+| `ZULIP_FINAL_DELIVERY_LIMIT` | Deployment env. | Number of `platform=zulip` final deliveries claimed per poll. Defaults to `5`. |
+| `ZULIP_DELIVERY_CHUNK_CHARS` | Deployment env. | Maximum Zulip message chunk size for long final answers. Defaults to `9000`. |
 
 ## Sandbox
 
