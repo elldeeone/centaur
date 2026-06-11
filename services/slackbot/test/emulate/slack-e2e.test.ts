@@ -19,6 +19,7 @@ const CHANNEL_ID = 'C000000001'
 type WorkflowRunRequest = {
   workflow_name: string
   trigger_key: string
+  eager_start?: boolean
   input: {
     thread_key: string
     parts: Array<{ type: string; text?: string }>
@@ -133,7 +134,7 @@ describe(`Slack Emulate E2E (${IMPLEMENTATION})`, () => {
 
     const run = onlyRun()
     expect(run.workflow_name).toBe('slack_thread_turn')
-    expect('eager_start' in run).toBe(false)
+    expect(run.eager_start).toBe(true)
     expect(run.trigger_key).toBe(`slack:${TEAM_ID}:${CHANNEL_ID}:${parent.ts}`)
     expect(run.input.thread_key).toBe(`slack:${TEAM_ID}:${CHANNEL_ID}:${parent.ts}`)
     expect(run.input.message_id).toBe(`slack:${TEAM_ID}:${CHANNEL_ID}:${parent.ts}`)
@@ -247,6 +248,65 @@ describe(`Slack Emulate E2E (${IMPLEMENTATION})`, () => {
       channel: CHANNEL_ID,
       thread_ts: '1779620985.044779',
       recipient_user_id: 'UALERTMANAGER',
+      recipient_team_id: TEAM_ID
+    })
+  })
+
+  it('ignores unmentioned public channel messages', async () => {
+    const waits: Promise<unknown>[] = []
+    const response = await app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-emulate-public-no-mention',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          channel_type: 'channel',
+          ts: '1779620986.044779',
+          text: 'general public chatter'
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    expect(centaur.workflowRuns).toHaveLength(0)
+  })
+
+  it('dispatches unmentioned private-channel messages into Slack workflows', async () => {
+    const waits: Promise<unknown>[] = []
+    const response = await app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-emulate-private-no-mention',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: 'G000000001',
+          channel_type: 'group',
+          ts: '1779620987.044779',
+          text: 'private room follow-up'
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+
+    const run = onlyRun()
+    expect(run.input.thread_key).toBe(`slack:${TEAM_ID}:G000000001:1779620987.044779`)
+    expect(run.input.parts).toEqual([{ type: 'text', text: 'private room follow-up' }])
+    expect(run.input.metadata.is_mention).toBe(false)
+    expect(run.input.delivery).toMatchObject({
+      platform: 'slack',
+      channel: 'G000000001',
+      thread_ts: '1779620987.044779',
+      recipient_user_id: USER_ID,
       recipient_team_id: TEAM_ID
     })
   })

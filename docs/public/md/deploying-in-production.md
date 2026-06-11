@@ -114,6 +114,9 @@ Use the app page to install the bot, copy the Bot User OAuth Token for
    `message.channels`, `message.groups`, and `message.im`.
 
 The Slackbot currently normalizes Slack `app_mention` and `message` events.
+Public channel messages are handed to Centaur only when they mention the bot.
+Private channels, DMs, and multi-person DMs can start a turn from normal
+message events.
 Do not rely on assistant-specific Slack event types unless the Slackbot code has
 explicit support for them.
 
