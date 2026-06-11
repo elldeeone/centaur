@@ -27,6 +27,7 @@ export type NormalizedSlackEvent = {
   recipient_team_id?: string
   user_id: string
   channel_id: string
+  channel_type?: string
   thread_ts: string
   is_mention: boolean
   parts: NormalizedPart[]

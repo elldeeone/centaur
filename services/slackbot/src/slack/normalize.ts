@@ -116,6 +116,7 @@ export async function normalizeSlackEnvelope(opts: {
     recipient_team_id: recipientSlackTeamId(event) ?? teamId,
     user_id: actorId,
     channel_id: event.channel,
+    channel_type: normalizedChannelType(event.channel_type),
     thread_ts: threadTs,
     is_mention: isMention,
     parts,
@@ -132,6 +133,11 @@ export async function normalizeSlackEnvelope(opts: {
       bot_user_id: event.bot_profile?.user_id
     }
   }
+}
+
+function normalizedChannelType(channelType: string | undefined): string | undefined {
+  const normalized = channelType?.trim().toLowerCase()
+  return normalized || undefined
 }
 
 function recipientSlackTeamId(event: SlackMessageEvent): string | undefined {

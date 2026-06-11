@@ -297,6 +297,65 @@ describe(`Slack Emulate E2E (${IMPLEMENTATION})`, () => {
     })
   })
 
+  it('ignores unmentioned public channel messages', async () => {
+    const waits: Promise<unknown>[] = []
+    const response = await app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-emulate-public-no-mention',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          channel_type: 'channel',
+          ts: '1779620986.044779',
+          text: 'general public chatter'
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    expect(centaur.workflowRuns).toHaveLength(0)
+  })
+
+  it('dispatches unmentioned private-channel messages into Slack workflows', async () => {
+    const waits: Promise<unknown>[] = []
+    const response = await app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-emulate-private-no-mention',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: 'G000000001',
+          channel_type: 'group',
+          ts: '1779620987.044779',
+          text: 'private room follow-up'
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+
+    const run = onlyRun()
+    expect(run.input.thread_key).toBe(`slack:${TEAM_ID}:G000000001:1779620987.044779`)
+    expect(run.input.parts).toEqual([{ type: 'text', text: 'private room follow-up' }])
+    expect(run.input.metadata.is_mention).toBe(false)
+    expect(run.input.delivery).toMatchObject({
+      platform: 'slack',
+      channel: 'G000000001',
+      thread_ts: '1779620987.044779',
+      recipient_user_id: USER_ID,
+      recipient_team_id: TEAM_ID
+    })
+  })
+
   it('ignores self bot-originated events and duplicate Slack event IDs', async () => {
     const botMessage = await postBotMessage(`<@${BOT_USER_ID}> bot echo`)
     const waits: Promise<unknown>[] = []

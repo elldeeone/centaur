@@ -582,15 +582,16 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
       spanAttributes(span, {
         'centaur.thread_key': normalized.thread_key,
         'slack.channel_id': normalized.channel_id,
+        'slack.channel_type': normalized.channel_type,
         'slack.thread_ts': normalized.thread_ts,
         'slack.user_id': normalized.user_id,
         'centaur.slackbot.is_mention': normalized.is_mention,
         'centaur.slackbot.part_count': normalized.parts.length
       })
-      if (!normalized.is_mention) {
+      if (!shouldHandoffSlackEvent(normalized)) {
         spanAttributes(span, {
           'centaur.slackbot.event_ignored': true,
-          'centaur.slackbot.ignore_reason': 'not_mention',
+          'centaur.slackbot.ignore_reason': 'public_not_mention',
           'centaur.slackbot.event_action': 'passive_ingest_only'
         })
         return
@@ -637,6 +638,15 @@ async function ingestSlackEvent(envelope: SlackEnvelope): Promise<void> {
       error: error instanceof Error ? error.message : String(error)
     })
   }
+}
+
+function shouldHandoffSlackEvent(event: NormalizedSlackEvent): boolean {
+  if (event.is_mention) return true
+  return isPrivateSlackChannel(event.channel_type)
+}
+
+function isPrivateSlackChannel(channelType: string | undefined): boolean {
+  return channelType === 'im' || channelType === 'mpim' || channelType === 'group'
 }
 
 const TRIVIAL_ACK_REACTION = 'ok_hand'

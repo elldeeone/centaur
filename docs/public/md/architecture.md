@@ -55,6 +55,8 @@ The webhook does not use a Centaur API key. Slack signs every request with
 HMAC signature with `SLACK_SIGNING_SECRET` before it routes the event to the API.
 After validation, the Slackbot calls Centaur's agent API with
 `SLACKBOT_API_KEY`.
+Public-channel messages are ignored unless they mention the bot; private
+channels, DMs, and multi-person DMs can hand off normal message events.
 
 During a Slack delivery, the API owns the execution state while Slackbot owns
 Slack rendering: opening or updating the thread UI, streaming chunks, rendering
