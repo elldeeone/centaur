@@ -508,18 +508,24 @@ def _flushed_to_messages(flushed_rows: list[dict]) -> list[dict]:
         if isinstance(metadata, str):
             metadata = json.loads(metadata)
         user_id = row.get("user_id")
-        messages.append(
-            {
-                "role": row.get("role", "user"),
-                "parts": parts,
-                "history_backfill": (
-                    metadata.get("history_backfill") is True
-                    if isinstance(metadata, dict)
-                    else False
-                ),
-                **({"user_id": user_id} if user_id else {}),
-            }
-        )
+        message = {
+            "role": row.get("role", "user"),
+            "parts": parts,
+            "history_backfill": (
+                metadata.get("history_backfill") is True
+                if isinstance(metadata, dict)
+                else False
+            ),
+            **({"user_id": user_id} if user_id else {}),
+        }
+        if isinstance(metadata, dict) and metadata:
+            message["metadata"] = metadata
+        created_at = row.get("created_at")
+        if created_at is not None:
+            message["created_at"] = (
+                created_at.isoformat() if hasattr(created_at, "isoformat") else created_at
+            )
+        messages.append(message)
     return messages
 
 

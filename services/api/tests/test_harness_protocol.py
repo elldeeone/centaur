@@ -306,6 +306,35 @@ class TestMessagesToContentBlocks:
             {"type": "text", "text": "<@U999>: hello"},
         ]
 
+    def test_user_transport_metadata_attribution(self):
+        msgs = [
+            {
+                "user_id": "7",
+                "metadata": {
+                    "platform": "zulip",
+                    "zulip": {
+                        "timestamp": 1781227000,
+                        "sender_full_name": "Luke Dunshea",
+                        "sender_email": "luke@example.com",
+                        "message_id": 40,
+                        "topic": "Test Topic",
+                    },
+                },
+                "parts": [{"type": "text", "text": "hello"}],
+            }
+        ]
+
+        assert messages_to_content_blocks(msgs) == [
+            {
+                "type": "text",
+                "text": (
+                    "[platform=zulip; sent_at=2026-06-12T01:16:40Z; "
+                    "sender=Luke Dunshea <luke@example.com> (user_id=7); "
+                    "message_id=40; topic=Test Topic] <@7>: hello"
+                ),
+            },
+        ]
+
     def test_multiple_messages(self):
         msgs = [
             {

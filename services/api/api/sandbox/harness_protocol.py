@@ -7,6 +7,8 @@ pure — no I/O, no globals, no imports from other api modules.
 
 from __future__ import annotations
 
+import datetime as dt
+
 
 def _extract_error_message(event: dict) -> str:
     """Extract a human-readable error message from mixed event payload shapes."""
@@ -172,11 +174,14 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
         role = message.get("role", "user")
         user_id = message.get("user_id")
         parts = message.get("parts", [])
+        metadata_label = _message_metadata_label(message)
         assistant_label = (
             "Previous Centaur response"
             if message.get("history_backfill")
             else "Your previous response"
         )
+        if metadata_label:
+            assistant_label = f"{assistant_label} | {metadata_label}"
         attributed = False
         for part in parts:
             ptype = part.get("type")
@@ -206,13 +211,84 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
                     }
                 )
             elif user_id and not attributed and ptype == "text":
+                prefix = f"[{metadata_label}] " if metadata_label else ""
                 blocks.append(
                     {
                         "type": "text",
-                        "text": f"<@{user_id}>: {part['text']}",
+                        "text": f"{prefix}<@{user_id}>: {part['text']}",
+                    }
+                )
+                attributed = True
+            elif metadata_label and not attributed and ptype == "text":
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"[{metadata_label}] {part['text']}",
                     }
                 )
                 attributed = True
             else:
                 blocks.append(part)
     return blocks
+
+
+def _message_metadata_label(message: dict) -> str:
+    metadata = message.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+
+    platform = str(metadata.get("platform") or "").strip().lower()
+    source = str(metadata.get("source") or "").strip().lower()
+    if not platform and not source:
+        return ""
+
+    zulip = metadata.get("zulip") if isinstance(metadata.get("zulip"), dict) else {}
+    sent_at = _format_sent_at(zulip.get("timestamp") or metadata.get("timestamp"))
+    sender = _format_sender(
+        zulip.get("sender_full_name") or metadata.get("sender_full_name"),
+        zulip.get("sender_email") or metadata.get("sender_email"),
+        message.get("user_id") or metadata.get("user_id"),
+    )
+    message_id = zulip.get("message_id") or metadata.get("message_id")
+    topic = zulip.get("topic") or metadata.get("topic")
+
+    items = []
+    if platform:
+        items.append(f"platform={platform}")
+    if sent_at:
+        items.append(f"sent_at={sent_at}")
+    if sender:
+        items.append(f"sender={sender}")
+    if message_id is not None:
+        items.append(f"message_id={message_id}")
+    if topic:
+        items.append(f"topic={topic}")
+    return "; ".join(items)
+
+
+def _format_sent_at(value: object) -> str:
+    if isinstance(value, (int, float)):
+        try:
+            return (
+                dt.datetime.fromtimestamp(float(value), tz=dt.timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+        except (OSError, OverflowError, ValueError):
+            return str(value)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
+def _format_sender(full_name: object, email: object, user_id: object) -> str:
+    name = str(full_name or "").strip()
+    email_text = str(email or "").strip()
+    user_text = str(user_id or "").strip()
+    if name and email_text:
+        sender = f"{name} <{email_text}>"
+    else:
+        sender = name or email_text
+    if user_text:
+        sender = f"{sender} (user_id={user_text})" if sender else f"user_id={user_text}"
+    return sender

@@ -232,6 +232,7 @@ def test_flushed_history_backfill_marks_imported_assistant_context() -> None:
         {
             "role": "assistant",
             "parts": [{"type": "text", "text": "prior answer"}],
+            "metadata": {"history_backfill": True},
             "history_backfill": True,
         },
     ]
