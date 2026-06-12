@@ -1,0 +1,113 @@
+{{- if .Values.zulipbot.enabled }}
+{{- $apiRsName := include "centaur.componentName" (dict "root" . "component" "api-rs") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "centaur.componentName" (dict "root" . "component" "zulipbot") }}
+  labels:
+{{ include "centaur.componentLabels" (dict "root" . "component" "zulipbot") | nindent 4 }}
+spec:
+  replicas: {{ .Values.zulipbot.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "zulipbot") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/infra-secrets: {{ include "centaur.infraSecretsChecksum" . }}
+      labels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "zulipbot") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: zulipbot
+          image: {{ printf "%s:%s" .Values.zulipbot.image.repository .Values.zulipbot.image.tag | quote }}
+          imagePullPolicy: {{ .Values.zulipbot.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: "3002"
+            - name: CENTAUR_API_URL
+              value: {{ printf "http://%s:%v" $apiRsName .Values.apiRs.port | quote }}
+            - name: CENTAUR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%s%s" .Values.secretManager.envPrefix .Values.zulipbot.centaurApiKeySecretKey }}
+                  optional: true
+            - name: ZULIP_SITE
+              value: {{ required "zulipbot.site is required when zulipbot.enabled=true" .Values.zulipbot.site | quote }}
+            - name: ZULIP_BOT_EMAIL
+              value: {{ required "zulipbot.botEmail is required when zulipbot.enabled=true" .Values.zulipbot.botEmail | quote }}
+            - name: ZULIP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%s%s" .Values.secretManager.envPrefix .Values.zulipbot.apiKeySecretKey }}
+            - name: ZULIP_HARNESS
+              value: {{ .Values.zulipbot.harness | quote }}
+            - name: ZULIP_HISTORY_LIMIT
+              value: {{ .Values.zulipbot.historyLimit | quote }}
+            - name: ZULIP_PROGRESS_PLACEHOLDER
+              value: {{ .Values.zulipbot.progressPlaceholder | quote }}
+            - name: ZULIP_PROGRESS_TEXT
+              value: {{ .Values.zulipbot.progressText | quote }}
+            - name: ZULIP_PROGRESS_UPDATE_MS
+              value: {{ .Values.zulipbot.progressUpdateMs | quote }}
+            - name: ZULIP_PROGRESS_MAX_MS
+              value: {{ .Values.zulipbot.progressMaxMs | quote }}
+            - name: ZULIP_STREAM_UPDATE_MS
+              value: {{ .Values.zulipbot.streamUpdateMs | quote }}
+            - name: ZULIP_DELIVERY_CHUNK_CHARS
+              value: {{ .Values.zulipbot.deliveryChunkChars | quote }}
+{{- if .Values.zulipbot.botUserId }}
+            - name: ZULIP_BOT_USER_ID
+              value: {{ .Values.zulipbot.botUserId | quote }}
+{{- end }}
+{{- if .Values.zulipbot.webhookTokenSecretKey }}
+            - name: ZULIP_WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%s%s" .Values.secretManager.envPrefix .Values.zulipbot.webhookTokenSecretKey }}
+                  optional: true
+{{- end }}
+{{- range $name, $value := .Values.zulipbot.extraEnv }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+{{- end }}
+          ports:
+            - containerPort: 3002
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            timeoutSeconds: 5
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+{{ toYaml .Values.zulipbot.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "centaur.componentName" (dict "root" . "component" "zulipbot") }}
+  labels:
+{{ include "centaur.componentLabels" (dict "root" . "component" "zulipbot") | nindent 4 }}
+spec:
+  selector:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "zulipbot") | nindent 4 }}
+  ports:
+    - name: http
+      port: 3002
+      targetPort: 3002
+{{- end }}

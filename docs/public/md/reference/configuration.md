@@ -14,7 +14,10 @@ Use these as the main extension points:
 | --- | --- |
 | `secretManager.existingSecretName` | Required runtime secrets such as database, Slack, sandbox signing, and 1Password credentials. |
 | `api.extraEnv` | API feature flags, worker tuning, retention, observability, and deployment-specific overrides. |
+| `apiRs.extraEnv` | Rust API feature flags, telemetry exporter settings, and deployment-specific overrides. |
+| `apiRs.metrics.*` | Prometheus/VictoriaMetrics scrape metadata for the Rust API `/metrics` endpoint. |
 | `slackbot.extraEnv` | Slackbot HTTP, Slack, feedback, and cross-org behavior. |
+| `zulipbot.*`, `zulipbot.extraEnv` | Zulip outgoing-webhook ingress, progress-message behavior, and API-RS handoff settings. |
 | `sandbox.extraEnv` | Extra variables copied into every sandbox pod through `KUBERNETES_SANDBOX_EXTRA_ENV`. |
 | `overlay.*` | Overlay mount path and overlay image passed to the API and sandboxes. |
 
@@ -35,6 +38,7 @@ These must exist for the normal Helm deployment. For local development,
 | `SLACK_BOT_TOKEN` | `secretManager.existingSecretName`; local bootstrap reads shell env. | Slack Web API access for Slackbot. |
 | `SANDBOX_SIGNING_KEY` | `secretManager.existingSecretName`; local bootstrap generates it. | Signing key for short-lived sandbox API tokens. |
 | `IRON_MANAGEMENT_API_KEY` | `secretManager.existingSecretName`; local bootstrap generates it. | Management key for API-created iron-proxy pods. |
+| `IRON_BROKER_TOKEN` | `secretManager.existingSecretName`; required when `tokenBroker.enabled=true`. | Bearer token iron-proxy presents to iron-token-broker and the broker enforces on its HTTP API. |
 | `OP_SERVICE_ACCOUNT_TOKEN` | Local shell, then `centaur-infra-env`; production Secret. | 1Password service-account auth when using `onepassword` secret source. |
 | `OP_VAULT` | Local shell, then `centaur-infra-env`; defaults to `ai-agents` in code. | 1Password vault used for `op://...` secret refs. |
 
@@ -45,6 +49,7 @@ Optional required-by-mode variables:
 | `OP_CONNECT_CREDENTIALS_FILE` | Local shell before `just deploy`. | Enables the 1Password Connect subchart and creates its credentials Secret. |
 | `OP_CONNECT_TOKEN` | Secret or local bootstrap shell env. | Token used by iron-proxy when `ironProxy.secretSource=onepassword-connect`. |
 | `LOCAL_DEV_API_KEY` | API env. | Static local admin/dev key bootstrapped into Postgres. |
+| `ZULIP_API_KEY` | `secretManager.existingSecretName`; required when `zulipbot.enabled=true`. | Zulip bot API key used to send/edit messages and typing status. |
 
 ## API
 
@@ -67,6 +72,19 @@ Optional required-by-mode variables:
 | `FINAL_DELIVERY_MAX_ATTEMPTS`, `FINAL_DELIVERY_READY_GRACE_S` | `api.extraEnv`. | Final-delivery retry and claim timing. |
 | `CENTAUR_ENABLE_GCLOUD_BOOTSTRAP`, `GCP_GCLOUD_CREDENTIAL`, `GCLOUD_PROJECT` | `api.extraEnv` or Secret. | Optional gcloud ADC bootstrap in the API container. |
 | `CLAUDE_MODEL`, `CODEX_MODEL` | `api.extraEnv` or request model override. | Harness model selection defaults. |
+
+## API-RS
+
+| Env var or value | Set from | Controls |
+| --- | --- | --- |
+| `RUST_LOG` | Chart sets `info`; override with `apiRs.extraEnv`. | Rust tracing filter for the API-RS binary and crates. |
+| `OTEL_SERVICE_NAME` | `apiRs.extraEnv`; defaults to `centaur-api-rs`. | OpenTelemetry service name used by trace backends. |
+| `CENTAUR_ENVIRONMENT`, `DEPLOY_ENV`, `ENVIRONMENT` | `apiRs.extraEnv` or deployment env. | Deployment environment resource attribute for telemetry. |
+| `OTEL_TRACES_EXPORTER` | `apiRs.extraEnv`. | Set to `otlp` to force OTLP trace export, or `none`/`off` to disable it. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `apiRs.extraEnv`. | Enables OTLP trace export to Tempo, Jaeger, or another OTLP collector. |
+| `apiRs.metrics.scrapeAnnotations` | Helm value, default `true`. | Adds Prometheus scrape annotations to the API-RS Pod template and Service. |
+| `apiRs.metrics.path` | Helm value, default `/metrics`. | Metrics scrape path for annotation-based discovery. |
+| `apiRs.metrics.annotations` | Helm value. | Additional scrape annotations for Prometheus-compatible collectors. |
 
 Execution tuning:
 
@@ -103,6 +121,23 @@ Execution tuning:
 | `SLACKBOT_EXTERNAL_ORG_ALLOWLIST` | `slackbot.extraEnv`. | Slack team ids allowed for external org handoff. |
 | `COMMIT_SHA` | Build/deploy env. | Commit shown in Slackbot metadata. |
 
+## Zulipbot
+
+| Env var | Set from | Controls |
+| --- | --- | --- |
+| `PORT` | Chart sets `3002`. | Zulipbot HTTP port. |
+| `CENTAUR_API_URL` | Chart-rendered API-RS service URL. | API-RS session control-plane base URL. |
+| `CENTAUR_API_KEY` | `zulipbot.centaurApiKeySecretKey`; optional. | Bearer key sent to API-RS if configured. |
+| `ZULIP_SITE` | `zulipbot.site`. | Zulip organization URL, e.g. `https://example.zulipchat.com`. |
+| `ZULIP_BOT_EMAIL` | `zulipbot.botEmail`. | Zulip bot email address. |
+| `ZULIP_API_KEY` | `zulipbot.apiKeySecretKey`. | Zulip bot API key. |
+| `ZULIP_WEBHOOK_TOKEN` | `zulipbot.webhookTokenSecretKey`; optional. | Verifies Zulip outgoing-webhook requests when set. |
+| `ZULIP_EVENTS_PATH` | `zulipbot.extraEnv`; defaults to `/api/webhooks/zulip`. | Zulip outgoing-webhook route. |
+| `ZULIP_HARNESS` | `zulipbot.harness`; defaults to `codex`. | Harness type used when creating API-RS sessions. |
+| `ZULIP_HISTORY_LIMIT` | `zulipbot.historyLimit`. | Number of same-topic messages fetched before the current Zulip message. |
+| `ZULIP_PROGRESS_PLACEHOLDER`, `ZULIP_PROGRESS_TEXT`, `ZULIP_PROGRESS_UPDATE_MS`, `ZULIP_PROGRESS_MAX_MS` | `zulipbot.*`. | Typing indicator and progress-message behavior while a run is starting or active. |
+| `ZULIP_STREAM_UPDATE_MS`, `ZULIP_DELIVERY_CHUNK_CHARS` | `zulipbot.*`. | Throttling and chunking for streaming/final answer edits. |
+
 ## Sandbox
 
 API-set variables:
@@ -131,6 +166,8 @@ Kubernetes backend:
 | `KUBERNETES_SECRET_ENV_NAME`, `KUBERNETES_SECRET_ENV_PREFIX`, `KUBERNETES_BOOTSTRAP_SECRET_NAME` | `secretManager.*`, `secrets.bootstrapSecretName`. | Secrets read by API-created proxy/sandbox pods. |
 | `KUBERNETES_IRON_PROXY_IMAGE`, `KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY`, `KUBERNETES_IRON_PROXY_PORT`, `KUBERNETES_IRON_PROXY_HTTP_PORT`, `KUBERNETES_IRON_PROXY_MANAGEMENT_PORT`, `KUBERNETES_IRON_PROXY_HEALTH_PORT` | `ironProxy.*` or `api.extraEnv`. | Per-sandbox iron-proxy image and ports. `KUBERNETES_IRON_PROXY_PORT` is the HTTPS/CONNECT tunnel listener; `KUBERNETES_IRON_PROXY_HTTP_PORT` defaults to `80` for plain HTTP proxying. |
 | `FIREWALL_MANAGER_SECRET_SOURCE`, `FIREWALL_MANAGER_SECRET_TTL`, `KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE` | `ironProxy.secretSource`, `ironProxy.secretTtl`. | Secret source and cache TTL for rendered proxy config. |
+| `FIREWALL_MANAGER_TOKEN_BROKER_TTL` | `tokenBroker.ttl`. | Proxy-side cache TTL for access tokens minted by iron-token-broker. Applied to every `brokered_token` secret. |
+| `KUBERNETES_TOKEN_BROKER_NAME`, `KUBERNETES_TOKEN_BROKER_URL` | `tokenBroker.*`. | iron-token-broker Deployment name and ClusterIP URL. The chart owns the broker Deployment, Service, and NetworkPolicies; the API reconciles its ConfigMap and triggers a rolling restart when the rendered content changes. |
 | `KUBERNETES_OP_CONNECT_HOST`, `KUBERNETES_OP_CONNECT_APP_NAME`, `KUBERNETES_OP_CONNECT_PORT` | Chart helper or `api.extraEnv`. | 1Password Connect endpoint details. |
 | `KUBERNETES_API_POD_LABEL_SELECTOR` | Chart-rendered labels or `api.extraEnv`. | API pod selector for API-managed proxy policies. |
 | `KUBERNETES_EGRESS_DISCOVERY_ENABLED`, `KUBERNETES_EGRESS_SERVICE_NAMESPACE`, `KUBERNETES_CLUSTER_DOMAIN`, `KUBERNETES_EGRESS_TAILNET_FQDN_ANNOTATION` | `api.egressDiscovery.*`. | Egress service discovery for sandbox NetworkPolicies. |
@@ -144,7 +181,9 @@ Sandbox entrypoint and wrappers:
 | `AGENT_REPO`, `AGENT_PERSONA` | Runtime assignment metadata. | Workspace repo clone and persona prompt. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Sandbox entrypoint or `sandbox.extraEnv`. | Google ADC path; entrypoint creates a local stub when unset. |
 | `CODEX_API_KEY`, `CODEX_HOME`, `CODEX_CONTINUE_THREAD_ID` | `sandbox.extraEnv` or runtime resume. | Codex auth/config/resume behavior. |
+| `CODEX_AUTH_MODE` | `sandbox.extraEnv`. | Codex auth flow: `api_key` (default, hits `api.openai.com`) or `access_token` (hits `chatgpt.com` via the brokered ChatGPT login). See [Codex Auth Modes](/deploying-in-production#codex-auth-modes). |
 | `CLAUDE_MODEL`, `CLAUDE_CONTINUE_SESSION_ID` | `sandbox.extraEnv` or runtime resume. | Claude model and resume behavior. |
+| `CLAUDE_CODE_AUTH_MODE` | `sandbox.extraEnv`. | Claude Code auth flow: `api_key` (default, uses `ANTHROPIC_API_KEY`) or `access_token` (Claude.ai Pro or Max via the brokered OAuth login). See [Claude Auth Modes](/deploying-in-production#claude-auth-modes). |
 | `DEPLOY_ENV`, `ENVIRONMENT`, `TRACEPARENT` | Deployment env or wrapper-generated. | Runtime environment and trace context. |
 | `CALL_TIMEOUT_SECONDS` | Sandbox env before running `call`. | Curl watchdog for API tool calls. |
 | `SLACK_CHANNEL`, `SLACK_THREAD_TS` | Sandbox env. | File-upload helper target. |
@@ -170,11 +209,21 @@ Slack ETL workflows:
 | `SLACK_BACKFILL_ENABLED`, `SLACK_BACKFILL_CHANNEL_BATCH_LIMIT`, `SLACK_BACKFILL_CHANNEL_PAGES_PER_JOB` | `api.extraEnv` or chart batch limit. | Backfill enablement and batch sizing. |
 | `COMPANY_CONTEXT_DOCUMENTS_ENABLED` | `api.extraEnv`. | Enables company-context projection when Slack ETL is on. |
 
+Google Workspace ETL workflows:
+
+| Env var | Set from | Controls |
+| --- | --- | --- |
+| `GOOGLE_DRIVE_ETL_ENABLED` | `api.googleDriveEtlEnabled`. | Enables Google Drive Docs sync. |
+| `GOOGLE_DRIVE_SYNC_INTERVAL_SECONDS` | `api.googleDriveSyncIntervalSeconds`. | Google Drive Docs sync schedule interval. |
+| `GOOGLE_CALENDAR_ETL_ENABLED` | `api.googleCalendarEtlEnabled`. | Enables Google Calendar sync. |
+| `GOOGLE_CALENDAR_SYNC_INTERVAL_SECONDS` | `api.googleCalendarSyncIntervalSeconds`. | Google Calendar sync schedule interval. |
+
 ## Observability and Retention
 
 | Env var | Set from | Controls |
 | --- | --- | --- |
 | `VICTORIAMETRICS_URL`, `VICTORIAMETRICS_PUSH_ENABLED` | `api.extraEnv`, `api.victoriaMetricsPushEnabled`. | Push-based API metrics. |
+| `apiRs.metrics.*` | Helm values. | Pull-based scrape metadata for API-RS Prometheus metrics. |
 | `CENTAUR_RETENTION_ATTACHMENTS_TTL_DAYS`, `CENTAUR_RETENTION_TRANSCRIPTS_TTL_DAYS` | `api.extraEnv`. | Attachment/transcript retention TTLs. |
 | `CENTAUR_RETENTION_SWEEP_INTERVAL_SECONDS`, `CENTAUR_RETENTION_BATCH_SIZE`, `CENTAUR_RETENTION_DRY_RUN` | `api.extraEnv`. | Retention sweep cadence, batch size, and dry-run mode. |
 | `TOOL_CALL_TIMEOUT_S`, `TOOL_BINARY_INLINE_MAX_BYTES`, `TOOL_BINARY_PREVIEW_BYTES` | `api.extraEnv`. | Tool execution timeout and binary result handling. |

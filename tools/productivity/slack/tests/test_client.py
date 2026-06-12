@@ -25,6 +25,8 @@ class _FakeWebClient:
         self.history_pages: list[dict] = []
         self.reply_calls: list[dict] = []
         self.reply_pages: list[dict] = []
+        self.open_calls: list[dict] = []
+        self.open_response: dict = {"channel": {"id": "D123"}}
         self.users_calls: list[dict] = []
         self.users_pages: list[dict] = []
         self.list_calls: list[dict] = []
@@ -56,6 +58,10 @@ class _FakeWebClient:
     def conversations_replies(self, **kwargs):
         self.reply_calls.append(kwargs)
         return self.reply_pages.pop(0)
+
+    def conversations_open(self, **kwargs):
+        self.open_calls.append(kwargs)
+        return self.open_response
 
     def users_list(self, **kwargs):
         self.users_calls.append(kwargs)
@@ -121,12 +127,9 @@ def _make_client() -> tuple[SlackClient, _FakeWebClient]:
     fake_web_client = _FakeWebClient()
     client._client = fake_web_client
     client._search_client = fake_web_client
-    client._etl_client = fake_web_client
-    client.etl_token = "SLACK_ETL_TOKEN"
     client._user_cache = {}
     client._ratelimit_deadlines = {}
     client._resolve_channel = lambda channel: "C123"  # type: ignore[method-assign]
-    client._resolve_etl_channel = lambda channel: "C123"  # type: ignore[method-assign]
     client._format_requester_attribution = lambda: ""  # type: ignore[method-assign]
     client.list_bot_channels = lambda **_: [{"id": "C123", "name": "paradigm-pulse"}]  # type: ignore[method-assign]
     return client, fake_web_client
@@ -164,6 +167,30 @@ def test_send_message_omits_unfurl_flags_by_default() -> None:
     assert fake_web_client.last_kwargs is not None
     assert "unfurl_links" not in fake_web_client.last_kwargs
     assert "unfurl_media" not in fake_web_client.last_kwargs
+
+
+def test_send_message_opens_dm_for_user_id_destination() -> None:
+    client, fake_web_client = _make_client()
+
+    result = client.send_message("<@U123ABC>", "hello", no_attribution=True)
+
+    assert fake_web_client.open_calls == [{"users": "U123ABC"}]
+    assert fake_web_client.last_kwargs is not None
+    assert fake_web_client.last_kwargs["channel"] == "D123"
+    assert fake_web_client.last_kwargs["text"] == "hello"
+    assert result["channel"] == "D123"
+    assert result["permalink"] == "https://slack.com/archives/D123/p123456"
+
+
+def test_send_dm_opens_dm_and_posts_message() -> None:
+    client, fake_web_client = _make_client()
+
+    client.send_dm("U234ABC", "hello", no_attribution=True, unfurl_links=False)
+
+    assert fake_web_client.open_calls == [{"users": "U234ABC"}]
+    assert fake_web_client.last_kwargs is not None
+    assert fake_web_client.last_kwargs["channel"] == "D123"
+    assert fake_web_client.last_kwargs["unfurl_links"] is False
 
 
 def test_retry_on_ratelimit_honors_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -290,46 +317,6 @@ def test_get_channel_history_page_surfaces_structured_auth_failure() -> None:
     }
 
 
-def test_list_etl_channels_uses_user_token_client() -> None:
-    client, bot_client = _make_client()
-    etl_client = _FakeWebClient()
-    client._etl_client = etl_client
-    etl_client.list_pages = [
-        {
-            "channels": [
-                {
-                    "id": "C2",
-                    "name": "research",
-                    "is_private": False,
-                    "is_member": False,
-                    "purpose": {"value": "Research"},
-                    "topic": {"value": "Ideas"},
-                    "num_members": 42,
-                },
-                {"id": "G1", "name": "private", "is_private": True},
-            ],
-            "response_metadata": {"next_cursor": ""},
-        }
-    ]
-
-    result = client._list_etl_channels(limit=10, force_refresh=True)
-
-    assert bot_client.list_calls == []
-    assert etl_client.list_calls[0]["types"] == "public_channel"
-    assert result == [
-        {
-            "id": "C2",
-            "name": "research",
-            "purpose": "Research",
-            "topic": "Ideas",
-            "member_count": 42,
-            "is_archived": False,
-            "is_private": False,
-            "is_member": False,
-        }
-    ]
-
-
 def test_get_user_profile_reads_labeled_custom_fields() -> None:
     client, fake_web_client = _make_client()
     fake_web_client.user_info_response = {
@@ -365,45 +352,6 @@ def test_get_user_profile_reads_labeled_custom_fields() -> None:
     assert profile["raw_custom_fields"] == {
         "Xf123": {"label": "Affiliations", "value": "GitHub: test-user", "alt": ""}
     }
-
-
-def test_get_etl_channel_history_page_uses_user_token_client_and_window() -> None:
-    client, bot_client = _make_client()
-    etl_client = _FakeWebClient()
-    client._etl_client = etl_client
-    client._get_etl_user_cache = lambda: {"U1": "alice", "U2": "bob"}  # type: ignore[method-assign]
-    etl_client.history_pages = [
-        {
-            "messages": [
-                {"user": "U1", "text": "first <@U2>", "ts": "200.000000"},
-            ],
-            "response_metadata": {"next_cursor": "cursor-2"},
-        }
-    ]
-
-    result = client._get_etl_channel_history_page(
-        "paradigm-pulse",
-        limit=1,
-        cursor="cursor-1",
-        oldest="2026-01-01",
-        latest="2026-01-02",
-        inclusive=True,
-    )
-
-    assert bot_client.history_calls == []
-    assert etl_client.history_calls == [
-        {
-            "channel": "C123",
-            "limit": 1,
-            "cursor": "cursor-1",
-            "oldest": client._normalize_ts("2026-01-01"),
-            "latest": client._normalize_ts("2026-01-02"),
-            "inclusive": True,
-        }
-    ]
-    assert result["has_more"] is True
-    assert result["next_cursor"] == "cursor-2"
-    assert result["messages"][0]["text"] == "first @bob"
 
 
 def test_get_channel_history_page_preserves_non_auth_error_shape() -> None:
@@ -553,26 +501,6 @@ def test_get_thread_replies_page_uses_bounded_default() -> None:
     assert fake_web_client.reply_calls[0]["limit"] == 50
     assert result["effective_limit"] == 50
     assert result["continuation_available"] is False
-
-
-def test_get_etl_thread_replies_page_reports_user_token_auth_failures() -> None:
-    client, _ = _make_client()
-    etl_client = _FakeWebClient()
-    client._etl_client = etl_client
-    client._get_etl_user_cache = lambda: {}  # type: ignore[method-assign]
-
-    def fail_replies(**kwargs):
-        raise _make_slack_error(error="missing_scope", status_code=403)
-
-    etl_client.conversations_replies = fail_replies  # type: ignore[method-assign]
-
-    with pytest.raises(SlackAuthError) as excinfo:
-        client._get_etl_thread_replies_page("C123", "100.000000")
-
-    payload = json.loads(str(excinfo.value))
-    assert payload["access_path"] == "user_token"
-    assert payload["slack_method"] == "conversations.replies"
-    assert payload["error_code"] == "missing_scope"
 
 
 def test_dump_channel_with_threads_limits_thread_expansion() -> None:
