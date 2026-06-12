@@ -46,6 +46,7 @@ app.post(config.ZULIP_EVENTS_PATH, async c => {
 
   await progress.start(normalized)
   const event = await withHistory(normalized)
+  if (hasAssistantHistory(event)) progress.markWarmThread(event.thread_key)
   const result = await handoff.emit(event)
   if (!result.ok) {
     await progress.failThread(normalized.thread_key, 'Centaur could not start this turn.')
@@ -78,9 +79,14 @@ async function withHistory(normalized: NormalizedZulipEvent): Promise<Normalized
   }
 }
 
+function hasAssistantHistory(event: NormalizedZulipEvent): boolean {
+  return event.history_messages?.some(message => message.role === 'assistant') ?? false
+}
+
 startFinalDeliveryPoller(config, zulipClient, progress)
 
 export default {
+  hostname: '0.0.0.0',
   port: config.PORT,
   fetch: app.fetch
 }

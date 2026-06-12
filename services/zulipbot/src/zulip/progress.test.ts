@@ -145,4 +145,111 @@ describe('ZulipProgressTracker', () => {
       content: 'late final answer'
     })
   })
+
+  it('uses cold start copy for the first slow heartbeat in a new thread', async () => {
+    const calls: any[] = []
+    const tracker = new ZulipProgressTracker(config, {
+      sendMessage: async message => {
+        calls.push({ method: 'sendMessage', message })
+        return { id: 4321 }
+      },
+      updateMessage: async (messageId, content) => {
+        calls.push({ method: 'updateMessage', messageId, content })
+      },
+      setTypingStatus: async status => {
+        calls.push({ method: 'setTypingStatus', status })
+      }
+    })
+
+    const threadKey = 'zulip:intendo:609693:Fresh%20Topic'
+    await tracker.start({
+      thread_key: threadKey,
+      message_id: 'zulip:intendo:44',
+      realm: 'intendo',
+      user_id: '7',
+      is_mention: true,
+      parts: [{ type: 'text', text: 'hello' }],
+      zulip: {
+        message_id: 44,
+        message_type: 'stream',
+        stream_id: 609693,
+        topic: 'Fresh Topic'
+      },
+      delivery: {
+        platform: 'zulip',
+        message_type: 'stream',
+        stream_id: 609693,
+        topic: 'Fresh Topic'
+      }
+    })
+
+    const state = tracker.pendingByThreadKey.get(threadKey)
+    expect(state).toBeDefined()
+    if (!state) throw new Error('missing progress state')
+    state.startedAt = Date.now() - 13_000
+    await (tracker as any).heartbeat(state)
+    await (tracker as any).heartbeat(state)
+
+    expect(calls.at(-3)).toEqual({
+      method: 'updateMessage',
+      messageId: 4321,
+      content: 'Starting Centaur runtime...\n\nFirst reply may take a moment.'
+    })
+    expect(calls.at(-1)).toEqual({
+      method: 'updateMessage',
+      messageId: 4321,
+      content: 'Working...\n\nStill working (13s).'
+    })
+  })
+
+  it('uses warm slow-turn copy when history already has a Centaur reply', async () => {
+    const calls: any[] = []
+    const tracker = new ZulipProgressTracker(config, {
+      sendMessage: async message => {
+        calls.push({ method: 'sendMessage', message })
+        return { id: 8765 }
+      },
+      updateMessage: async (messageId, content) => {
+        calls.push({ method: 'updateMessage', messageId, content })
+      },
+      setTypingStatus: async status => {
+        calls.push({ method: 'setTypingStatus', status })
+      }
+    })
+
+    const threadKey = 'zulip:intendo:609693:Warm%20Topic'
+    await tracker.start({
+      thread_key: threadKey,
+      message_id: 'zulip:intendo:45',
+      realm: 'intendo',
+      user_id: '7',
+      is_mention: true,
+      parts: [{ type: 'text', text: 'hello' }],
+      zulip: {
+        message_id: 45,
+        message_type: 'stream',
+        stream_id: 609693,
+        topic: 'Warm Topic'
+      },
+      delivery: {
+        platform: 'zulip',
+        message_type: 'stream',
+        stream_id: 609693,
+        topic: 'Warm Topic'
+      }
+    })
+    tracker.markWarmThread(threadKey)
+
+    const state = tracker.pendingByThreadKey.get(threadKey)
+    expect(state).toBeDefined()
+    if (!state) throw new Error('missing progress state')
+    state.startedAt = Date.now() - 18_000
+    await (tracker as any).heartbeat(state)
+
+    expect(calls.at(-1)).toEqual({
+      method: 'updateMessage',
+      messageId: 8765,
+      content: 'Working...\n\nStill working (18s).'
+    })
+  })
 })

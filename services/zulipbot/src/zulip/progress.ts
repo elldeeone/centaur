@@ -9,6 +9,8 @@ type ProgressState = {
   threadKey: string
   target: ZulipTarget
   startedAt: number
+  coldStart: boolean
+  coldStartNoticeSent?: boolean
   messageId?: number
   heartbeat?: Timer
   maxTimer?: Timer
@@ -31,6 +33,7 @@ export class ZulipProgressTracker {
   readonly client: ProgressClient
   readonly byExecutionId = new Map<string, ProgressState>()
   readonly pendingByThreadKey = new Map<string, ProgressState>()
+  private readonly seenThreadKeys = new Set<string>()
 
   constructor(config: AppConfig, client: ProgressClient) {
     this.config = config
@@ -40,10 +43,13 @@ export class ZulipProgressTracker {
   async start(event: NormalizedZulipEvent): Promise<void> {
     const target = targetFromEvent(event)
     if (!target) return
+    const coldStart = !this.seenThreadKeys.has(event.thread_key)
+    this.seenThreadKeys.add(event.thread_key)
     const state: ProgressState = {
       threadKey: event.thread_key,
       target,
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      coldStart
     }
     this.pendingByThreadKey.set(event.thread_key, state)
     await this.sendTyping(state, 'start')
@@ -63,6 +69,12 @@ export class ZulipProgressTracker {
     this.startHeartbeat(state)
   }
 
+  markWarmThread(threadKey: string): void {
+    this.seenThreadKeys.add(threadKey)
+    const state = this.stateForThreadKey(threadKey)
+    if (state) state.coldStart = false
+  }
+
   attachExecution(threadKey: string, body: unknown): string | undefined {
     const executionId = executionIdFromBody(body)
     if (!executionId) return undefined
@@ -73,7 +85,11 @@ export class ZulipProgressTracker {
     return executionId
   }
 
-  async completeDelivery(executionId: string, threadKey: string, content: string): Promise<boolean> {
+  async completeDelivery(
+    executionId: string,
+    threadKey: string,
+    content: string
+  ): Promise<boolean> {
     const state = this.byExecutionId.get(executionId) ?? this.pendingByThreadKey.get(threadKey)
     if (!state) return false
     this.cleanupExecution(executionId, state)
@@ -135,8 +151,9 @@ export class ZulipProgressTracker {
     try {
       await this.client.updateMessage(
         state.messageId,
-        `${this.config.ZULIP_PROGRESS_TEXT}\n\nStill working (${elapsedSeconds}s).`
+        progressText(state, this.config, elapsedSeconds)
       )
+      state.coldStartNoticeSent = true
     } catch (error) {
       logWarn('zulip_progress_heartbeat_update_failed', {
         thread_key: state.threadKey,
@@ -171,6 +188,22 @@ export class ZulipProgressTracker {
     state.heartbeat = undefined
     state.maxTimer = undefined
   }
+
+  private stateForThreadKey(threadKey: string): ProgressState | undefined {
+    const pending = this.pendingByThreadKey.get(threadKey)
+    if (pending) return pending
+    for (const state of this.byExecutionId.values()) {
+      if (state.threadKey === threadKey) return state
+    }
+    return undefined
+  }
+}
+
+function progressText(state: ProgressState, config: AppConfig, elapsedSeconds: number): string {
+  if (state.coldStart && !state.coldStartNoticeSent) {
+    return 'Starting Centaur runtime...\n\nFirst reply may take a moment.'
+  }
+  return `${config.ZULIP_PROGRESS_TEXT}\n\nStill working (${elapsedSeconds}s).`
 }
 
 function targetFromEvent(event: NormalizedZulipEvent): ZulipTarget | undefined {
