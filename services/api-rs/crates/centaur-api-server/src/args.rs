@@ -20,7 +20,7 @@ use centaur_iron_proxy::{
 };
 use centaur_sandbox_agent_k8s::{
     AgentSandboxBackend, AgentSandboxConfig, GitHubTokenRef, IronControlSettings, IronProxyConfig,
-    OtlpEgressTarget, ToolSource, ToolsConfig,
+    OtlpEgressTarget, OverlayConfig, ToolSource, ToolsConfig,
 };
 use centaur_sandbox_core::{Mount, MountKind, SandboxSpec};
 use centaur_sandbox_local::LocalSandboxBackend;
@@ -512,6 +512,19 @@ struct SandboxArgs {
     centaur_api_url: Option<String>,
     #[arg(long = "repos-path", env = "REPOS_PATH")]
     repos_path: Option<String>,
+    #[arg(long = "centaur-overlay-image", env = "CENTAUR_OVERLAY_IMAGE")]
+    overlay_image: Option<String>,
+    #[arg(
+        long = "centaur-overlay-image-pull-policy",
+        env = "CENTAUR_OVERLAY_IMAGE_PULL_POLICY"
+    )]
+    overlay_image_pull_policy: Option<String>,
+    #[arg(
+        long = "centaur-overlay-image-source-path",
+        env = "CENTAUR_OVERLAY_IMAGE_SOURCE_PATH",
+        default_value = "/overlay"
+    )]
+    overlay_image_source_path: String,
     #[arg(
         long = "session-sandbox-passthrough-env",
         env = "SESSION_SANDBOX_PASSTHROUGH_ENV",
@@ -1149,6 +1162,15 @@ impl TryFrom<&SandboxArgs> for AgentSandboxConfig {
         }
         config.iron_control = args.iron_control.settings();
         config.tools = args.tools_source.to_config();
+        if let Some(image) = clean_optional_value(args.overlay_image.as_deref()) {
+            let mut overlay = OverlayConfig::new(image);
+            overlay.image_pull_policy =
+                clean_optional_value(args.overlay_image_pull_policy.as_deref());
+            overlay.source_path =
+                clean_optional_value(Some(args.overlay_image_source_path.as_str()))
+                    .unwrap_or_else(|| "/overlay".to_owned());
+            config.overlay = Some(overlay);
+        }
         // Direct harness OTLP export (codex usage/cost spans) needs a hole in
         // the per-sandbox egress NetworkPolicy; derived from the sandbox's own
         // OTLP endpoint env so there is a single source of truth.
@@ -1809,6 +1831,32 @@ mod tests {
         let token = tools.github_token.expect("token should be Some");
         assert_eq!(token.secret_name, "centaur-repo-cache-github-token");
         assert_eq!(token.secret_key, "token");
+    }
+
+    #[test]
+    fn overlay_config_read_from_flags() {
+        let args = Args::try_parse_from([
+            "centaur-api-server",
+            "--database-url",
+            "postgres://postgres:postgres@localhost/centaur",
+            "--session-sandbox-backend",
+            "agent-k8s",
+            "--kubernetes-sandbox-iron-proxy-mode",
+            "disabled",
+            "--centaur-overlay-image",
+            "ghcr.io/elldeeone/centaur-intendo:sha-test",
+            "--centaur-overlay-image-pull-policy",
+            "IfNotPresent",
+            "--centaur-overlay-image-source-path",
+            "/overlay",
+        ])
+        .unwrap();
+
+        let config = AgentSandboxConfig::try_from(&args.sandbox).unwrap();
+        let overlay = config.overlay.expect("overlay should be Some");
+        assert_eq!(overlay.image, "ghcr.io/elldeeone/centaur-intendo:sha-test");
+        assert_eq!(overlay.image_pull_policy.as_deref(), Some("IfNotPresent"));
+        assert_eq!(overlay.source_path, "/overlay");
     }
 
     #[test]

@@ -173,6 +173,11 @@ api:
 overlay:
   mountPath: /app/overlay/org
   systemPrompt: ""
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+    sourcePath: /overlay
 
 sandbox:
   controller: pod

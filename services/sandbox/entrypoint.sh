@@ -291,6 +291,11 @@ if [ -f "$HOME_DIR/AGENTS_OVERLAY.md" ] && [ -f "$TARGET_PROMPT" ]; then
     cat "$HOME_DIR/AGENTS_OVERLAY.md" >> "$TARGET_PROMPT"
 fi
 
+if [ -n "${CENTAUR_OVERLAY_DIR:-}" ] && [ -f "${CENTAUR_OVERLAY_DIR}/services/sandbox/SYSTEM_PROMPT.md" ] && [ -f "$TARGET_PROMPT" ]; then
+    printf '\n\n---\n\n' >> "$TARGET_PROMPT"
+    cat "${CENTAUR_OVERLAY_DIR}/services/sandbox/SYSTEM_PROMPT.md" >> "$TARGET_PROMPT"
+fi
+
 # Persona prompt injection is done by the API when it writes AGENTS_BASE.md.
 
 # Switch to workspace so the harness reads workspace/AGENTS.md (with persona overlay)

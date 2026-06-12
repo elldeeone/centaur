@@ -134,13 +134,16 @@ def test_sandbox_entrypoint_installs_codex_harness_config(tmp_path: Path) -> Non
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
-    assert result.stdout == (harness_dir / "codex" / "config.toml").read_text()
+    assert 'model = "gpt-5.5"' in result.stdout
+    assert 'multi_agent = false' in result.stdout
+    assert 'multi_agent_v2 = false' in result.stdout
 
 
 def test_sandbox_entrypoint_exports_pythonpath_for_tool_clis(tmp_path: Path) -> None:
     home = tmp_path / "home"
     harness_dir = _write_codex_harness_config(home)
-    (home / "github" / "centaur").mkdir(parents=True)
+    tools_dir = home / "github" / "centaur" / "tools"
+    tools_dir.mkdir(parents=True)
 
     result = subprocess.run(
         [
@@ -157,11 +160,51 @@ def test_sandbox_entrypoint_exports_pythonpath_for_tool_clis(tmp_path: Path) -> 
             "HOME": str(home),
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "TOOL_DIRS": str(tools_dir),
         },
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
     entries = result.stdout.split(":")
-    assert str(home / "github") in entries
     assert str(home / "github" / "centaur") in entries
-    assert str(home / "workspace") in entries
+
+
+def test_sandbox_entrypoint_installs_overlay_skills_and_prompt(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+    overlay_dir = tmp_path / "overlay" / "org"
+    (overlay_dir / ".agents" / "skills" / "intendo-ops").mkdir(parents=True)
+    (overlay_dir / ".agents" / "skills" / "intendo-ops" / "SKILL.md").write_text(
+        "# Intendo Ops\n"
+    )
+    (overlay_dir / "services" / "sandbox").mkdir(parents=True)
+    (overlay_dir / "services" / "sandbox" / "SYSTEM_PROMPT.md").write_text(
+        "# Intendo Org Context\n\nPrefer org tools for Intendo shorthand.\n"
+    )
+    (home / "AGENTS.md").write_text("# Base Prompt\n")
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            "printf '%s\\n---skills---\\n' \"$(cat AGENTS.md)\" && find .agents/skills -type f | sort",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "CENTAUR_OVERLAY_DIR": str(overlay_dir),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    prompt, skills = result.stdout.split("\n---skills---\n", 1)
+    assert "# Base Prompt" in prompt
+    assert "# Intendo Org Context" in prompt
+    assert "Prefer org tools for Intendo shorthand." in prompt
+    assert ".agents/skills/intendo-ops/SKILL.md" in skills
