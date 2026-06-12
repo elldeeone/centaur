@@ -103,6 +103,7 @@ async def create_pool(
     apply_migrations: bool = True,
     min_size: int = 2,
     max_size: int = 10,
+    proxy_safe_reset: bool = False,
 ) -> asyncpg.Pool:
     # The sandbox tool-server sidecar reaches the DB through the per-sandbox
     # iron-proxy and is not a schema owner, so it opens a pool with
@@ -114,9 +115,24 @@ async def create_pool(
         min_size=min_size,
         max_size=max_size,
         command_timeout=60,
+        reset=proxy_safe_connection_reset if proxy_safe_reset else None,
     )
     assert pool is not None
     return pool
+
+
+async def proxy_safe_connection_reset(conn: asyncpg.Connection) -> None:
+    """Reset an asyncpg connection without multi-statement SQL.
+
+    asyncpg's default pool reset emits one semicolon-delimited query. Sandbox
+    tool-server pools connect through iron-proxy, which intentionally rejects
+    multi-statement queries, so run the same cleanup as separate statements.
+    """
+    reset_query = conn.get_reset_query()
+    for statement in reset_query.split(";"):
+        statement = statement.strip()
+        if statement:
+            await conn.execute(statement)
 
 
 async def create_pool_with_retry(
@@ -125,6 +141,7 @@ async def create_pool_with_retry(
     apply_migrations: bool = True,
     min_size: int = 2,
     max_size: int = 10,
+    proxy_safe_reset: bool = False,
     max_attempts: int = 30,
     base_delay: float = 0.5,
     max_delay: float = 5.0,
@@ -144,6 +161,7 @@ async def create_pool_with_retry(
                 apply_migrations=apply_migrations,
                 min_size=min_size,
                 max_size=max_size,
+                proxy_safe_reset=proxy_safe_reset,
             )
         except Exception as exc:
             if attempt >= max_attempts:

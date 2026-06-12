@@ -14,7 +14,14 @@ async def test_retries_until_endpoint_accepts(monkeypatch) -> None:
     sentinel_pool = object()
     attempts = {"n": 0}
 
-    async def fake_create_pool(database_url, *, apply_migrations=True, min_size=2, max_size=10):
+    async def fake_create_pool(
+        database_url,
+        *,
+        apply_migrations=True,
+        min_size=2,
+        max_size=10,
+        proxy_safe_reset=False,
+    ):
         attempts["n"] += 1
         if attempts["n"] < 3:
             raise ConnectionRefusedError(111, "Connection refused")
@@ -45,7 +52,14 @@ async def test_pool_size_is_forwarded(monkeypatch) -> None:
 
     captured: dict[str, int] = {}
 
-    async def fake_create_pool(database_url, *, apply_migrations=True, min_size, max_size):
+    async def fake_create_pool(
+        database_url,
+        *,
+        apply_migrations=True,
+        min_size,
+        max_size,
+        proxy_safe_reset=False,
+    ):
         captured["min_size"] = min_size
         captured["max_size"] = max_size
         return object()
@@ -60,10 +74,69 @@ async def test_pool_size_is_forwarded(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_proxy_safe_reset_is_forwarded(monkeypatch) -> None:
+    """tool-server pools can opt into an iron-proxy-safe reset hook."""
+    from api import db
+
+    captured: dict[str, object] = {}
+
+    async def fake_asyncpg_create_pool(database_url, **kwargs):
+        captured["database_url"] = database_url
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(db.asyncpg, "create_pool", fake_asyncpg_create_pool)
+    monkeypatch.setattr(db, "run_migrations", lambda _database_url: None)
+
+    await db.create_pool("postgres://localhost/db", proxy_safe_reset=True)
+
+    assert captured["database_url"] == "postgres://localhost/db"
+    assert captured["reset"] is db.proxy_safe_connection_reset
+
+
+@pytest.mark.asyncio
+async def test_proxy_safe_connection_reset_splits_default_reset_query() -> None:
+    from api import db
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def get_reset_query(self) -> str:
+            return (
+                "SELECT pg_advisory_unlock_all();\n"
+                "CLOSE ALL;\n"
+                "UNLISTEN *;\n"
+                "RESET ALL;"
+            )
+
+        async def execute(self, statement: str) -> None:
+            self.statements.append(statement)
+
+    conn = FakeConnection()
+
+    await db.proxy_safe_connection_reset(conn)
+
+    assert conn.statements == [
+        "SELECT pg_advisory_unlock_all()",
+        "CLOSE ALL",
+        "UNLISTEN *",
+        "RESET ALL",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_backoff_is_capped(monkeypatch) -> None:
     from api import db
 
-    async def always_refused(database_url, *, apply_migrations=True, min_size=2, max_size=10):
+    async def always_refused(
+        database_url,
+        *,
+        apply_migrations=True,
+        min_size=2,
+        max_size=10,
+        proxy_safe_reset=False,
+    ):
         raise ConnectionRefusedError(111, "Connection refused")
 
     sleeps: list[float] = []
@@ -97,7 +170,14 @@ async def test_postgres_starting_up_is_retried(monkeypatch) -> None:
     sentinel_pool = object()
     attempts = {"n": 0}
 
-    async def fake_create_pool(database_url, *, apply_migrations=True, min_size=2, max_size=10):
+    async def fake_create_pool(
+        database_url,
+        *,
+        apply_migrations=True,
+        min_size=2,
+        max_size=10,
+        proxy_safe_reset=False,
+    ):
         attempts["n"] += 1
         if attempts["n"] == 1:
             raise asyncpg.CannotConnectNowError("the database system is starting up")
@@ -124,7 +204,14 @@ async def test_any_error_is_retried_then_reraised(monkeypatch) -> None:
 
     attempts = {"n": 0}
 
-    async def fake_create_pool(database_url, *, apply_migrations=True, min_size=2, max_size=10):
+    async def fake_create_pool(
+        database_url,
+        *,
+        apply_migrations=True,
+        min_size=2,
+        max_size=10,
+        proxy_safe_reset=False,
+    ):
         attempts["n"] += 1
         raise ValueError("boom")
 

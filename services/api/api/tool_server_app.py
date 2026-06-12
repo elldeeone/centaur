@@ -82,7 +82,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Retry because the sidecar can start before the proxy is listening, and
     # cap at one connection — the sidecar's DB use is light.
     app.state.db_pool = await create_pool_with_retry(
-        settings.database_url, apply_migrations=False, min_size=1, max_size=1
+        settings.database_url,
+        apply_migrations=False,
+        min_size=1,
+        max_size=1,
+        proxy_safe_reset=True,
     )
     watcher_task = asyncio.create_task(_watch_tools(app.state.tool_manager))
     try:
