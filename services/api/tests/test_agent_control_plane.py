@@ -1086,6 +1086,68 @@ async def test_mark_execution_terminal_delays_outbox_claimability(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_mark_execution_terminal_uses_zulip_ready_grace(db_pool):
+    from api.runtime_control import _mark_execution_terminal
+
+    execution_id = f"exe-{uuid.uuid4().hex[:10]}"
+    thread_key = "zulip:intendo:609693:Test%20Topic"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state) "
+        "VALUES ($1, $2, 'codex', 'codex', 'idle')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'codex', 'codex', NULL, 'harness:codex', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, started_at"
+        ") VALUES ($1, $2, 1, 'exec-terminal-zulip', 'hash-terminal-zulip', 'running', "
+        "'{\"platform\":\"zulip\"}'::jsonb, '{}'::jsonb, NOW())",
+        execution_id,
+        thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox ("
+        "execution_id, thread_key, delivery, state"
+        ") VALUES ($1, $2, '{\"platform\":\"zulip\"}'::jsonb, 'awaiting_terminal')",
+        execution_id,
+        thread_key,
+    )
+
+    started_at = dt.datetime.now(dt.timezone.utc)
+    with (
+        patch("api.runtime_control.FINAL_DELIVERY_READY_GRACE_S", 10.0),
+        patch("api.runtime_control.ZULIP_FINAL_DELIVERY_READY_GRACE_S", 0.0),
+    ):
+        await _mark_execution_terminal(
+            db_pool,
+            execution_id=execution_id,
+            thread_key=thread_key,
+            status="completed",
+            terminal_reason="completed",
+            result_text="done",
+            error_text=None,
+        )
+
+    row = await db_pool.fetchrow(
+        "SELECT state, next_attempt_at FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        execution_id,
+    )
+    assert row is not None
+    assert row["state"] == "pending"
+    assert row["next_attempt_at"] < started_at + dt.timedelta(seconds=2)
+
+
+@pytest.mark.asyncio
 async def test_mark_execution_terminal_skips_durable_delivery_after_live_answer(db_pool):
     from api.runtime_control import _mark_execution_terminal
 

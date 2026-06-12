@@ -15,7 +15,11 @@ const config: AppConfig = {
   ZULIP_PERSONA: '',
   ZULIP_HARNESS: '',
   ZULIP_FINAL_DELIVERY_LIMIT: 5,
-  ZULIP_DELIVERY_CHUNK_CHARS: 9000
+  ZULIP_DELIVERY_CHUNK_CHARS: 9000,
+  ZULIP_PROGRESS_PLACEHOLDER: true,
+  ZULIP_PROGRESS_TEXT: 'Working...',
+  ZULIP_PROGRESS_UPDATE_MS: 12_000,
+  ZULIP_PROGRESS_MAX_MS: 120_000
 }
 
 describe('pollFinalDeliveriesOnce', () => {
@@ -118,6 +122,55 @@ describe('pollFinalDeliveriesOnce', () => {
           content: 'reply from fallback'
         }
       ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('edits a tracked placeholder instead of posting a duplicate final message', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input)
+      if (url.pathname === '/agent/final-deliveries/claim') {
+        return json({
+          deliveries: [
+            {
+              execution_id: 'exe-zulip-edit',
+              thread_key: 'zulip:intendo:609693:Test%20Topic',
+              delivery: { platform: 'zulip' },
+              final_payload: { result_text: 'edited final reply' }
+            }
+          ]
+        })
+      }
+      if (url.pathname === '/agent/final-deliveries/exe-zulip-edit/delivered') {
+        return json({ ok: true })
+      }
+      throw new Error(`unexpected request: ${url.pathname}`)
+    }) as unknown as typeof fetch
+
+    const sent: any[] = []
+    const completed: Array<{ executionId: string; content: string }> = []
+    try {
+      await pollFinalDeliveriesOnce(
+        config,
+        {
+          sendMessage: async message => {
+            sent.push(message)
+            return { id: 101 }
+          }
+        },
+        {
+          completeExecution: async (executionId, content) => {
+            completed.push({ executionId, content })
+            return true
+          },
+          stopExecution: async () => {}
+        }
+      )
+
+      expect(completed).toEqual([{ executionId: 'exe-zulip-edit', content: 'edited final reply' }])
+      expect(sent).toEqual([])
     } finally {
       globalThis.fetch = originalFetch
     }

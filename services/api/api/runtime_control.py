@@ -114,6 +114,10 @@ FINAL_DELIVERY_READY_GRACE_S = max(
     float(os.getenv("FINAL_DELIVERY_READY_GRACE_S", "10.0")),
     0.0,
 )
+ZULIP_FINAL_DELIVERY_READY_GRACE_S = max(
+    float(os.getenv("ZULIP_FINAL_DELIVERY_READY_GRACE_S", "0.0")),
+    0.0,
+)
 WORKER_INSTANCE_ID = f"{os.getenv('HOSTNAME') or 'api'}:{uuid.uuid4().hex[:8]}"
 
 _worker_tasks: list[asyncio.Task] = []
@@ -400,6 +404,12 @@ def _metadata_platform(metadata: dict[str, Any]) -> str | None:
 def _delivery_platform(delivery: dict[str, Any]) -> str | None:
     platform = delivery.get("platform") if isinstance(delivery, dict) else None
     return platform if isinstance(platform, str) and platform else None
+
+
+def _final_delivery_ready_grace_s(delivery: dict[str, Any]) -> float:
+    if _delivery_platform(delivery) == "zulip":
+        return ZULIP_FINAL_DELIVERY_READY_GRACE_S
+    return FINAL_DELIVERY_READY_GRACE_S
 
 
 def _deployment_environment() -> str:
@@ -1953,9 +1963,6 @@ async def _mark_execution_terminal(
     error_text: str | None,
     slackbot_streamed_answer_chars_override: int | None = None,
 ) -> None:
-    next_attempt_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(
-        seconds=FINAL_DELIVERY_READY_GRACE_S,
-    )
     completed_at = dt.datetime.now(dt.timezone.utc)
     row = await pool.fetchrow(
         "UPDATE agent_execution_requests SET status = $1, terminal_reason = $2, "
@@ -1985,6 +1992,10 @@ async def _mark_execution_terminal(
             current_terminal_reason=current["terminal_reason"] if current else None,
         )
         return
+    delivery = decode_jsonb(row["delivery"], {})
+    next_attempt_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(
+        seconds=_final_delivery_ready_grace_s(delivery),
+    )
     harness = None
     engine = None
     persona_id = None
@@ -2113,9 +2124,7 @@ async def _mark_execution_terminal(
             ),
         },
     )
-    delivery_platform = _delivery_platform(
-        decode_jsonb(row["delivery"], {}) if row else {}
-    )
+    delivery_platform = _delivery_platform(delivery)
     suppress_no_input_delivery = terminal_reason == "no_input"
     if delivery_platform == "dev" or suppress_legacy_delivery or suppress_no_input_delivery:
         slackbot_agent_session_id = str(metadata.get("slackbot_agent_session_id") or "")
@@ -2184,7 +2193,7 @@ async def _mark_execution_terminal(
             "ON CONFLICT (execution_id) DO NOTHING",
             execution_id,
             thread_key,
-            canonical_json(decode_jsonb(row["delivery"], {}) if row else {}),
+            canonical_json(delivery),
         )
         session_header = _agent_session_header(
             persona_id=persona_id,

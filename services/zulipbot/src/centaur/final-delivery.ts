@@ -1,14 +1,19 @@
 import { centaurApiKey, type AppConfig } from '../config'
 import { logError, logWarn } from '../logging'
 import { ZulipClient } from '../zulip/client'
+import type { ZulipProgressTracker } from '../zulip/progress'
 
 const CONSUMER_ID = `zulipbot-${process.pid}`
 
-export function startFinalDeliveryPoller(config: AppConfig, client = new ZulipClient(config)): void {
+export function startFinalDeliveryPoller(
+  config: AppConfig,
+  client = new ZulipClient(config),
+  progress?: ZulipProgressTracker
+): void {
   if (!centaurApiKey(config)) return
   const tick = async () => {
     try {
-      await pollFinalDeliveriesOnce(config, client)
+      await pollFinalDeliveriesOnce(config, client, progress)
     } catch (error) {
       logError('zulip_final_delivery_poll_failed', error)
     }
@@ -19,7 +24,8 @@ export function startFinalDeliveryPoller(config: AppConfig, client = new ZulipCl
 
 export async function pollFinalDeliveriesOnce(
   config: AppConfig,
-  client: Pick<ZulipClient, 'sendMessage'>
+  client: Pick<ZulipClient, 'sendMessage'>,
+  progress?: Pick<ZulipProgressTracker, 'completeExecution' | 'stopExecution'>
 ): Promise<void> {
   const claimed = await centaur(config, '/agent/final-deliveries/claim', {
     consumer_id: CONSUMER_ID,
@@ -31,10 +37,14 @@ export async function pollFinalDeliveriesOnce(
   for (const delivery of deliveries) {
     const executionId = String(delivery.execution_id)
     try {
-      await deliver(config, client, delivery)
-      await centaur(config, `/agent/final-deliveries/${encodeURIComponent(executionId)}/delivered`, {
-        consumer_id: CONSUMER_ID
-      })
+      await deliver(config, client, delivery, progress)
+      await centaur(
+        config,
+        `/agent/final-deliveries/${encodeURIComponent(executionId)}/delivered`,
+        {
+          consumer_id: CONSUMER_ID
+        }
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       logWarn('zulip_final_delivery_failed', {
@@ -42,6 +52,7 @@ export async function pollFinalDeliveriesOnce(
         thread_key: delivery.thread_key,
         error: message
       })
+      await progress?.stopExecution(executionId)
       await centaur(config, `/agent/final-deliveries/${encodeURIComponent(executionId)}/failed`, {
         consumer_id: CONSUMER_ID,
         error: message,
@@ -56,13 +67,17 @@ export async function pollFinalDeliveriesOnce(
 async function deliver(
   config: AppConfig,
   client: Pick<ZulipClient, 'sendMessage'>,
-  delivery: any
+  delivery: any,
+  progress?: Pick<ZulipProgressTracker, 'completeExecution'>
 ): Promise<void> {
   const meta = delivery.delivery ?? {}
   const target = targetFromDelivery(delivery)
   const text = extractText(delivery.final_payload ?? {})
   const chunks = splitText(text, config.ZULIP_DELIVERY_CHUNK_CHARS)
-  for (const chunk of chunks) {
+  const executionId = String(delivery.execution_id ?? '')
+  const firstChunkEdited =
+    executionId && chunks[0] ? await progress?.completeExecution(executionId, chunks[0]) : false
+  for (const chunk of chunks.slice(firstChunkEdited ? 1 : 0)) {
     if (meta.message_type === 'stream' || target.message_type === 'stream') {
       const stream = meta.stream_id ?? meta.channel_id ?? meta.channel ?? target.stream_id
       const topic = typeof meta.topic === 'string' ? meta.topic : target.topic
@@ -84,7 +99,7 @@ async function deliver(
         ? recipientEmails
         : target.recipient_ids?.length
           ? target.recipient_ids
-          : target.recipient_emails ?? []
+          : (target.recipient_emails ?? [])
     if (!to.length) throw new Error('missing_zulip_dm_target')
     await client.sendMessage({
       type: 'private',
