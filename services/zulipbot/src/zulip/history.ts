@@ -111,7 +111,9 @@ function decodeHtml(value: string): string {
 function isProgressPlaceholder(text: string, progressText: string): boolean {
   const normalized = text.trim()
   const expected = progressText.trim()
-  return normalized === expected || normalized.startsWith(`${expected}\nStill working (`)
+  if (normalized === expected) return true
+  const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${escaped}\\s+Still working \\(`).test(normalized)
 }
 
 function sameEmail(a: string | undefined, b: string): boolean {

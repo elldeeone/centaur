@@ -118,7 +118,7 @@ describe('toHistoryMessages', () => {
           sender_id: 22,
           sender_email: 'centaur@example.com',
           sender_full_name: 'centaur',
-          content: 'Working...\nStill working (109s).',
+          content: 'Working...\n\nStill working (109s).',
           content_type: 'text/x-markdown'
         }
       ],
