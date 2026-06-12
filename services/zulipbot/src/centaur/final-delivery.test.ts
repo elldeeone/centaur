@@ -161,8 +161,9 @@ describe('pollFinalDeliveriesOnce', () => {
           }
         },
         {
-          completeExecution: async (executionId, content) => {
+          completeDelivery: async (executionId, threadKey, content) => {
             completed.push({ executionId, content })
+            expect(threadKey).toBe('zulip:intendo:609693:Test%20Topic')
             return true
           },
           stopExecution: async () => {}

@@ -25,7 +25,7 @@ export function startFinalDeliveryPoller(
 export async function pollFinalDeliveriesOnce(
   config: AppConfig,
   client: Pick<ZulipClient, 'sendMessage'>,
-  progress?: Pick<ZulipProgressTracker, 'completeExecution' | 'stopExecution'>
+  progress?: Pick<ZulipProgressTracker, 'completeDelivery' | 'stopExecution'>
 ): Promise<void> {
   const claimed = await centaur(config, '/agent/final-deliveries/claim', {
     consumer_id: CONSUMER_ID,
@@ -68,15 +68,18 @@ async function deliver(
   config: AppConfig,
   client: Pick<ZulipClient, 'sendMessage'>,
   delivery: any,
-  progress?: Pick<ZulipProgressTracker, 'completeExecution'>
+  progress?: Pick<ZulipProgressTracker, 'completeDelivery'>
 ): Promise<void> {
   const meta = delivery.delivery ?? {}
   const target = targetFromDelivery(delivery)
   const text = extractText(delivery.final_payload ?? {})
   const chunks = splitText(text, config.ZULIP_DELIVERY_CHUNK_CHARS)
   const executionId = String(delivery.execution_id ?? '')
+  const threadKey = String(delivery.thread_key ?? '')
   const firstChunkEdited =
-    executionId && chunks[0] ? await progress?.completeExecution(executionId, chunks[0]) : false
+    executionId && chunks[0]
+      ? await progress?.completeDelivery(executionId, threadKey, chunks[0])
+      : false
   for (const chunk of chunks.slice(firstChunkEdited ? 1 : 0)) {
     if (meta.message_type === 'stream' || target.message_type === 'stream') {
       const stream = meta.stream_id ?? meta.channel_id ?? meta.channel ?? target.stream_id

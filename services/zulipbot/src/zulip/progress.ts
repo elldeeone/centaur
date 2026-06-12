@@ -73,8 +73,8 @@ export class ZulipProgressTracker {
     return executionId
   }
 
-  async completeExecution(executionId: string, content: string): Promise<boolean> {
-    const state = this.byExecutionId.get(executionId)
+  async completeDelivery(executionId: string, threadKey: string, content: string): Promise<boolean> {
+    const state = this.byExecutionId.get(executionId) ?? this.pendingByThreadKey.get(threadKey)
     if (!state) return false
     this.cleanupExecution(executionId, state)
     await this.sendTyping(state, 'stop')
@@ -161,6 +161,7 @@ export class ZulipProgressTracker {
 
   private cleanupExecution(executionId: string, state: ProgressState): void {
     this.byExecutionId.delete(executionId)
+    this.pendingByThreadKey.delete(state.threadKey)
     this.stopTimers(state)
   }
 

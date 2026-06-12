@@ -61,7 +61,11 @@ describe('ZulipProgressTracker', () => {
     const executionId = tracker.attachExecution('zulip:intendo:609693:Test%20Topic', {
       execution_id: 'exe-test'
     })
-    const edited = await tracker.completeExecution('exe-test', 'final answer')
+    const edited = await tracker.completeDelivery(
+      'exe-test',
+      'zulip:intendo:609693:Test%20Topic',
+      'final answer'
+    )
 
     expect(executionId).toBe('exe-test')
     expect(edited).toBe(true)
@@ -89,5 +93,55 @@ describe('ZulipProgressTracker', () => {
         content: 'final answer'
       }
     ])
+  })
+
+  it('edits a pending thread placeholder when the handoff did not expose an execution id', async () => {
+    const calls: any[] = []
+    const tracker = new ZulipProgressTracker(config, {
+      sendMessage: async message => {
+        calls.push({ method: 'sendMessage', message })
+        return { id: 5678 }
+      },
+      updateMessage: async (messageId, content) => {
+        calls.push({ method: 'updateMessage', messageId, content })
+      },
+      setTypingStatus: async status => {
+        calls.push({ method: 'setTypingStatus', status })
+      }
+    })
+
+    await tracker.start({
+      thread_key: 'zulip:intendo:609693:Test%20Topic',
+      message_id: 'zulip:intendo:43',
+      realm: 'intendo',
+      user_id: '7',
+      is_mention: true,
+      parts: [{ type: 'text', text: 'hello' }],
+      zulip: {
+        message_id: 43,
+        message_type: 'stream',
+        stream_id: 609693,
+        topic: 'Test Topic'
+      },
+      delivery: {
+        platform: 'zulip',
+        message_type: 'stream',
+        stream_id: 609693,
+        topic: 'Test Topic'
+      }
+    })
+
+    const edited = await tracker.completeDelivery(
+      'exe-late',
+      'zulip:intendo:609693:Test%20Topic',
+      'late final answer'
+    )
+
+    expect(edited).toBe(true)
+    expect(calls.at(-1)).toEqual({
+      method: 'updateMessage',
+      messageId: 5678,
+      content: 'late final answer'
+    })
   })
 })
