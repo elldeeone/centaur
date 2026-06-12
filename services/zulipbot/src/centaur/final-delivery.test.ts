@@ -78,6 +78,50 @@ describe('pollFinalDeliveriesOnce', () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  it('falls back to the Zulip thread key when delivery metadata has only the platform', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input)
+      if (url.pathname === '/agent/final-deliveries/claim') {
+        return json({
+          deliveries: [
+            {
+              execution_id: 'exe-zulip-thread-key',
+              thread_key: 'zulip:intendo:609693:Test%20Topic',
+              delivery: { platform: 'zulip' },
+              final_payload: { result_text: 'reply from fallback' }
+            }
+          ]
+        })
+      }
+      if (url.pathname === '/agent/final-deliveries/exe-zulip-thread-key/delivered') {
+        return json({ ok: true })
+      }
+      throw new Error(`unexpected request: ${url.pathname}`)
+    }) as unknown as typeof fetch
+
+    const sent: any[] = []
+    try {
+      await pollFinalDeliveriesOnce(config, {
+        sendMessage: async message => {
+          sent.push(message)
+          return { id: 101 }
+        }
+      })
+
+      expect(sent).toEqual([
+        {
+          type: 'stream',
+          to: 609693,
+          topic: 'Test Topic',
+          content: 'reply from fallback'
+        }
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 
 function json(body: unknown, init: ResponseInit = {}): Response {

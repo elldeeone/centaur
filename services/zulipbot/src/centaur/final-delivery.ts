@@ -59,16 +59,18 @@ async function deliver(
   delivery: any
 ): Promise<void> {
   const meta = delivery.delivery ?? {}
+  const target = targetFromDelivery(delivery)
   const text = extractText(delivery.final_payload ?? {})
   const chunks = splitText(text, config.ZULIP_DELIVERY_CHUNK_CHARS)
   for (const chunk of chunks) {
-    if (meta.message_type === 'stream') {
-      const stream = meta.stream_id ?? meta.channel_id ?? meta.channel
-      if (!stream || typeof meta.topic !== 'string') throw new Error('missing_zulip_stream_target')
+    if (meta.message_type === 'stream' || target.message_type === 'stream') {
+      const stream = meta.stream_id ?? meta.channel_id ?? meta.channel ?? target.stream_id
+      const topic = typeof meta.topic === 'string' ? meta.topic : target.topic
+      if (!stream || typeof topic !== 'string') throw new Error('missing_zulip_stream_target')
       await client.sendMessage({
         type: 'stream',
         to: typeof stream === 'number' ? stream : String(stream),
-        topic: meta.topic,
+        topic,
         content: chunk
       })
       continue
@@ -76,13 +78,59 @@ async function deliver(
 
     const recipientIds = Array.isArray(meta.recipient_ids) ? meta.recipient_ids : []
     const recipientEmails = Array.isArray(meta.recipient_emails) ? meta.recipient_emails : []
-    const to = recipientIds.length ? recipientIds : recipientEmails
+    const to = recipientIds.length
+      ? recipientIds
+      : recipientEmails.length
+        ? recipientEmails
+        : target.recipient_ids?.length
+          ? target.recipient_ids
+          : target.recipient_emails ?? []
     if (!to.length) throw new Error('missing_zulip_dm_target')
     await client.sendMessage({
       type: 'private',
       to,
       content: chunk
     })
+  }
+}
+
+type ZulipDeliveryTarget = {
+  message_type?: 'stream' | 'private'
+  stream_id?: number
+  topic?: string
+  recipient_ids?: number[]
+  recipient_emails?: string[]
+}
+
+function targetFromDelivery(delivery: any): ZulipDeliveryTarget {
+  const threadKey = String(delivery.thread_key ?? '')
+  const parts = threadKey.split(':')
+  if (parts[0] === 'zulip' && parts.length >= 4) {
+    const streamId = Number(parts[2])
+    return {
+      message_type: 'stream',
+      ...(Number.isFinite(streamId) ? { stream_id: streamId } : {}),
+      topic: decodeTopic(parts.slice(3).join(':'))
+    }
+  }
+  if (parts[0] === 'zulipdm' && parts.length >= 3) {
+    const recipients = parts.slice(2).join(':').split(',').filter(Boolean)
+    const ids = recipients.map(value => Number(value)).filter(Number.isInteger)
+    const emails = recipients.filter(value => value.includes('@')).map(decodeURIComponent)
+    return {
+      message_type: 'private',
+      ...(ids.length ? { recipient_ids: ids } : {}),
+      ...(emails.length ? { recipient_emails: emails } : {})
+    }
+  }
+  return {}
+}
+
+function decodeTopic(topic: string): string {
+  try {
+    return decodeURIComponent(topic)
+  } catch {
+    return topic
   }
 }
 
