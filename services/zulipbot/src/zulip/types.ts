@@ -39,6 +39,14 @@ export type NormalizedPart = {
   text: string
 }
 
+export type NormalizedHistoryMessage = {
+  message_id: string
+  role: 'user' | 'assistant'
+  user_id?: string
+  parts: NormalizedPart[]
+  metadata?: Record<string, unknown>
+}
+
 export type NormalizedZulipEvent = {
   thread_key: string
   message_id: string
@@ -46,10 +54,12 @@ export type NormalizedZulipEvent = {
   user_id: string
   is_mention: boolean
   parts: NormalizedPart[]
+  history_messages?: NormalizedHistoryMessage[]
   zulip: {
     message_id?: number
     message_type?: string
     stream_id?: number
+    stream_name?: string
     topic?: string
     recipient_id?: number
     trigger?: string

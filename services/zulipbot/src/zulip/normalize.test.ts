@@ -12,6 +12,7 @@ describe('normalizeZulipWebhookPayload', () => {
           id: 42,
           type: 'stream',
           stream_id: 123,
+          display_recipient: 'general',
           subject: 'Deploy plan',
           recipient_id: 99,
           sender_id: 7,
@@ -26,6 +27,7 @@ describe('normalizeZulipWebhookPayload', () => {
 
     expect(event?.thread_key).toBe('zulip:intendo:123:Deploy%20plan')
     expect(event?.message_id).toBe('zulip:intendo:42')
+    expect(event?.zulip.stream_name).toBe('general')
     expect(event?.parts).toEqual([{ type: 'text', text: '@**Centaur** check this' }])
     expect(event?.delivery).toEqual({
       platform: 'zulip',

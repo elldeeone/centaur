@@ -18,6 +18,7 @@ class Input:
     text: str | None = None
     message_id: str | None = None
     user_id: str | None = None
+    history_messages: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     delivery: Delivery = field(default_factory=Delivery)
     harness: str | None = None
@@ -48,6 +49,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         parts=inp.effective_parts,
         message_id=inp.message_id,
         user_id=inp.user_id,
+        history_messages=inp.history_messages,
         metadata=inp.metadata,
         delivery=inp.delivery,
         harness=inp.harness,

@@ -25,6 +25,8 @@ export function normalizeZulipWebhookPayload(
   if (normalizedType === 'stream') {
     if (!message.stream_id) return null
     const topic = message.topic ?? message.subject ?? ''
+    const streamName =
+      typeof message.display_recipient === 'string' ? message.display_recipient : undefined
     return {
       thread_key: `zulip:${realm}:${message.stream_id}:${topicKey(topic)}`,
       message_id: `zulip:${realm}:${messageId ?? message.timestamp ?? Date.now()}`,
@@ -36,6 +38,7 @@ export function normalizeZulipWebhookPayload(
         message_id: messageId,
         message_type: message.type,
         stream_id: message.stream_id,
+        stream_name: streamName,
         topic,
         recipient_id: message.recipient_id,
         trigger,

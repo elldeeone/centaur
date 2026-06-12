@@ -14,6 +14,7 @@ const EnvSchema = z.object({
   ZULIP_HARNESS: z.string().default(''),
   ZULIP_FINAL_DELIVERY_LIMIT: z.coerce.number().int().positive().max(20).default(5),
   ZULIP_DELIVERY_CHUNK_CHARS: z.coerce.number().int().positive().default(9000),
+  ZULIP_HISTORY_LIMIT: z.coerce.number().int().min(0).max(200).default(50),
   ZULIP_PROGRESS_PLACEHOLDER: z.coerce.boolean().default(true),
   ZULIP_PROGRESS_TEXT: z.string().default('Working...'),
   ZULIP_PROGRESS_UPDATE_MS: z.coerce.number().int().positive().default(12_000),

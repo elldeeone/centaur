@@ -1,4 +1,5 @@
 import type { AppConfig } from '../config'
+import type { ZulipDisplayRecipient } from './types'
 
 export type ZulipSendMessage = {
   type: 'stream' | 'private'
@@ -13,6 +14,36 @@ export type ZulipTypingStatus = {
   stream_id?: number
   topic?: string
   to?: number[]
+}
+
+export type ZulipNarrowTerm = {
+  operator: string
+  operand: string | number | string[] | number[]
+}
+
+export type ZulipGetMessagesRequest = {
+  anchor: number | string
+  num_before: number
+  num_after: number
+  narrow?: ZulipNarrowTerm[]
+  include_anchor?: boolean
+  apply_markdown?: boolean
+}
+
+export type ZulipFetchedMessage = {
+  id: number
+  type?: string
+  stream_id?: number
+  subject?: string
+  topic?: string
+  display_recipient?: ZulipDisplayRecipient
+  recipient_id?: number
+  sender_id?: number
+  sender_email?: string
+  sender_full_name?: string
+  timestamp?: number
+  content?: string
+  content_type?: string
 }
 
 export class ZulipClient {
@@ -45,6 +76,32 @@ export class ZulipClient {
       throw new Error(String(parsed.msg ?? parsed.code ?? `zulip_send_failed_${response.status}`))
     }
     return { id: typeof parsed.id === 'number' ? parsed.id : undefined }
+  }
+
+  async getMessages(request: ZulipGetMessagesRequest): Promise<ZulipFetchedMessage[]> {
+    const apiKey = this.config.ZULIP_API_KEY
+    if (!apiKey) throw new Error('missing_zulip_api_key')
+    const url = new URL('/api/v1/messages', this.config.ZULIP_SITE)
+    url.searchParams.set('anchor', String(request.anchor))
+    url.searchParams.set('num_before', String(request.num_before))
+    url.searchParams.set('num_after', String(request.num_after))
+    if (request.narrow?.length) url.searchParams.set('narrow', JSON.stringify(request.narrow))
+    if (request.include_anchor !== undefined) {
+      url.searchParams.set('include_anchor', String(request.include_anchor))
+    }
+    if (request.apply_markdown !== undefined) {
+      url.searchParams.set('apply_markdown', String(request.apply_markdown))
+    }
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Basic ${btoa(`${this.config.ZULIP_BOT_EMAIL}:${apiKey}`)}`
+      }
+    })
+    const parsed = await parseZulipResponse(response, `zulip_get_messages_failed_${response.status}`)
+    const messages = parsed.messages
+    return Array.isArray(messages) ? (messages as ZulipFetchedMessage[]) : []
   }
 
   async updateMessage(messageId: number, content: string): Promise<void> {

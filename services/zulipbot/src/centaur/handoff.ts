@@ -29,6 +29,7 @@ export class CentaurHandoff {
         input: {
           thread_key: event.thread_key,
           parts: event.parts,
+          history_messages: event.history_messages ?? [],
           message_id: event.message_id,
           user_id: event.user_id,
           metadata: {

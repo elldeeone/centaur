@@ -16,6 +16,7 @@ const config: AppConfig = {
   ZULIP_HARNESS: 'codex',
   ZULIP_FINAL_DELIVERY_LIMIT: 5,
   ZULIP_DELIVERY_CHUNK_CHARS: 9000,
+  ZULIP_HISTORY_LIMIT: 50,
   ZULIP_PROGRESS_PLACEHOLDER: true,
   ZULIP_PROGRESS_TEXT: 'Working...',
   ZULIP_PROGRESS_UPDATE_MS: 12_000,
@@ -39,6 +40,14 @@ describe('CentaurHandoff', () => {
         user_id: '7',
         is_mention: true,
         parts: [{ type: 'text', text: 'hello' }],
+        history_messages: [
+          {
+            message_id: 'zulip:intendo:41',
+            role: 'user',
+            user_id: '7',
+            parts: [{ type: 'text', text: 'Luke: first' }]
+          }
+        ],
         zulip: {
           message_id: 42,
           message_type: 'stream',
@@ -66,6 +75,14 @@ describe('CentaurHandoff', () => {
       expect(body.input).toMatchObject({
         thread_key: 'zulip:intendo:123:Deploy%20plan',
         parts: [{ type: 'text', text: 'hello' }],
+        history_messages: [
+          {
+            message_id: 'zulip:intendo:41',
+            role: 'user',
+            user_id: '7',
+            parts: [{ type: 'text', text: 'Luke: first' }]
+          }
+        ],
         metadata: {
           source: 'zulipbot',
           platform: 'zulip',
