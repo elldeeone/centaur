@@ -17,6 +17,7 @@ Use these as the main extension points:
 | `apiRs.extraEnv` | Rust API feature flags, telemetry exporter settings, and deployment-specific overrides. |
 | `apiRs.metrics.*` | Prometheus/VictoriaMetrics scrape metadata for the Rust API `/metrics` endpoint. |
 | `slackbot.extraEnv` | Slackbot HTTP, Slack, feedback, and cross-org behavior. |
+| `zulipbot.*`, `zulipbot.extraEnv` | Zulip outgoing-webhook ingress, progress-message behavior, and API-RS handoff settings. |
 | `sandbox.extraEnv` | Extra variables copied into every sandbox pod through `KUBERNETES_SANDBOX_EXTRA_ENV`. |
 | `overlay.*` | Overlay mount path and overlay image passed to the API and sandboxes. |
 
@@ -48,6 +49,7 @@ Optional required-by-mode variables:
 | `OP_CONNECT_CREDENTIALS_FILE` | Local shell before `just deploy`. | Enables the 1Password Connect subchart and creates its credentials Secret. |
 | `OP_CONNECT_TOKEN` | Secret or local bootstrap shell env. | Token used by iron-proxy when `ironProxy.secretSource=onepassword-connect`. |
 | `LOCAL_DEV_API_KEY` | API env. | Static local admin/dev key bootstrapped into Postgres. |
+| `ZULIP_API_KEY` | `secretManager.existingSecretName`; required when `zulipbot.enabled=true`. | Zulip bot API key used to send/edit messages and typing status. |
 
 ## API
 
@@ -119,6 +121,23 @@ Execution tuning:
 | `SLACKBOT_EXTERNAL_ORG_ALLOWLIST` | `slackbot.extraEnv`. | Slack team ids allowed for external org handoff. |
 | `SLACK_TEAM_ID` | `slackbot.extraEnv`. | Workspace team ID (e.g. `T01ABCD2EFG`) used to rewrite `https://*.slack.com/archives/...` URLs in final-delivery messages into native `slack://channel?team=...` deep links that open in the Slack app. Leave unset to keep archive URLs unchanged. |
 | `COMMIT_SHA` | Build/deploy env. | Commit shown in Slackbot metadata. |
+
+## Zulipbot
+
+| Env var | Set from | Controls |
+| --- | --- | --- |
+| `PORT` | Chart sets `3002`. | Zulipbot HTTP port. |
+| `CENTAUR_API_URL` | Chart-rendered API-RS service URL. | API-RS session control-plane base URL. |
+| `CENTAUR_API_KEY` | `zulipbot.centaurApiKeySecretKey`; optional. | Bearer key sent to API-RS if configured. |
+| `ZULIP_SITE` | `zulipbot.site`. | Zulip organization URL, e.g. `https://example.zulipchat.com`. |
+| `ZULIP_BOT_EMAIL` | `zulipbot.botEmail`. | Zulip bot email address. |
+| `ZULIP_API_KEY` | `zulipbot.apiKeySecretKey`. | Zulip bot API key. |
+| `ZULIP_WEBHOOK_TOKEN` | `zulipbot.webhookTokenSecretKey`; optional. | Verifies Zulip outgoing-webhook requests when set. |
+| `ZULIP_EVENTS_PATH` | `zulipbot.extraEnv`; defaults to `/api/webhooks/zulip`. | Zulip outgoing-webhook route. |
+| `ZULIP_HARNESS` | `zulipbot.harness`; defaults to `codex`. | Harness type used when creating API-RS sessions. |
+| `ZULIP_HISTORY_LIMIT` | `zulipbot.historyLimit`. | Number of same-topic messages fetched before the current Zulip message. |
+| `ZULIP_PROGRESS_PLACEHOLDER`, `ZULIP_PROGRESS_TEXT`, `ZULIP_PROGRESS_UPDATE_MS`, `ZULIP_PROGRESS_MAX_MS` | `zulipbot.*`. | Typing indicator and progress-message behavior while a run is starting or active. |
+| `ZULIP_STREAM_UPDATE_MS`, `ZULIP_DELIVERY_CHUNK_CHARS` | `zulipbot.*`. | Throttling and chunking for streaming/final answer edits. |
 
 ## Sandbox
 

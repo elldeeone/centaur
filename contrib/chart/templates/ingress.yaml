@@ -1,10 +1,15 @@
-{{- if and .Values.ingress.enabled .Values.slackbotv2.enabled }}
+{{- $ingressComponent := "slackbotv2" -}}
+{{- if and .Values.zulipbot.enabled (not .Values.slackbotv2.enabled) -}}
+{{- $ingressComponent = "zulipbot" -}}
+{{- end -}}
+{{- $ingressPort := ternary 3002 3001 (eq $ingressComponent "zulipbot") -}}
+{{- if and .Values.ingress.enabled (or .Values.slackbotv2.enabled .Values.zulipbot.enabled) }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "centaur.componentName" (dict "root" . "component" "slackbotv2") }}
+  name: {{ include "centaur.componentName" (dict "root" . "component" $ingressComponent) }}
   labels:
-{{ include "centaur.componentLabels" (dict "root" . "component" "slackbotv2") | nindent 4 }}
+{{ include "centaur.componentLabels" (dict "root" . "component" $ingressComponent) | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
 {{ toYaml . | nindent 4 }}
@@ -16,9 +21,9 @@ spec:
   {{- if .Values.ingress.defaultBackend }}
   defaultBackend:
     service:
-      name: {{ include "centaur.componentName" (dict "root" . "component" "slackbot") }}
+      name: {{ include "centaur.componentName" (dict "root" . "component" $ingressComponent) }}
       port:
-        number: 3001
+        number: {{ $ingressPort }}
   {{- else }}
   rules:
     - {{- if .Values.ingress.host }}
@@ -30,9 +35,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "centaur.componentName" (dict "root" . "component" "slackbotv2") }}
+                name: {{ include "centaur.componentName" (dict "root" . "component" $ingressComponent) }}
                 port:
-                  number: 3001
+                  number: {{ $ingressPort }}
   {{- end }}
   {{- with .Values.ingress.tls }}
   tls:

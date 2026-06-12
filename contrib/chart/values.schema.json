@@ -237,6 +237,16 @@
         "enabled": { "type": "boolean" }
       }
     },
+    "zulipbot": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "extraEnv": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
     "postgres": {
       "type": "object",
       "properties": {

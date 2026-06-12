@@ -330,6 +330,33 @@ slackbotv2:
   extraEnv: {}
   resources: {}
 
+# Zulipbot — forwards Zulip outgoing-webhook events to the api-rs control plane
+# and edits a Zulip progress message as responses stream back. Disabled by
+# default; enable as an alternative chat ingress to Slackbot v2.
+zulipbot:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: centaur-zulipbot
+    tag: latest
+    pullPolicy: Always
+  site: ""
+  botEmail: ""
+  botUserId: ""
+  harness: codex
+  historyLimit: 50
+  progressPlaceholder: true
+  progressText: Working...
+  progressUpdateMs: 10000
+  progressMaxMs: 120000
+  streamUpdateMs: 1500
+  deliveryChunkChars: 9000
+  apiKeySecretKey: ZULIP_API_KEY
+  centaurApiKeySecretKey: SLACKBOT_API_KEY
+  webhookTokenSecretKey: ZULIP_WEBHOOK_TOKEN
+  extraEnv: {}
+  resources: {}
+
 postgres:
   enabled: true
   image:

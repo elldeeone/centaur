@@ -40,8 +40,10 @@ kubectl get nodes
 ```
 
 The `Justfile` builds local images named `centaur-api:latest`,
-`centaur-iron-proxy:latest`, `centaur-slackbot:latest`, and
-`centaur-agent:latest`, then deploys `contrib/chart` with
+`centaur-api-rs:latest`, `centaur-iron-proxy:latest`,
+`centaur-slackbot:latest`, `centaur-slackbotv2:latest`,
+`centaur-zulipbot:latest`, and `centaur-agent:latest`, then deploys
+`contrib/chart` with
 `contrib/chart/values.dev.yaml`.
 
 ## 2. Export bootstrap secrets

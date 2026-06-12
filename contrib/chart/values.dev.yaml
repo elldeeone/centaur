@@ -21,6 +21,10 @@ slackbotv2:
   image:
     pullPolicy: IfNotPresent
 
+zulipbot:
+  image:
+    pullPolicy: IfNotPresent
+
 apiRs:
   image:
     pullPolicy: IfNotPresent

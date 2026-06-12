@@ -90,6 +90,8 @@ The main directories are:
 
 - [`services/api`](services/api/) — control plane for agents, tools, workflows, auth, and durable state
 - [`services/slackbot`](services/slackbot/) — Slack event handling and Slack delivery
+- [`services/slackbotv2`](services/slackbotv2/) — Chat SDK Slack ingress for the Rust session API
+- [`services/zulipbot`](services/zulipbot/) — Zulip outgoing-webhook ingress for the Rust session API
 - [`services/sandbox`](services/sandbox/) — agent container image and harness adapter
 - [iron-proxy](https://docs.iron.sh) ([service](services/iron-proxy/)) — controlled outbound access and credential injection
 - [`tools`](tools/) — tool plugins
@@ -210,6 +212,8 @@ See [Security](docs/pages/security.mdx) for the full threat model and the mechan
 - [Workflows](workflows/) — external workflow plugins
 - [API service](services/api/) — FastAPI control plane
 - [Slackbot](services/slackbot/) — Slack integration
+- [Slackbot v2](services/slackbotv2/) — Slack integration for API-RS
+- [Zulipbot](services/zulipbot/) — Zulip integration for API-RS
 - [Sandbox](services/sandbox/) — agent runtime image
 
 ## Contributing
