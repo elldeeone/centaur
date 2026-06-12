@@ -68,7 +68,7 @@ describe('ZulipProgressTracker', () => {
     expect(calls).toEqual([
       {
         method: 'setTypingStatus',
-        status: { op: 'start', stream_id: 609693, topic: 'Test Topic' }
+        status: { type: 'stream', op: 'start', stream_id: 609693, topic: 'Test Topic' }
       },
       {
         method: 'sendMessage',
@@ -81,7 +81,7 @@ describe('ZulipProgressTracker', () => {
       },
       {
         method: 'setTypingStatus',
-        status: { op: 'stop', stream_id: 609693, topic: 'Test Topic' }
+        status: { type: 'stream', op: 'stop', stream_id: 609693, topic: 'Test Topic' }
       },
       {
         method: 'updateMessage',

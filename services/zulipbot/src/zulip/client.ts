@@ -8,6 +8,7 @@ export type ZulipSendMessage = {
 }
 
 export type ZulipTypingStatus = {
+  type?: 'direct' | 'stream' | 'channel'
   op: 'start' | 'stop'
   stream_id?: number
   topic?: string
@@ -71,6 +72,7 @@ export class ZulipClient {
     if (!apiKey) throw new Error('missing_zulip_api_key')
     const url = new URL('/api/v1/typing', this.config.ZULIP_SITE)
     const body = new URLSearchParams()
+    if (status.type) body.set('type', status.type)
     body.set('op', status.op)
     if (status.stream_id !== undefined) body.set('stream_id', String(status.stream_id))
     if (status.topic !== undefined) body.set('topic', status.topic)

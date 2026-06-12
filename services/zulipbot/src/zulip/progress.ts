@@ -212,6 +212,7 @@ function typingStatusFromTarget(
 ): ZulipTypingStatus | undefined {
   if (target.type === 'stream') {
     return {
+      type: 'stream',
       op,
       stream_id: target.streamId,
       topic: target.topic
@@ -219,6 +220,7 @@ function typingStatusFromTarget(
   }
   if (!target.recipientIds.length) return undefined
   return {
+    type: 'direct',
     op,
     to: target.recipientIds
   }
