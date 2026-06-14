@@ -72,10 +72,11 @@ export function createZulipbot(options: ZulipbotOptions): Zulipbot {
     })
     if (!normalized) return c.json({ ok: true, ignored: true })
 
-    const progressHandle = await progress.start(normalized)
+    const event = await withFreshZulipMessageDetails(normalized, zulipClient, logger)
+    const progressHandle = await progress.start(event)
     backgroundWaitUntil(
       processZulipEvent({
-        event: normalized,
+        event,
         options,
         progress,
         progressHandle,
@@ -86,6 +87,66 @@ export function createZulipbot(options: ZulipbotOptions): Zulipbot {
   })
 
   return { app }
+}
+
+async function withFreshZulipMessageDetails(
+  event: NormalizedZulipEvent,
+  zulipClient: ZulipClient,
+  logger: ZulipbotOptions['logger']
+): Promise<NormalizedZulipEvent> {
+  if (event.delivery.message_type !== 'stream') return event
+  if (event.delivery.topic?.trim()) return event
+  const messageId = event.zulip.message_id
+  if (messageId === undefined) return event
+
+  try {
+    const channel = event.zulip.stream_name?.trim()
+    const messages = await zulipClient.getMessages({
+      anchor: messageId,
+      apply_markdown: false,
+      include_anchor: true,
+      narrow: channel ? [{ operator: 'stream', operand: channel }] : undefined,
+      num_after: 5,
+      num_before: 5
+    })
+    const message = messages.find(item => item.id === messageId) ?? messages[0]
+    const topic = message ? message.topic ?? message.subject : undefined
+    if (!message || !topic?.trim()) return event
+
+    const streamId = message.stream_id ?? event.delivery.stream_id
+    if (streamId === undefined) return event
+    const streamName =
+      typeof message.display_recipient === 'string'
+        ? message.display_recipient
+        : event.zulip.stream_name
+    traceLog(logger, 'zulipbot_topic_hydrated', {
+      message_id: event.message_id,
+      topic,
+      thread_id: event.thread_key
+    })
+    return {
+      ...event,
+      thread_key: `zulip:${event.realm}:${streamId}:${encodeURIComponent(topic.trim())}`,
+      zulip: {
+        ...event.zulip,
+        stream_id: streamId,
+        stream_name: streamName,
+        topic
+      },
+      delivery: {
+        ...event.delivery,
+        stream_id: streamId,
+        topic
+      }
+    }
+  } catch (error) {
+    logger?.warn('zulipbot_topic_hydration_failed', {
+      error: errorMessage(error),
+      message_id: event.message_id,
+      thread_id: event.thread_key
+    })
+    return event
+  }
 }
 
 async function processZulipEvent(input: {
