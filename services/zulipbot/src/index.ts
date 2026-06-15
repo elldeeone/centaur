@@ -109,9 +109,16 @@ async function withFreshZulipMessageDetails(
       num_after: 5,
       num_before: 5
     })
-    const message = messages.find(item => item.id === messageId) ?? messages[0]
+    const message = messages.find(item => item.id === messageId)
     const topic = message ? message.topic ?? message.subject : undefined
-    if (!message || !topic?.trim()) return event
+    if (!message || !topic?.trim()) {
+      traceLog(logger, 'zulipbot_topic_hydration_skipped', {
+        message_id: event.message_id,
+        reason: message ? 'missing_topic' : 'message_not_found',
+        thread_id: event.thread_key
+      })
+      return event
+    }
 
     const streamId = message.stream_id ?? event.delivery.stream_id
     if (streamId === undefined) return event
