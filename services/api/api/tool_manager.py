@@ -1218,9 +1218,9 @@ async def _active_execution_parent_context(
     if pool is None:
         return None
     row = await pool.fetchrow(
-        "SELECT metadata FROM agent_execution_requests "
-        "WHERE thread_key = $1 AND status IN ('running', 'cancel_requested', 'retry_wait') "
-        "ORDER BY started_at DESC NULLS LAST, claimed_at DESC NULLS LAST, created_at DESC "
+        "SELECT metadata FROM session_executions "
+        "WHERE thread_key = $1 AND status IN ('running', 'queued') "
+        "ORDER BY started_at DESC NULLS LAST, created_at DESC "
         "LIMIT 1",
         thread_key,
     )
@@ -1233,6 +1233,74 @@ async def _active_execution_parent_context(
     if not isinstance(otel, dict):
         return None
     return context_from_serialized(otel.get("execution_span_context"))
+
+
+async def _active_tool_caller_context(
+    request: Request | None,
+    sandbox_claims: dict[str, Any] | None,
+) -> dict[str, str | None]:
+    """Resolve the latest real requester for a sandbox-scoped tool call.
+
+    Tool method arguments come from the agent, so identity-sensitive tools must
+    not accept user ids from JSON input. The sandbox token gives us the durable
+    thread key; the stored chat/execution rows give us the actual requester.
+    """
+    empty: dict[str, str | None] = {
+        "user_id": None,
+        "message_id": None,
+        "user_name": None,
+        "user_email": None,
+        "platform": None,
+    }
+    if request is None or not sandbox_claims:
+        return empty
+    thread_key = str(sandbox_claims.get("thread_key") or "")
+    if not thread_key:
+        return empty
+    pool = getattr(getattr(request, "app", None), "state", None)
+    pool = getattr(pool, "db_pool", None) if pool else None
+    if pool is None:
+        return empty
+
+    row = await pool.fetchrow(
+        "WITH active_execution AS ("
+        "  SELECT COALESCE(metadata->>'message_id', metadata->>'client_message_id') AS message_id, "
+        "    metadata->>'user_id' AS user_id, "
+        "    metadata->>'user_name' AS user_name, "
+        "    metadata->>'user_email' AS user_email, "
+        "    metadata->>'platform' AS platform, "
+        "    created_at, 0 AS source_rank "
+        "  FROM session_executions "
+        "  WHERE thread_key = $1 AND status IN ('running', 'queued') "
+        "  ORDER BY started_at DESC NULLS LAST, created_at DESC "
+        "  LIMIT 1"
+        "), candidates AS ("
+        "  SELECT * FROM active_execution "
+        "  UNION ALL "
+        "  SELECT COALESCE(metadata->>'message_id', client_message_id, message_id) AS message_id, "
+        "    metadata->>'user_id' AS user_id, metadata->>'user_name' AS user_name, "
+        "    metadata->>'user_email' AS user_email, metadata->>'platform' AS platform, "
+        "    created_at, 1 AS source_rank "
+        "  FROM session_messages "
+        "  WHERE thread_key = $1 AND role = 'user' "
+        "    AND COALESCE(metadata->>'history_backfill', 'false') <> 'true' "
+        ") "
+        "SELECT message_id, user_id, user_name, user_email, platform "
+        "FROM candidates "
+        "WHERE user_id IS NOT NULL AND btrim(user_id) <> '' "
+        "ORDER BY source_rank ASC, created_at DESC "
+        "LIMIT 1",
+        thread_key,
+    )
+    if not row:
+        return empty
+    return {
+        "user_id": str(row["user_id"]).strip() if row["user_id"] else None,
+        "message_id": str(row["message_id"]).strip() if row["message_id"] else None,
+        "user_name": str(row["user_name"]).strip() if row["user_name"] else None,
+        "user_email": str(row["user_email"]).strip() if row["user_email"] else None,
+        "platform": str(row["platform"]).strip() if row["platform"] else None,
+    }
 
 
 async def _capture_live_slack_send(
@@ -2307,6 +2375,7 @@ class ToolManager:
             )
             return validation_error
 
+        caller_context = await _active_tool_caller_context(request, sandbox_claims)
         ctx = lt.ctx
         all_secrets = lt.all_secrets
         if all_secrets:
@@ -2321,6 +2390,11 @@ class ToolManager:
                     container_id=sandbox_claims.get("container_id")
                     if sandbox_claims
                     else None,
+                    user_id=caller_context.get("user_id"),
+                    message_id=caller_context.get("message_id"),
+                    user_name=caller_context.get("user_name"),
+                    user_email=caller_context.get("user_email"),
+                    platform=caller_context.get("platform"),
                 )
             elif sandbox_claims:
                 ctx = ToolContext(
@@ -2328,6 +2402,11 @@ class ToolManager:
                     secrets=dict(lt.ctx.secrets),
                     thread_key=sandbox_claims.get("thread_key"),
                     container_id=sandbox_claims.get("container_id"),
+                    user_id=caller_context.get("user_id"),
+                    message_id=caller_context.get("message_id"),
+                    user_name=caller_context.get("user_name"),
+                    user_email=caller_context.get("user_email"),
+                    platform=caller_context.get("platform"),
                 )
         elif sandbox_claims:
             ctx = ToolContext(
@@ -2335,6 +2414,11 @@ class ToolManager:
                 secrets=dict(lt.ctx.secrets),
                 thread_key=sandbox_claims.get("thread_key"),
                 container_id=sandbox_claims.get("container_id"),
+                user_id=caller_context.get("user_id"),
+                message_id=caller_context.get("message_id"),
+                user_name=caller_context.get("user_name"),
+                user_email=caller_context.get("user_email"),
+                platform=caller_context.get("platform"),
             )
 
         token = set_tool_context(ctx)
@@ -2482,6 +2566,7 @@ class ToolManager:
             # secrets gate availability elsewhere; optional secrets should still be
             # present in ToolContext when declared so tool code can choose to use
             # them.
+            caller_context = await _active_tool_caller_context(request, sandbox_claims)
             ctx = lt.ctx
             all_secrets = lt.all_secrets
             if all_secrets:
@@ -2502,6 +2587,11 @@ class ToolManager:
                         container_id=sandbox_claims.get("container_id")
                         if sandbox_claims
                         else None,
+                        user_id=caller_context.get("user_id"),
+                        message_id=caller_context.get("message_id"),
+                        user_name=caller_context.get("user_name"),
+                        user_email=caller_context.get("user_email"),
+                        platform=caller_context.get("platform"),
                     )
                 elif sandbox_claims:
                     ctx = ToolContext(
@@ -2509,6 +2599,11 @@ class ToolManager:
                         secrets=dict(lt.ctx.secrets),
                         thread_key=sandbox_claims.get("thread_key"),
                         container_id=sandbox_claims.get("container_id"),
+                        user_id=caller_context.get("user_id"),
+                        message_id=caller_context.get("message_id"),
+                        user_name=caller_context.get("user_name"),
+                        user_email=caller_context.get("user_email"),
+                        platform=caller_context.get("platform"),
                     )
             elif sandbox_claims:
                 ctx = ToolContext(
@@ -2516,6 +2611,11 @@ class ToolManager:
                     secrets=dict(lt.ctx.secrets),
                     thread_key=sandbox_claims.get("thread_key"),
                     container_id=sandbox_claims.get("container_id"),
+                    user_id=caller_context.get("user_id"),
+                    message_id=caller_context.get("message_id"),
+                    user_name=caller_context.get("user_name"),
+                    user_email=caller_context.get("user_email"),
+                    platform=caller_context.get("platform"),
                 )
 
             token = set_tool_context(ctx)

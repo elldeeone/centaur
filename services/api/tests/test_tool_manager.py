@@ -421,7 +421,7 @@ def _write_persona(tools_dir: Path, name: str) -> Path:
 
 
 FAKE_TOOL_CLIENT = """
-from centaur_sdk import secret
+from centaur_sdk import get_tool_context, secret
 
 
 class FakeClient:
@@ -438,6 +438,17 @@ class FakeClient:
         return {
             "required": secret("REQ_TOKEN"),
             "optional": secret("OPT_TOKEN", default="missing"),
+        }
+
+    def caller_context(self) -> dict:
+        ctx = get_tool_context()
+        return {
+            "thread_key": ctx.thread_key,
+            "user_id": ctx.user_id,
+            "message_id": ctx.message_id,
+            "user_name": ctx.user_name,
+            "user_email": ctx.user_email,
+            "platform": ctx.platform,
         }
 
     def _private(self):
@@ -494,6 +505,7 @@ def test_discover_loads_fake_tools_with_shadowing_personas_and_failures(tmp_path
     ]
     assert {method.method_name for method in manager.tools["alpha"].methods} == {
         "async_echo",
+        "caller_context",
         "secret_values",
         "sync_echo",
     }
@@ -596,9 +608,11 @@ async def test_tool_rest_router_lists_describes_and_invokes_tools(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    from api.deps import mint_sandbox_token
     from centaur_sdk.backends import registry
 
     monkeypatch.setattr(registry, "_backend", _NullBackend())
+    monkeypatch.setenv("SANDBOX_SIGNING_KEY", "test-signing-key")
     tools_dir = tmp_path / "tools"
     _write_tool(
         tools_dir,
@@ -612,31 +626,35 @@ async def test_tool_rest_router_lists_describes_and_invokes_tools(
     manager.discover()
     app = FastAPI()
     app.include_router(manager.create_rest_router())
+    token = mint_sandbox_token("test:thread", "sandbox-1")
+    headers = {"authorization": f"Bearer {token}"}
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        list_response = await client.get("/tools")
+        list_response = await client.get("/tools", headers=headers)
         assert list_response.status_code == 200
         assert list_response.json() == {
             "alpha": {
                 "description": "REST alpha",
-                "methods": ["async_echo", "secret_values", "sync_echo"],
+                "methods": ["async_echo", "caller_context", "secret_values", "sync_echo"],
             }
         }
 
-        describe_response = await client.get("/tools/alpha")
+        describe_response = await client.get("/tools/alpha", headers=headers)
         assert describe_response.status_code == 200
         description = describe_response.json()
         assert description["tool"] == "alpha"
         assert description["description"] == "REST alpha"
         assert [method["name"] for method in description["methods"]] == [
             "async_echo",
+            "caller_context",
             "secret_values",
             "sync_echo",
         ]
 
         call_response = await client.post(
             "/tools/alpha/sync_echo",
+            headers=headers,
             json={"text": "from rest"},
         )
         assert call_response.status_code == 200
@@ -646,7 +664,7 @@ async def test_tool_rest_router_lists_describes_and_invokes_tools(
             "result": {"mode": "sync", "text": "from rest", "source": "base"},
         }
 
-        secret_response = await client.post("/tools/alpha/secret_values", json={})
+        secret_response = await client.post("/tools/alpha/secret_values", headers=headers, json={})
         assert secret_response.status_code == 200
         assert secret_response.json() == {
             "tool": "alpha",
@@ -654,12 +672,121 @@ async def test_tool_rest_router_lists_describes_and_invokes_tools(
             "result": {"required": "REQ_TOKEN", "optional": "OPT_TOKEN"},
         }
 
-        missing_response = await client.post("/tools/alpha/missing", json={})
+        missing_response = await client.post("/tools/alpha/missing", headers=headers, json={})
         assert missing_response.status_code == 200
         assert missing_response.json()["result"] == (
             '{"error": "Method \'missing\' not found in tool \'alpha\'", '
-            '"available_methods": ["async_echo", "secret_values", "sync_echo"]}'
+            '"available_methods": ["async_echo", "caller_context", "secret_values", "sync_echo"]}'
         )
+
+
+@pytest.mark.asyncio
+async def test_tool_context_includes_trusted_thread_caller(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from api.deps import mint_sandbox_token
+    from centaur_sdk.backends import registry
+
+    class FakePool:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        async def fetchrow(self, query: str, *args):
+            self.queries.append(query)
+            assert args == ("zulip:staghunt:609620:general%20chat",)
+            if query.startswith("SELECT metadata FROM session_executions"):
+                return {"metadata": {}}
+            assert "WITH active_execution AS" in query
+            assert "FROM session_executions" in query
+            assert "FROM session_messages" in query
+            assert "status IN ('running', 'queued')" in query
+            assert "ORDER BY source_rank ASC, created_at DESC" in query
+            return {
+                "message_id": "zulip:staghunt:123",
+                "user_id": "5",
+                "user_name": "Luke Dunshea",
+                "user_email": "luke@example.com",
+                "platform": "zulip",
+            }
+
+    monkeypatch.setattr(registry, "_backend", _NullBackend())
+    monkeypatch.setenv("SANDBOX_SIGNING_KEY", "test-signing-key")
+    tools_dir = tmp_path / "tools"
+    _write_tool(tools_dir, "alpha", FAKE_TOOL_CLIENT, description="REST alpha")
+    manager = ToolManager(tools_dir)
+    manager.discover()
+    app = FastAPI()
+    pool = FakePool()
+    app.state.db_pool = pool
+    app.include_router(manager.create_rest_router())
+    token = mint_sandbox_token("zulip:staghunt:609620:general%20chat", "sandbox-1")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/tools/alpha/caller_context",
+            headers={"authorization": f"Bearer {token}"},
+            json={},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {
+        "thread_key": "zulip:staghunt:609620:general%20chat",
+        "user_id": "5",
+        "message_id": "zulip:staghunt:123",
+        "user_name": "Luke Dunshea",
+        "user_email": "luke@example.com",
+        "platform": "zulip",
+    }
+    assert any("FROM session_executions" in query for query in pool.queries)
+    assert any("FROM session_messages" in query for query in pool.queries)
+    assert not any("FROM agent_execution_requests" in query for query in pool.queries)
+
+
+@pytest.mark.asyncio
+async def test_tool_context_does_not_use_legacy_identity_when_current_schema_has_no_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from api.deps import mint_sandbox_token
+    from centaur_sdk.backends import registry
+
+    class FakePool:
+        async def fetchrow(self, query: str, *args):
+            assert args == ("zulip:staghunt:609620:general%20chat",)
+            if "session_executions" in query or "session_messages" in query:
+                return None
+            raise AssertionError("legacy identity lookup should not run")
+
+    monkeypatch.setattr(registry, "_backend", _NullBackend())
+    monkeypatch.setenv("SANDBOX_SIGNING_KEY", "test-signing-key")
+    tools_dir = tmp_path / "tools"
+    _write_tool(tools_dir, "alpha", FAKE_TOOL_CLIENT, description="REST alpha")
+    manager = ToolManager(tools_dir)
+    manager.discover()
+    app = FastAPI()
+    app.state.db_pool = FakePool()
+    app.include_router(manager.create_rest_router())
+    token = mint_sandbox_token("zulip:staghunt:609620:general%20chat", "sandbox-1")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/tools/alpha/caller_context",
+            headers={"authorization": f"Bearer {token}"},
+            json={},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {
+        "thread_key": "zulip:staghunt:609620:general%20chat",
+        "user_id": None,
+        "message_id": None,
+        "user_name": None,
+        "user_email": None,
+        "platform": None,
+    }
 
 
 class TestHarnessSecretSelection:

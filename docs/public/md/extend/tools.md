@@ -116,6 +116,13 @@ Do not call `load_dotenv()` in `client.py`. Server-side tools should use
 `secret("KEY")`; standalone CLIs may load local `.env` files in their CLI
 wrapper.
 
+Tools that need trusted runtime context can import `get_tool_context()` from
+`centaur_sdk.tool_sdk`. When the call comes from a sandbox-scoped agent, the
+context includes the thread key, sandbox container id, and any stored requester
+metadata Centaur can resolve for the active execution, such as `user_id`,
+`message_id`, `user_name`, `user_email`, and `platform`. Treat those fields as
+server-derived context, not as method arguments supplied by the model.
+
 ## Verify
 
 After deploy:
