@@ -689,12 +689,18 @@ async def test_tool_context_includes_trusted_thread_caller(
     from centaur_sdk.backends import registry
 
     class FakePool:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
         async def fetchrow(self, query: str, *args):
+            self.queries.append(query)
             assert args == ("zulip:staghunt:609620:general%20chat",)
-            if query.startswith("SELECT metadata FROM agent_execution_requests"):
-                return None
+            if query.startswith("SELECT metadata FROM session_executions"):
+                return {"metadata": {}}
             assert "WITH active_execution AS" in query
-            assert "status IN ('running', 'cancel_requested', 'retry_wait')" in query
+            assert "FROM session_executions" in query
+            assert "FROM session_messages" in query
+            assert "status IN ('running', 'queued')" in query
             assert "ORDER BY source_rank ASC, created_at DESC" in query
             return {
                 "message_id": "zulip:staghunt:123",
@@ -703,6 +709,55 @@ async def test_tool_context_includes_trusted_thread_caller(
                 "user_email": "luke@example.com",
                 "platform": "zulip",
             }
+
+    monkeypatch.setattr(registry, "_backend", _NullBackend())
+    monkeypatch.setenv("SANDBOX_SIGNING_KEY", "test-signing-key")
+    tools_dir = tmp_path / "tools"
+    _write_tool(tools_dir, "alpha", FAKE_TOOL_CLIENT, description="REST alpha")
+    manager = ToolManager(tools_dir)
+    manager.discover()
+    app = FastAPI()
+    pool = FakePool()
+    app.state.db_pool = pool
+    app.include_router(manager.create_rest_router())
+    token = mint_sandbox_token("zulip:staghunt:609620:general%20chat", "sandbox-1")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/tools/alpha/caller_context",
+            headers={"authorization": f"Bearer {token}"},
+            json={},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {
+        "thread_key": "zulip:staghunt:609620:general%20chat",
+        "user_id": "5",
+        "message_id": "zulip:staghunt:123",
+        "user_name": "Luke Dunshea",
+        "user_email": "luke@example.com",
+        "platform": "zulip",
+    }
+    assert any("FROM session_executions" in query for query in pool.queries)
+    assert any("FROM session_messages" in query for query in pool.queries)
+    assert not any("FROM agent_execution_requests" in query for query in pool.queries)
+
+
+@pytest.mark.asyncio
+async def test_tool_context_does_not_use_legacy_identity_when_current_schema_has_no_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from api.deps import mint_sandbox_token
+    from centaur_sdk.backends import registry
+
+    class FakePool:
+        async def fetchrow(self, query: str, *args):
+            assert args == ("zulip:staghunt:609620:general%20chat",)
+            if "session_executions" in query or "session_messages" in query:
+                return None
+            raise AssertionError("legacy identity lookup should not run")
 
     monkeypatch.setattr(registry, "_backend", _NullBackend())
     monkeypatch.setenv("SANDBOX_SIGNING_KEY", "test-signing-key")
@@ -726,11 +781,11 @@ async def test_tool_context_includes_trusted_thread_caller(
     assert response.status_code == 200
     assert response.json()["result"] == {
         "thread_key": "zulip:staghunt:609620:general%20chat",
-        "user_id": "5",
-        "message_id": "zulip:staghunt:123",
-        "user_name": "Luke Dunshea",
-        "user_email": "luke@example.com",
-        "platform": "zulip",
+        "user_id": None,
+        "message_id": None,
+        "user_name": None,
+        "user_email": None,
+        "platform": None,
     }
 
 
