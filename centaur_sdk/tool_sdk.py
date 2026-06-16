@@ -22,6 +22,11 @@ class ToolContext:
     secrets: dict[str, str] = field(default_factory=dict)
     thread_key: str | None = None
     container_id: str | None = None
+    user_id: str | None = None
+    message_id: str | None = None
+    user_name: str | None = None
+    user_email: str | None = None
+    platform: str | None = None
 
 
 _tool_ctx: ContextVar[ToolContext] = ContextVar("_tool_ctx")
