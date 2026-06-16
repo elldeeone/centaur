@@ -1204,28 +1204,6 @@ def _decode_jsonb(value: Any, fallback: Any) -> Any:
     return fallback
 
 
-def _is_missing_schema_error(exc: Exception) -> bool:
-    sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
-    if sqlstate in {"42P01", "42703"}:
-        return True
-    return type(exc).__name__ in {
-        "UndefinedColumnError",
-        "UndefinedTableError",
-    }
-
-
-_MISSING_SCHEMA = object()
-
-
-async def _fetchrow_or_missing_schema(pool: Any, query: str, *args: Any):
-    try:
-        return await pool.fetchrow(query, *args)
-    except Exception as exc:
-        if _is_missing_schema_error(exc):
-            return _MISSING_SCHEMA
-        raise
-
-
 async def _active_execution_parent_context(
     request: Request | None,
     sandbox_claims: dict[str, Any] | None,
@@ -1239,25 +1217,13 @@ async def _active_execution_parent_context(
     pool = getattr(pool, "db_pool", None) if pool else None
     if pool is None:
         return None
-    row = await _fetchrow_or_missing_schema(
-        pool,
+    row = await pool.fetchrow(
         "SELECT metadata FROM session_executions "
         "WHERE thread_key = $1 AND status IN ('running', 'queued') "
         "ORDER BY started_at DESC NULLS LAST, created_at DESC "
         "LIMIT 1",
         thread_key,
     )
-    if row is _MISSING_SCHEMA:
-        row = await _fetchrow_or_missing_schema(
-            pool,
-            "SELECT metadata FROM agent_execution_requests "
-            "WHERE thread_key = $1 AND status IN ('running', 'cancel_requested', 'retry_wait') "
-            "ORDER BY started_at DESC NULLS LAST, claimed_at DESC NULLS LAST, created_at DESC "
-            "LIMIT 1",
-            thread_key,
-        )
-    if row is _MISSING_SCHEMA:
-        return None
     if not row:
         return None
     metadata = _decode_jsonb(row["metadata"], {})
@@ -1296,8 +1262,7 @@ async def _active_tool_caller_context(
     if pool is None:
         return empty
 
-    row = await _fetchrow_or_missing_schema(
-        pool,
+    row = await pool.fetchrow(
         "WITH active_execution AS ("
         "  SELECT COALESCE(metadata->>'message_id', metadata->>'client_message_id') AS message_id, "
         "    metadata->>'user_id' AS user_id, "
@@ -1327,48 +1292,6 @@ async def _active_tool_caller_context(
         "LIMIT 1",
         thread_key,
     )
-    if row is _MISSING_SCHEMA:
-        row = await _fetchrow_or_missing_schema(
-            pool,
-            "WITH active_execution AS ("
-            "  SELECT COALESCE(metadata->>'message_id', metadata->>'client_message_id') AS message_id, "
-            "    COALESCE(metadata->>'user_id', delivery->>'recipient_user_id', delivery->>'user_id') AS user_id, "
-            "    COALESCE(metadata->>'user_name', delivery->>'user_name') AS user_name, "
-            "    COALESCE(metadata->>'user_email', delivery->>'user_email') AS user_email, "
-            "    COALESCE(metadata->>'platform', delivery->>'platform') AS platform, "
-            "    created_at, 0 AS source_rank "
-            "  FROM agent_execution_requests "
-            "  WHERE thread_key = $1 AND status IN ('running', 'cancel_requested', 'retry_wait') "
-            "  ORDER BY started_at DESC NULLS LAST, claimed_at DESC NULLS LAST, created_at DESC "
-            "  LIMIT 1"
-            "), candidates AS ("
-            "  SELECT * FROM active_execution "
-            "  UNION ALL "
-            "  SELECT id AS message_id, COALESCE(user_id, metadata->>'user_id') AS user_id, "
-            "    metadata->>'user_name' AS user_name, metadata->>'user_email' AS user_email, "
-            "    metadata->>'platform' AS platform, created_at, 1 AS source_rank "
-            "  FROM chat_messages "
-            "  WHERE thread_key = $1 AND role = 'user' "
-            "    AND COALESCE(metadata->>'history_backfill', 'false') <> 'true' "
-            "  UNION ALL "
-            "  SELECT COALESCE(metadata->>'message_id', metadata->>'client_message_id') AS message_id, "
-            "    COALESCE(metadata->>'user_id', delivery->>'recipient_user_id', delivery->>'user_id') AS user_id, "
-            "    COALESCE(metadata->>'user_name', delivery->>'user_name') AS user_name, "
-            "    COALESCE(metadata->>'user_email', delivery->>'user_email') AS user_email, "
-            "    COALESCE(metadata->>'platform', delivery->>'platform') AS platform, "
-            "    created_at, 2 AS source_rank "
-            "  FROM agent_execution_requests "
-            "  WHERE thread_key = $1 "
-            ") "
-            "SELECT message_id, user_id, user_name, user_email, platform "
-            "FROM candidates "
-            "WHERE user_id IS NOT NULL AND btrim(user_id) <> '' "
-            "ORDER BY source_rank ASC, created_at DESC "
-            "LIMIT 1",
-            thread_key,
-        )
-    if row is _MISSING_SCHEMA:
-        return empty
     if not row:
         return empty
     return {
