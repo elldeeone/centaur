@@ -22,6 +22,8 @@ EXACT_QUERY_TITLE_BOOST = 8
 EXACT_QUERY_BODY_BOOST = 2
 THREAD_SCORE_MULTIPLIER = 1.25
 CHANNEL_DAY_SCORE_MULTIPLIER = 0.75
+ZULIP_TOPIC_SCORE_MULTIPLIER = THREAD_SCORE_MULTIPLIER
+ZULIP_STREAM_DAY_SCORE_MULTIPLIER = CHANNEL_DAY_SCORE_MULTIPLIER
 DEFAULT_PREVIEW_CHARS = 280
 MAX_RELATED_CHILDREN = 25
 SLACK_LIVE_SOURCE_TYPE = "slack_live_message"
@@ -298,10 +300,14 @@ class CompanyContextClient:
     """Query the shared company context document table."""
 
     def __init__(self, database_url: str | None = None) -> None:
-        # DATABASE_URL is owned by the API process, not an agent-facing secret.
-        env_database_url = os.getenv("DATABASE_URL")  # noqa: TID251
+        # COMPANY_CONTEXT_DSN is the agent-facing, proxy-scoped DSN. DATABASE_URL is
+        # kept as a local/dev fallback for tests and admin shells.
+        env_database_url = os.getenv("COMPANY_CONTEXT_DSN") or os.getenv("DATABASE_URL")  # noqa: TID251
         self._database_url = (
-            database_url or env_database_url or secret("DATABASE_URL", default="")
+            database_url
+            or env_database_url
+            or secret("COMPANY_CONTEXT_DSN", default="")
+            or secret("DATABASE_URL", default="")
         ).strip()
 
     def _require_database_url(self) -> str:
@@ -362,6 +368,8 @@ class CompanyContextClient:
                     * CASE source_type
                         WHEN 'slack_thread' THEN {THREAD_SCORE_MULTIPLIER}
                         WHEN 'slack_channel_day' THEN {CHANNEL_DAY_SCORE_MULTIPLIER}
+                        WHEN 'zulip_topic' THEN {ZULIP_TOPIC_SCORE_MULTIPLIER}
+                        WHEN 'zulip_stream_day' THEN {ZULIP_STREAM_DAY_SCORE_MULTIPLIER}
                         ELSE 1.0
                     END DESC,
                     source_updated_at DESC NULLS LAST

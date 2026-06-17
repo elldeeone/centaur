@@ -121,6 +121,8 @@ def test_search_queries_bm25_and_returns_compact_results(monkeypatch):
     assert ") OR (" in query
     assert "WHEN 'slack_thread' THEN 1.25" in query
     assert "WHEN 'slack_channel_day' THEN 0.75" in query
+    assert "WHEN 'zulip_topic' THEN 1.25" in query
+    assert "WHEN 'zulip_stream_day' THEN 0.75" in query
     assert "END DESC" in query
     assert "paradedb.score(document_id)" in query
     assert args == (
