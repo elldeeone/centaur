@@ -12,9 +12,6 @@ $$;
 
 grant usage on schema public to centaur_slack_reader, centaur_slack_admin;
 
-grant select on slack_sync_channels to centaur_slack_reader, centaur_slack_admin;
-grant select on slack_sync_users to centaur_slack_reader, centaur_slack_admin;
-grant select on slack_sync_messages to centaur_slack_reader, centaur_slack_admin;
 grant select on zulip_sync_streams to centaur_slack_reader, centaur_slack_admin;
 grant select on zulip_sync_topics to centaur_slack_reader, centaur_slack_admin;
 grant select on zulip_sync_users to centaur_slack_reader, centaur_slack_admin;
@@ -36,30 +33,8 @@ create table if not exists zulip_context_rls_admin_streams (
 grant select on slack_context_rls_admin_channels to centaur_slack_reader, centaur_slack_admin;
 grant select on zulip_context_rls_admin_streams to centaur_slack_reader, centaur_slack_admin;
 
-alter table slack_sync_messages enable row level security;
 alter table zulip_sync_messages enable row level security;
 alter table company_context_documents enable row level security;
-
-drop policy if exists centaur_slack_messages_admin_select on slack_sync_messages;
-create policy centaur_slack_messages_admin_select
-    on slack_sync_messages
-    for select
-    to centaur_slack_admin
-    using (true);
-
-drop policy if exists centaur_slack_messages_reader_select on slack_sync_messages;
-create policy centaur_slack_messages_reader_select
-    on slack_sync_messages
-    for select
-    to centaur_slack_reader
-    using (
-        channel_id = nullif(current_setting('centaur.slack_channel_id', true), '')
-        or exists (
-            select 1
-            from slack_context_rls_admin_channels admins
-            where admins.channel_id = nullif(current_setting('centaur.slack_channel_id', true), '')
-        )
-    );
 
 drop policy if exists centaur_zulip_messages_admin_select on zulip_sync_messages;
 create policy centaur_zulip_messages_admin_select
@@ -85,13 +60,6 @@ create policy centaur_zulip_messages_reader_select
               and admins.stream_id::text = nullif(current_setting('centaur.zulip_stream_id', true), '')
         )
     );
-
-drop policy if exists centaur_context_docs_admin_select on company_context_documents;
-create policy centaur_context_docs_admin_select
-    on company_context_documents
-    for select
-    to centaur_slack_admin
-    using (true);
 
 drop policy if exists centaur_context_docs_reader_select on company_context_documents;
 create policy centaur_context_docs_reader_select

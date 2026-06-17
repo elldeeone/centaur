@@ -138,6 +138,7 @@ async def upsert_messages(pool, rows: list[dict[str, Any]]) -> int:
     """Upsert Zulip stream messages by their realm-scoped message id."""
     if not rows:
         return 0
+    upserted = 0
     async with pool.acquire() as conn:
         async with conn.transaction():
             for row in rows:
@@ -186,7 +187,8 @@ async def upsert_messages(pool, rows: list[dict[str, Any]]) -> int:
                     canonical_json(row["raw_payload"]),
                     row["source_run_id"],
                 )
-    return len(rows)
+                upserted += 1
+    return upserted
 
 
 async def load_stream_checkpoints(
