@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
 import pytest
 
@@ -33,6 +34,78 @@ class _FakePool:
 
     def acquire(self):
         return _AsyncContext(self.conn)
+
+
+def test_zulip_etl_client_uses_thread_key_realm_for_hosted_zulip(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from workflows.zulip_sync_shared import ZulipEtlClient
+
+    monkeypatch.setenv("ZULIP_ETL_SITE", "https://staghunt.zulipchat.com")
+    monkeypatch.setenv("ZULIP_ETL_EMAIL", "centaur-bot@staghunt.zulipchat.com")
+    monkeypatch.setenv("ZULIP_ETL_API_KEY", "test-api-key")
+    monkeypatch.delenv("ZULIP_ETL_REALM", raising=False)
+
+    client = ZulipEtlClient()
+
+    assert client.realm == "staghunt"
+
+
+def test_zulip_etl_client_allows_explicit_thread_key_realm(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from workflows.zulip_sync_shared import ZulipEtlClient
+
+    monkeypatch.setenv("ZULIP_ETL_SITE", "https://chat.example.com")
+    monkeypatch.setenv("ZULIP_ETL_EMAIL", "centaur-bot@example.com")
+    monkeypatch.setenv("ZULIP_ETL_API_KEY", "test-api-key")
+    monkeypatch.setenv("ZULIP_ETL_REALM", "Stag Hunt")
+
+    client = ZulipEtlClient()
+
+    assert client.realm == "stag-hunt"
+
+
+def test_list_etl_streams_uses_non_admin_visibility_params():
+    from workflows.zulip_sync_shared import ZulipEtlClient
+
+    client = ZulipEtlClient.__new__(ZulipEtlClient)
+    client._ratelimit_deadlines = {}
+    calls: list[dict[str, Any]] = []
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any],
+        method_key: str,
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "method": method,
+                "path": path,
+                "params": params,
+                "method_key": method_key,
+            }
+        )
+        return {"streams": [{"stream_id": 42, "name": "research"}]}
+
+    client._request = fake_request
+
+    assert client._list_etl_streams() == [{"stream_id": 42, "name": "research"}]
+    assert calls == [
+        {
+            "method": "GET",
+            "path": "/api/v1/streams",
+            "params": {
+                "include_public": "true",
+                "include_web_public": "true",
+                "include_subscribed": "true",
+            },
+            "method_key": "streams",
+        }
+    ]
+    assert "include_all_active" not in calls[0]["params"]
 
 
 @pytest.mark.asyncio

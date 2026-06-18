@@ -6,6 +6,7 @@ import base64
 import datetime as dt
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -20,6 +21,8 @@ FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 BACKFILL_JOB_STREAM_CONTINUATION = "stream_continuation"
 BACKFILL_JOB_STREAM_BOOTSTRAP = "stream_bootstrap"
 BACKFILL_JOB_PAYLOAD_VERSION = 1
+ZULIP_CLOUD_HOSTED_SUFFIXES = (".zulipchat.com", ".zulip.com")
+ZULIP_REALM_UNSAFE_SEGMENT_RE = re.compile(r"[^a-z0-9._@-]+")
 
 
 def positive_int(value: int | str | None, default: int) -> int:
@@ -44,6 +47,31 @@ def _secret_or_env(name: str, *, default: str = "") -> str:
     if value is not None:
         return value
     return str(secret(name, default=default) or "")
+
+
+def _optional_secret_or_env(name: str) -> str:
+    value = _secret_or_env(name).strip()
+    return "" if value == name else value
+
+
+def clean_zulip_realm_segment(value: str) -> str:
+    """Normalize realm labels the same way Zulipbot normalizes thread-key segments."""
+    return ZULIP_REALM_UNSAFE_SEGMENT_RE.sub("-", value.strip().lower())
+
+
+def zulip_thread_realm_from_site(site: str) -> str:
+    """Infer the thread-key realm used by hosted Zulip Cloud organizations."""
+    parsed = urllib.parse.urlparse(site)
+    hostname = parsed.hostname
+    if hostname is None:
+        hostname = site.split("/", 1)[0].split(":", 1)[0]
+    hostname = hostname.strip().lower()
+    for suffix in ZULIP_CLOUD_HOSTED_SUFFIXES:
+        if hostname.endswith(suffix):
+            realm = hostname[: -len(suffix)]
+            if realm:
+                return clean_zulip_realm_segment(realm)
+    return clean_zulip_realm_segment(hostname or site)
 
 
 def zulip_ts_to_datetime(ts: int | float | str | None) -> dt.datetime | None:
@@ -493,7 +521,9 @@ class ZulipEtlClient:
             raise RuntimeError("ZULIP_ETL_EMAIL or ZULIP_BOT_EMAIL not set for Zulip ETL workflow")
         if not self.api_key:
             raise RuntimeError("ZULIP_ETL_API_KEY or ZULIP_API_KEY not set for Zulip ETL workflow")
-        self.realm = urllib.parse.urlparse(self.site).hostname or self.site
+        self.realm = clean_zulip_realm_segment(
+            _optional_secret_or_env("ZULIP_ETL_REALM")
+        ) or zulip_thread_realm_from_site(self.site)
         self._ratelimit_deadlines: dict[str, float] = {}
 
     def _api_timeout_seconds(self) -> int:
@@ -606,7 +636,6 @@ class ZulipEtlClient:
                 "include_public": "true",
                 "include_web_public": "true",
                 "include_subscribed": "true",
-                "include_all_active": "true",
             },
             method_key="streams",
         )

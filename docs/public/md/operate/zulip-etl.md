@@ -27,6 +27,7 @@ writes durable rows into Postgres.
 | `ZULIP_ETL_SITE` | falls back to `ZULIP_SITE` | Zulip organization URL. |
 | `ZULIP_ETL_EMAIL` | falls back to `ZULIP_BOT_EMAIL` | Bot email used for ETL API calls. |
 | `ZULIP_ETL_API_KEY` | falls back to `ZULIP_API_KEY` | Bot API key used for ETL API calls. |
+| `ZULIP_ETL_REALM` | inferred from hosted Zulip Cloud URLs | Realm label stored with synced rows and documents; set this explicitly for custom/self-hosted domains so it matches Zulipbot thread keys. |
 | `ZULIP_SYNC_INTERVAL_SECONDS` | `3600` | How often to run incremental Zulip sync. |
 | `ZULIP_BACKFILL_ENABLED` | `true` | Enables the backfill worker schedule. |
 | `ZULIP_BACKFILL_INTERVAL_SECONDS` | `600` | How often to drain queued backfill jobs. |
@@ -38,6 +39,8 @@ writes durable rows into Postgres.
 | `COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS` | `14400` | How often to project changed rows into documents. |
 
 The ETL bot can only read history visible to that Zulip identity.
+`ZULIP_ETL_REALM` must match the realm segment in Zulipbot thread keys so scoped
+`company_context` reads can see the synced rows for their stream.
 
 ## Data model
 

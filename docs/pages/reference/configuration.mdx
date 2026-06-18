@@ -216,6 +216,7 @@ Zulip ETL workflows:
 | --- | --- | --- |
 | `ZULIP_ETL_ENABLED` | `api.extraEnv`. | Master switch for Zulip sync/backfill/context schedules. |
 | `ZULIP_ETL_SITE`, `ZULIP_ETL_EMAIL`, `ZULIP_ETL_API_KEY` | API env or Secret source. | Zulip bot credential used by ETL API calls; falls back to `ZULIP_SITE`, `ZULIP_BOT_EMAIL`, `ZULIP_API_KEY`. |
+| `ZULIP_ETL_REALM` | API env or Secret source. | Optional thread-key realm override for Zulip sync rows and documents; inferred from hosted Zulip Cloud URLs when unset. |
 | `ZULIP_SYNC_INTERVAL_SECONDS`, `ZULIP_BACKFILL_INTERVAL_SECONDS`, `COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS` | `api.extraEnv`. | Zulip ETL schedule intervals. |
 | `ZULIP_SYNC_BACKFILL_LOOKBACK_DAYS` | `api.extraEnv`. | Zulip stream-history lookback window for initial backfills. |
 | `ZULIP_ETL_EXCLUDED_STREAM_PATTERNS` | `api.extraEnv`. | Comma-separated stream-name globs to skip. |
