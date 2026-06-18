@@ -7,14 +7,16 @@ begin
     if not exists (select 1 from pg_roles where rolname = 'centaur_slack_admin') then
         create role centaur_slack_admin nologin;
     end if;
+
+    execute format('grant centaur_slack_reader to %I', current_user);
 end
 $$;
 
 grant usage on schema public to centaur_slack_reader, centaur_slack_admin;
 
-grant select on zulip_sync_streams to centaur_slack_reader, centaur_slack_admin;
-grant select on zulip_sync_topics to centaur_slack_reader, centaur_slack_admin;
-grant select on zulip_sync_users to centaur_slack_reader, centaur_slack_admin;
+grant select on zulip_sync_streams to centaur_slack_admin;
+grant select on zulip_sync_topics to centaur_slack_admin;
+grant select on zulip_sync_users to centaur_slack_admin;
 grant select on zulip_sync_messages to centaur_slack_reader, centaur_slack_admin;
 grant select on company_context_documents to centaur_slack_reader, centaur_slack_admin;
 
