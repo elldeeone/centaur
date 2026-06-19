@@ -1,0 +1,132 @@
+---
+title: Zulip ETL
+description: Sync Zulip stream history into Postgres, drain historical backfills, and project Zulip context into searchable documents.
+---
+
+# Zulip ETL
+
+:::warning[Off by default unless configured]
+Zulip ETL is disabled unless the API service has `ZULIP_ETL_ENABLED=true`.
+Production deployments should enable it deliberately after choosing the Zulip
+bot credential, stream scope, exclusion patterns, and data boundary they want
+agents to use.
+:::
+
+Zulip ETL mirrors the Slack ETL pattern. It keeps an indexed, queryable copy of
+public Zulip stream history in Postgres for agent context and operator workflows.
+It runs as scheduled Centaur workflows: one workflow keeps recent stream history
+fresh, one drains deferred historical backfill work, and
+`company_context_documents` turns synced messages into company context documents.
+
+The ETL path is separate from Zulipbot delivery. Zulipbot handles live tagged
+turns and same-topic context; Zulip ETL reads stream history with a bot token and
+writes durable rows into Postgres.
+
+## What it runs
+
+| Workflow | Default cadence | Role |
+|----------|-----------------|------|
+| `zulip_sync` | 1 hour | Lists public streams, refreshes users/topics, syncs recent messages, advances per-stream checkpoints, and enqueues backfill jobs. |
+| `zulip_backfill` | 10 minutes | Claims queued backfill jobs and drains Zulip message pages without slowing the incremental sync. |
+| `company_context_documents` | 4 hours | Projects changed Zulip rows into `company_context_documents` for retrieval. |
+
+Each schedule uses `no_delivery`, so scheduled runs write to the database without
+posting to Zulip.
+
+## Configure Zulip access
+
+Set these API-service environment variables:
+
+| Environment variable | Default | Effect |
+|----------------------|---------|--------|
+| `ZULIP_ETL_ENABLED` | `false` | Enables `zulip_sync`, `zulip_backfill`, and document projection when company context documents are enabled. |
+| `ZULIP_ETL_SITE` | falls back to `ZULIP_SITE` | Zulip organization URL, such as `https://example.zulipchat.com`. |
+| `ZULIP_ETL_EMAIL` | falls back to `ZULIP_BOT_EMAIL` | Bot email used for ETL API calls. |
+| `ZULIP_ETL_API_KEY` | falls back to `ZULIP_API_KEY` | Bot API key used for ETL API calls. |
+| `ZULIP_ETL_REALM` | inferred from hosted Zulip Cloud URLs | Realm label stored with synced rows and documents; set this explicitly for custom/self-hosted domains so it matches Zulipbot thread keys. |
+| `ZULIP_SYNC_INTERVAL_SECONDS` | `3600` | How often to run incremental Zulip sync. |
+| `ZULIP_BACKFILL_ENABLED` | `true` | Enables the backfill worker schedule. |
+| `ZULIP_BACKFILL_INTERVAL_SECONDS` | `600` | How often to drain queued backfill jobs. |
+| `ZULIP_BACKFILL_STREAM_BATCH_LIMIT` | `50` | Maximum backfill jobs claimed per run. |
+| `ZULIP_BACKFILL_STREAM_PAGES_PER_JOB` | `5` | Maximum Zulip message pages drained before a continuation job is queued. |
+| `ZULIP_SYNC_BACKFILL_LOOKBACK_DAYS` | `30` | Historical window seeded for first-time stream backfills. |
+| `ZULIP_ETL_EXCLUDED_STREAM_PATTERNS` | empty | Comma-separated stream-name globs to skip, without the leading `#`. |
+| `COMPANY_CONTEXT_DOCUMENTS_ENABLED` | `true` | Enables projection from Zulip sync rows into company context documents. |
+| `COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS` | `14400` | How often to project changed rows into documents. |
+
+The ETL bot can only read history visible to that Zulip identity. Newly-created
+bots may not see older stream history unless the realm/stream history settings
+allow it. `ZULIP_ETL_REALM` must match the realm segment in Zulipbot thread keys
+so scoped `company_context` reads can see the synced rows for their stream.
+
+## Data model
+
+Zulip ETL writes normalized Zulip data into dedicated tables:
+
+| Table | Contents |
+|-------|----------|
+| `zulip_sync_streams` | Public streams visible to the ETL bot and whether they are currently syncable. |
+| `zulip_sync_topics` | Topic metadata per stream. |
+| `zulip_sync_users` | Zulip user display metadata used when rendering documents. |
+| `zulip_sync_runs` | One row per incremental or backfill workflow run, with counts and stream outcomes. |
+| `zulip_sync_messages` | Stream messages keyed by `(realm, message_id)`. |
+| `zulip_sync_checkpoints` | Per-stream watermarks and last error state. |
+| `zulip_sync_backfill_jobs` | Deferred stream-history continuation jobs. |
+| `company_context_documents` | Derived stream-day and topic documents for retrieval. |
+
+`company_context` uses a scoped `COMPANY_CONTEXT_DSN` pg_dsn secret. The proxy
+sets Postgres GUCs from the current chat principal, including
+`centaur.zulip_realm` and `centaur.zulip_stream_id`; row-level-security policies
+then restrict Zulip message and document reads to that stream unless an admin
+stream is configured.
+
+## Verify
+
+Check the workflow schedules:
+
+```bash
+kubectl exec -n centaur deploy/centaur-centaur-api -- \
+  psql "$DATABASE_URL" -c \
+  "SELECT schedule_id, workflow_name, enabled, interval_seconds, next_run_at
+   FROM workflow_schedules
+   WHERE schedule_id IN ('zulip_sync', 'zulip_backfill', 'company_context_documents')
+   ORDER BY schedule_id;"
+```
+
+Check sync health:
+
+```bash
+kubectl exec -n centaur deploy/centaur-centaur-api -- \
+  psql "$DATABASE_URL" -c \
+  "SELECT realm, stream_id, watermark_message_id, last_success_at, last_error
+   FROM zulip_sync_checkpoints
+   ORDER BY updated_at DESC
+   LIMIT 20;"
+```
+
+Check document projection:
+
+```bash
+kubectl exec -n centaur deploy/centaur-centaur-api -- \
+  psql "$DATABASE_URL" -c \
+  "SELECT source_type, count(*), max(source_updated_at)
+   FROM company_context_documents
+   WHERE source = 'zulip'
+   GROUP BY source_type
+   ORDER BY source_type;"
+```
+
+## Troubleshoot
+
+| Symptom | What to check |
+|---------|---------------|
+| Schedules are missing | Confirm `WORKFLOW_DIRS` includes `/app/workflows` and the API restarted after the workflow files were deployed. |
+| Schedules exist but are disabled | Confirm `ZULIP_ETL_ENABLED=true` is present in the API environment. |
+| `zulip_sync` fails before listing streams | Confirm `ZULIP_ETL_SITE`, `ZULIP_ETL_EMAIL`, and `ZULIP_ETL_API_KEY` or their Zulipbot fallbacks are visible to the API service. |
+| Streams are skipped unexpectedly | Check `ZULIP_ETL_EXCLUDED_STREAM_PATTERNS` and whether the bot can see the stream as public history. |
+| Backfill jobs keep failing | Inspect `zulip_sync_backfill_jobs.last_error` and the corresponding `zulip_sync_runs` row. |
+| Documents lag behind messages | Check the `company_context_documents` workflow status and company-context projection metrics. |
+
+Keep the ETL bot scoped to the streams and realm data you actually want agents to
+retrieve. Synced rows and projected documents are deployment-wide context, so
+treat the bot credential as a deliberate data boundary.

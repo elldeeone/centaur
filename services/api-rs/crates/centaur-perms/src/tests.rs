@@ -337,7 +337,7 @@ fn aws_auth_requires_hosts() {
 #[test]
 fn parses_pg_dsn_secret() {
     let parsed = tools::parse_secret(
-        &entry(r#"{ type = "pg_dsn", name = "RESHIFT_DSN", database = "pmadmin", secret_ref = "RESHIFT_DSN" }"#),
+        &entry(r#"{ type = "pg_dsn", name = "RESHIFT_DSN", database = "pmadmin", secret_ref = "RESHIFT_DSN", role = "readonly", settings = [{ name = "centaur.zulip_stream_id", value_from = { principal_label = "zulip_stream_id" } }] }"#),
         &[],
     )
     .unwrap();
@@ -347,6 +347,16 @@ fn parses_pg_dsn_secret() {
     assert_eq!(pg.name, "RESHIFT_DSN");
     assert_eq!(pg.database, "pmadmin");
     assert_eq!(pg.secret_ref, "RESHIFT_DSN");
+    assert_eq!(pg.role.as_deref(), Some("readonly"));
+    assert_eq!(pg.settings.len(), 1);
+    assert_eq!(pg.settings[0].name, "centaur.zulip_stream_id");
+    assert_eq!(
+        pg.settings[0]
+            .value_from
+            .as_ref()
+            .and_then(|value_from| value_from.principal_label.as_deref()),
+        Some("zulip_stream_id")
+    );
 }
 
 #[test]
@@ -459,7 +469,7 @@ fn translates_oauth_with_json_key_fields() {
 fn translates_pg_dsn_to_input_with_roundtrip_foreign_id() {
     let secrets = vec![
         tools::parse_secret(
-            &entry(r#"{ type = "pg_dsn", name = "RESHIFT_DSN", database = "pmadmin", secret_ref = "RESHIFT_DSN" }"#),
+            &entry(r#"{ type = "pg_dsn", name = "RESHIFT_DSN", database = "pmadmin", secret_ref = "RESHIFT_DSN", role = "readonly", settings = [{ name = "centaur.zulip_realm", value_from = { principal_label = "zulip_realm" } }, { name = "app.mode", value = "sandbox" }] }"#),
             &[],
         )
         .unwrap(),
@@ -474,6 +484,18 @@ fn translates_pg_dsn_to_input_with_roundtrip_foreign_id() {
     assert_eq!(pg_sandbox_env_var(&input.foreign_id), "RESHIFT_DSN");
     assert_eq!(input.name, "RESHIFT_DSN");
     assert_eq!(input.database, "pmadmin");
+    assert_eq!(input.role.as_deref(), Some("readonly"));
+    assert_eq!(input.settings.len(), 2);
+    assert_eq!(input.settings[0].name, "centaur.zulip_realm");
+    assert_eq!(
+        input.settings[0]
+            .value_from
+            .as_ref()
+            .and_then(|value_from| value_from.principal_label.as_deref()),
+        Some("zulip_realm")
+    );
+    assert_eq!(input.settings[1].name, "app.mode");
+    assert_eq!(input.settings[1].value.as_deref(), Some("sandbox"));
     assert_eq!(input.dsn.source_type, "env");
     assert_eq!(
         input.dsn.config,

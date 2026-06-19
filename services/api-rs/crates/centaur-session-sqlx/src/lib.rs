@@ -993,6 +993,9 @@ pub fn default_metadata(metadata: Option<Value>) -> Value {
 mod tests {
     use super::SessionEventNotification;
 
+    const ZULIP_CONTEXT_RLS_MIGRATION: &str =
+        include_str!("../migrations/0021_zulip_context_rls.sql");
+
     #[test]
     fn parses_session_event_notification_payload() {
         let notification: SessionEventNotification =
@@ -1004,6 +1007,51 @@ mod tests {
                 thread_key: "cli:test".to_owned(),
                 event_id: 42,
             }
+        );
+    }
+
+    #[test]
+    fn zulip_context_rls_grants_reader_role_to_database_user() {
+        assert!(
+            ZULIP_CONTEXT_RLS_MIGRATION
+                .contains("execute format('grant centaur_slack_reader to %I', current_user);")
+        );
+    }
+
+    #[test]
+    fn zulip_context_rls_keeps_catalog_tables_admin_only() {
+        assert!(
+            ZULIP_CONTEXT_RLS_MIGRATION
+                .contains("grant select on zulip_sync_streams to centaur_slack_admin;")
+        );
+        assert!(
+            ZULIP_CONTEXT_RLS_MIGRATION
+                .contains("grant select on zulip_sync_topics to centaur_slack_admin;")
+        );
+        assert!(
+            ZULIP_CONTEXT_RLS_MIGRATION
+                .contains("grant select on zulip_sync_users to centaur_slack_admin;")
+        );
+        assert!(
+            ZULIP_CONTEXT_RLS_MIGRATION
+                .contains("grant select on zulip_sync_messages to centaur_slack_reader")
+        );
+        assert!(
+            ZULIP_CONTEXT_RLS_MIGRATION
+                .contains("grant select on company_context_documents to centaur_slack_reader")
+        );
+
+        assert!(
+            !ZULIP_CONTEXT_RLS_MIGRATION
+                .contains("grant select on zulip_sync_streams to centaur_slack_reader")
+        );
+        assert!(
+            !ZULIP_CONTEXT_RLS_MIGRATION
+                .contains("grant select on zulip_sync_topics to centaur_slack_reader")
+        );
+        assert!(
+            !ZULIP_CONTEXT_RLS_MIGRATION
+                .contains("grant select on zulip_sync_users to centaur_slack_reader")
         );
     }
 }

@@ -210,6 +210,18 @@ Slack ETL workflows:
 | `SLACK_BACKFILL_ENABLED`, `SLACK_BACKFILL_CHANNEL_BATCH_LIMIT`, `SLACK_BACKFILL_CHANNEL_PAGES_PER_JOB` | `api.extraEnv` or chart batch limit. | Backfill enablement and batch sizing. |
 | `COMPANY_CONTEXT_DOCUMENTS_ENABLED` | `api.extraEnv`. | Enables company-context projection when Slack ETL is on. |
 
+Zulip ETL workflows:
+
+| Env var | Set from | Controls |
+| --- | --- | --- |
+| `ZULIP_ETL_ENABLED` | `api.extraEnv`. | Master switch for Zulip sync/backfill/context schedules. |
+| `ZULIP_ETL_SITE`, `ZULIP_ETL_EMAIL`, `ZULIP_ETL_API_KEY` | API env or Secret source. | Zulip bot credential used by ETL API calls; falls back to `ZULIP_SITE`, `ZULIP_BOT_EMAIL`, `ZULIP_API_KEY`. |
+| `ZULIP_ETL_REALM` | API env or Secret source. | Optional thread-key realm override for Zulip sync rows and documents; inferred from hosted Zulip Cloud URLs when unset. |
+| `ZULIP_SYNC_INTERVAL_SECONDS`, `ZULIP_BACKFILL_INTERVAL_SECONDS`, `COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS` | `api.extraEnv`. | Zulip ETL schedule intervals. |
+| `ZULIP_SYNC_BACKFILL_LOOKBACK_DAYS` | `api.extraEnv`. | Zulip stream-history lookback window for initial backfills. |
+| `ZULIP_ETL_EXCLUDED_STREAM_PATTERNS` | `api.extraEnv`. | Comma-separated stream-name globs to skip. |
+| `ZULIP_BACKFILL_ENABLED`, `ZULIP_BACKFILL_STREAM_BATCH_LIMIT`, `ZULIP_BACKFILL_STREAM_PAGES_PER_JOB` | `api.extraEnv`. | Backfill enablement and batch sizing. |
+
 Google Workspace ETL workflows:
 
 | Env var | Set from | Controls |

@@ -15,6 +15,7 @@ export const sidebar = [
     text: 'Operate',
     items: [
       { text: 'Slack ETL', link: '/operate/slack-etl' },
+      { text: 'Zulip ETL', link: '/operate/zulip-etl' },
       { text: 'Expose Slackbot with Tailscale Funnel', link: '/operate/tailscale-funnel' },
     ],
   },

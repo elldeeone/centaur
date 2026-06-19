@@ -61,6 +61,7 @@ SCHEDULE = {
     "enabled": (
         (
             _env_flag_enabled("SLACK_ETL_ENABLED")
+            or _env_flag_enabled("ZULIP_ETL_ENABLED")
             or _env_flag_enabled("GOOGLE_DRIVE_ETL_ENABLED")
             or _env_flag_enabled("GOOGLE_CALENDAR_ETL_ENABLED")
             or _env_flag_enabled("LINEAR_ETL_ENABLED")
@@ -147,6 +148,7 @@ def _content_hash(*parts: Any) -> str:
 def _source_enabled() -> bool:
     return (
         _env_flag_enabled("SLACK_ETL_ENABLED")
+        or _env_flag_enabled("ZULIP_ETL_ENABLED")
         or _env_flag_enabled("GOOGLE_DRIVE_ETL_ENABLED")
         or _env_flag_enabled("GOOGLE_CALENDAR_ETL_ENABLED")
         or _env_flag_enabled("LINEAR_ETL_ENABLED")
@@ -228,6 +230,57 @@ async def _load_changed_message_keys(pool, since: dt.datetime | None) -> dict[st
         ],
         "threads": [
             (str(row["channel_id"]), str(row["thread_ts"])) for row in thread_rows
+        ],
+        "changed_messages": int(stats["changed_messages"] or 0) if stats else 0,
+        "max_updated_at": max_updated_at,
+    }
+
+
+async def _load_changed_zulip_message_keys(
+    pool,
+    since: dt.datetime | None,
+) -> dict[str, Any]:
+    """Find stream/day and topic aggregates affected by changed Zulip rows."""
+    if since is None:
+        where_sql = ""
+        args: list[Any] = []
+    else:
+        where_sql = "WHERE updated_at > $1"
+        args = [since]
+
+    stream_day_rows = await pool.fetch(
+        "SELECT DISTINCT realm, stream_id, (occurred_at AT TIME ZONE 'UTC')::date AS day "
+        f"FROM zulip_sync_messages {where_sql} "
+        f"{'AND' if where_sql else 'WHERE'} occurred_at IS NOT NULL "
+        "ORDER BY realm, stream_id, day",
+        *args,
+    )
+    topic_rows = await pool.fetch(
+        "SELECT DISTINCT realm, stream_id, topic_name "
+        f"FROM zulip_sync_messages {where_sql} "
+        f"{'AND' if where_sql else 'WHERE'} topic_name <> '' "
+        "ORDER BY realm, stream_id, topic_name",
+        *args,
+    )
+    stats = await pool.fetchrow(
+        f"SELECT COUNT(*) AS changed_messages, MAX(updated_at) AS max_updated_at "
+        f"FROM zulip_sync_messages {where_sql}",
+        *args,
+    )
+
+    max_updated_at = stats["max_updated_at"] if stats else None
+    if isinstance(max_updated_at, dt.datetime):
+        max_updated_at = max_updated_at.astimezone(dt.timezone.utc)
+
+    return {
+        "stream_days": [
+            (str(row["realm"]), int(row["stream_id"]), row["day"])
+            for row in stream_day_rows
+            if isinstance(row["day"], dt.date)
+        ],
+        "topics": [
+            (str(row["realm"]), int(row["stream_id"]), str(row["topic_name"]))
+            for row in topic_rows
         ],
         "changed_messages": int(stats["changed_messages"] or 0) if stats else 0,
         "max_updated_at": max_updated_at,
@@ -439,6 +492,64 @@ async def _load_thread_messages(pool, channel_id: str, thread_ts: str) -> list[A
     )
 
 
+async def _load_zulip_stream_day_messages(
+    pool,
+    *,
+    realm: str,
+    stream_id: int,
+    day: dt.date,
+) -> list[Any]:
+    """Load all messages for one Zulip stream/day aggregate."""
+    start = dt.datetime.combine(day, dt.time.min, tzinfo=dt.timezone.utc)
+    end = start + dt.timedelta(days=1)
+    return list(
+        await pool.fetch(
+            "SELECT m.realm, m.stream_id, s.stream_name, m.message_id, m.topic_name, "
+            "m.occurred_at, m.sender_id, m.sender_email, m.sender_full_name, "
+            "m.content, m.rendered_content, m.permalink, m.updated_at "
+            "FROM zulip_sync_messages m "
+            "LEFT JOIN zulip_sync_streams s "
+            "  ON s.realm = m.realm AND s.stream_id = m.stream_id "
+            "WHERE m.realm = $1 "
+            "  AND m.stream_id = $2 "
+            "  AND m.occurred_at >= $3 "
+            "  AND m.occurred_at < $4 "
+            "ORDER BY m.occurred_at, m.message_id",
+            realm,
+            stream_id,
+            start,
+            end,
+        )
+    )
+
+
+async def _load_zulip_topic_messages(
+    pool,
+    *,
+    realm: str,
+    stream_id: int,
+    topic_name: str,
+) -> list[Any]:
+    """Load all messages for one Zulip topic aggregate."""
+    return list(
+        await pool.fetch(
+            "SELECT m.realm, m.stream_id, s.stream_name, m.message_id, m.topic_name, "
+            "m.occurred_at, m.sender_id, m.sender_email, m.sender_full_name, "
+            "m.content, m.rendered_content, m.permalink, m.updated_at "
+            "FROM zulip_sync_messages m "
+            "LEFT JOIN zulip_sync_streams s "
+            "  ON s.realm = m.realm AND s.stream_id = m.stream_id "
+            "WHERE m.realm = $1 "
+            "  AND m.stream_id = $2 "
+            "  AND m.topic_name = $3 "
+            "ORDER BY m.occurred_at, m.message_id",
+            realm,
+            stream_id,
+            topic_name,
+        )
+    )
+
+
 def _channel_day_document(
     *,
     channel_id: str,
@@ -504,6 +615,159 @@ def _channel_day_document(
         "occurred_at": occurred_at,
         "source_updated_at": last_updated,
         "content_hash": _content_hash(title, body, "", metadata),
+        "metadata": metadata,
+    }
+
+
+def _zulip_display_name(row: Any) -> str:
+    """Return the most useful Zulip sender display name from a message row."""
+    for key in ("sender_full_name", "sender_email", "sender_id"):
+        value = row.get(key) if hasattr(row, "get") else row[key]
+        if value:
+            return str(value)
+    return "Unknown"
+
+
+def _zulip_message_text(row: Any) -> str:
+    """Return the plainest stored Zulip message body."""
+    return str(row["content"] or row["rendered_content"] or "").strip()
+
+
+def _zulip_stream_day_document(
+    *,
+    realm: str,
+    stream_id: int,
+    day: dt.date,
+    messages: list[Any],
+) -> dict[str, Any] | None:
+    """Render one Zulip stream/day transcript document from message rows."""
+    if not messages:
+        return None
+
+    stream_name = str(messages[0]["stream_name"] or stream_id)
+    title = f"#{stream_name} - {day.isoformat()}"
+    lines = [f"# {title}", "", f"- Realm: {realm}", ""]
+    last_updated = max(
+        row["updated_at"].astimezone(dt.timezone.utc) for row in messages
+    )
+    occurred_at = messages[0]["occurred_at"]
+
+    for row in messages:
+        speaker = _zulip_display_name(row)
+        topic = str(row["topic_name"] or "")
+        topic_suffix = f" - {topic}" if topic else ""
+        lines.extend(
+            [
+                f"### {speaker} - {_format_time(row['occurred_at'])}{topic_suffix}",
+                "",
+                _zulip_message_text(row),
+                "",
+            ]
+        )
+
+    body = "\n".join(lines).strip()
+    source_document_id = f"{realm}:{stream_id}:{day.isoformat()}"
+    metadata = {
+        "realm": realm,
+        "stream_id": str(stream_id),
+        "stream_name": stream_name,
+        "date": day.isoformat(),
+        "message_count": len(messages),
+        "aggregation": "stream_day",
+    }
+    return {
+        "document_id": f"zulip:stream_day:{realm}:{stream_id}:{day.isoformat()}",
+        "source": "zulip",
+        "source_type": "zulip_stream_day",
+        "source_document_id": source_document_id,
+        "source_chunk_id": "",
+        "parent_document_id": None,
+        "title": title,
+        "body": body,
+        "url": "",
+        "author_id": "",
+        "author_name": "",
+        "access_scope": "company",
+        "occurred_at": occurred_at,
+        "source_updated_at": last_updated,
+        "content_hash": _content_hash(title, body, "", metadata),
+        "metadata": metadata,
+    }
+
+
+def _zulip_topic_document(
+    *,
+    realm: str,
+    stream_id: int,
+    topic_name: str,
+    messages: list[Any],
+) -> dict[str, Any] | None:
+    """Render one Zulip topic document using the Slack thread threshold."""
+    if len(messages) < MIN_THREAD_MESSAGES:
+        return None
+
+    stream_name = str(messages[0]["stream_name"] or stream_id)
+    first = messages[0]
+    title = topic_name or _sanitize_heading(_zulip_message_text(first))
+    participants = sorted(
+        {_zulip_display_name(row) for row in messages if row["sender_id"]}
+    )
+    last_updated = max(
+        row["updated_at"].astimezone(dt.timezone.utc) for row in messages
+    )
+    permalink = str(first["permalink"] or "")
+    source_document_id = f"{realm}:{stream_id}:{topic_name}"
+
+    lines = [
+        f"# {title}",
+        "",
+        f"- Stream: #{stream_name}",
+        f"- Realm: {realm}",
+        f"- Started: {_format_time(first['occurred_at'])}",
+        f"- Participants: {', '.join(participants)}",
+        f"- Messages: {len(messages)}",
+        f"- URL: {permalink}",
+        "",
+        "---",
+        "",
+    ]
+    for row in messages:
+        speaker = _zulip_display_name(row)
+        lines.extend(
+            [
+                f"### {speaker} - {_format_time(row['occurred_at'])}",
+                "",
+                _zulip_message_text(row),
+                "",
+            ]
+        )
+
+    body = "\n".join(lines).strip()
+    metadata = {
+        "realm": realm,
+        "stream_id": str(stream_id),
+        "stream_name": stream_name,
+        "topic_name": topic_name,
+        "message_count": len(messages),
+        "participants": participants,
+        "aggregation": "topic",
+    }
+    return {
+        "document_id": f"zulip:topic:{realm}:{stream_id}:{topic_name}",
+        "source": "zulip",
+        "source_type": "zulip_topic",
+        "source_document_id": source_document_id,
+        "source_chunk_id": "",
+        "parent_document_id": None,
+        "title": title,
+        "body": body,
+        "url": permalink,
+        "author_id": str(first["sender_id"] or ""),
+        "author_name": _zulip_display_name(first),
+        "access_scope": "company",
+        "occurred_at": first["occurred_at"],
+        "source_updated_at": last_updated,
+        "content_hash": _content_hash(title, body, permalink, metadata),
         "metadata": metadata,
     }
 
@@ -1043,6 +1307,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     )
 
     slack_enabled = _env_flag_enabled("SLACK_ETL_ENABLED")
+    zulip_enabled = _env_flag_enabled("ZULIP_ETL_ENABLED")
     google_drive_enabled = _env_flag_enabled("GOOGLE_DRIVE_ETL_ENABLED")
     google_calendar_enabled = _env_flag_enabled("GOOGLE_CALENDAR_ETL_ENABLED")
     linear_enabled = _env_flag_enabled("LINEAR_ETL_ENABLED")
@@ -1057,6 +1322,14 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     if slack_enabled:
         users_by_id, channels_by_id = await _load_slack_lookup_maps(ctx._pool)
         changed = await _load_changed_message_keys(ctx._pool, since)
+    zulip_changed = {
+        "stream_days": [],
+        "topics": [],
+        "changed_messages": 0,
+        "max_updated_at": None,
+    }
+    if zulip_enabled:
+        zulip_changed = await _load_changed_zulip_message_keys(ctx._pool, since)
     drive_changed = {
         "files": [],
         "changed_files": 0,
@@ -1150,6 +1423,84 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         if action in {"inserted", "updated"}:
             documents_upserted += 1
 
+    for realm, stream_id, day in zulip_changed["stream_days"]:
+        messages = await _load_zulip_stream_day_messages(
+            ctx._pool,
+            realm=realm,
+            stream_id=stream_id,
+            day=day,
+        )
+        document = _zulip_stream_day_document(
+            realm=realm,
+            stream_id=stream_id,
+            day=day,
+            messages=messages,
+        )
+        if document is None:
+            if await _delete_document(
+                ctx._pool,
+                f"zulip:stream_day:{realm}:{stream_id}:{day.isoformat()}",
+            ):
+                documents_deleted += 1
+                record_company_context_documents_changed(
+                    "zulip",
+                    "zulip_stream_day",
+                    "deleted",
+                )
+            continue
+        observe_company_context_document_size(
+            "zulip",
+            str(document["source_type"]),
+            len(str(document["body"] or "")),
+        )
+        action = await _upsert_document(ctx._pool, document)
+        record_company_context_documents_changed(
+            "zulip",
+            str(document["source_type"]),
+            action,
+        )
+        if action in {"inserted", "updated"}:
+            documents_upserted += 1
+
+    for realm, stream_id, topic_name in zulip_changed["topics"]:
+        messages = await _load_zulip_topic_messages(
+            ctx._pool,
+            realm=realm,
+            stream_id=stream_id,
+            topic_name=topic_name,
+        )
+        document = _zulip_topic_document(
+            realm=realm,
+            stream_id=stream_id,
+            topic_name=topic_name,
+            messages=messages,
+        )
+        if document is None:
+            if await _delete_document(
+                ctx._pool,
+                f"zulip:topic:{realm}:{stream_id}:{topic_name}",
+            ):
+                documents_deleted += 1
+                record_company_context_documents_changed(
+                    "zulip",
+                    "zulip_topic",
+                    "deleted",
+                )
+            continue
+        observe_company_context_document_size(
+            "zulip",
+            str(document["source_type"]),
+            len(str(document["body"] or "")),
+        )
+        action = await _upsert_document(ctx._pool, document)
+        record_company_context_documents_changed(
+            "zulip",
+            str(document["source_type"]),
+            action,
+        )
+        if action in {"inserted", "updated"}:
+            documents_upserted += 1
+
     for row in drive_changed["files"]:
         document = _drive_document(row)
         if document is None:
@@ -1218,6 +1569,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         value
         for value in (
             changed["max_updated_at"],
+            zulip_changed["max_updated_at"],
             drive_changed["max_updated_at"],
             calendar_changed["max_updated_at"],
             linear_changed["max_updated_at"],
@@ -1229,11 +1581,14 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     result = {
         "status": "completed",
         "changed_messages": changed["changed_messages"],
+        "changed_zulip_messages": zulip_changed["changed_messages"],
         "changed_drive_files": drive_changed["changed_files"],
         "changed_calendar_events": calendar_changed["changed_events"],
         "changed_linear_issues": linear_changed["changed_issues"],
         "channel_day_documents": len(changed["channel_days"]),
         "thread_candidates": len(changed["threads"]),
+        "zulip_stream_day_documents": len(zulip_changed["stream_days"]),
+        "zulip_topic_candidates": len(zulip_changed["topics"]),
         "drive_documents": len(drive_changed["files"]),
         "calendar_event_documents": len(calendar_changed["events"]),
         "linear_issue_documents": len(linear_changed["issues"]),

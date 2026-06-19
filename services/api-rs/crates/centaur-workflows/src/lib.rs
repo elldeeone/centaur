@@ -597,9 +597,12 @@ enum WorkflowQueueClass {
 
 fn workflow_queue_class(workflow_name: &str) -> WorkflowQueueClass {
     match workflow_name {
-        "slack_sync" | "slack_backfill" | "company_context_documents" | "chief_of_staff_daily" => {
-            WorkflowQueueClass::Etl
-        }
+        "slack_sync"
+        | "slack_backfill"
+        | "zulip_sync"
+        | "zulip_backfill"
+        | "company_context_documents"
+        | "chief_of_staff_daily" => WorkflowQueueClass::Etl,
         _ => WorkflowQueueClass::Standard,
     }
 }

@@ -1,8 +1,10 @@
 //! Derive the iron-control principal a session's proxy should act as.
 //!
-//! A principal is the identity that holds roles and owns proxies. For Centaur
-//! the principal is the Slack conversation: a **user** for a 1:1 DM, or a
-//! **channel** for a multi-party channel/group thread. The thread key is
+//! A principal is the identity that holds roles and owns proxies. For Slack,
+//! the principal is a **user** for a 1:1 DM, or a **channel** for a multi-party
+//! channel/group thread. For Zulip, stream topics share the stream principal,
+//! matching the same "conversation scope owns the context grant" pattern. The
+//! Slack thread key is
 //! ``<source>:[<team_id>:]<conversation_id>[:<thread_ts>]`` — segments are
 //! identified by their Slack prefix rather than position, because the optional
 //! team id shifts everything after it (``T`` = team, ``C``/``G`` = channel,
@@ -13,6 +15,8 @@
 //! [`derive_principal`] is pure so the mapping is unit-tested directly; callers
 //! upsert the returned [`PrincipalRef`] at session start.
 
+use std::collections::BTreeMap;
+
 use crate::models::IdentityInput;
 use crate::util::{managed_labels, slugify};
 
@@ -21,17 +25,20 @@ use crate::util::{managed_labels, slugify};
 pub struct PrincipalRef {
     pub foreign_id: String,
     pub name: String,
+    pub labels: BTreeMap<String, String>,
 }
 
 impl PrincipalRef {
     /// Build the upsert body for this principal in ``namespace``, tagging it as
     /// Centaur-managed.
     pub fn to_identity_input(&self, namespace: &str) -> IdentityInput {
+        let mut labels = managed_labels();
+        labels.extend(self.labels.clone());
         IdentityInput {
             namespace: namespace.to_owned(),
             foreign_id: self.foreign_id.clone(),
             name: self.name.clone(),
-            labels: managed_labels(),
+            labels,
         }
     }
 }
@@ -44,7 +51,33 @@ impl PrincipalRef {
 /// is not a recognizable Slack conversation, the whole key is slugged so every
 /// thread still maps to a deterministic, distinct principal.
 pub fn derive_principal(thread_key: &str, slack_user_id: Option<&str>) -> PrincipalRef {
+    if let Some((realm, stream_id)) = parse_zulip_stream_segments(thread_key) {
+        let mut labels = BTreeMap::new();
+        labels.insert("zulip_realm".to_owned(), realm.to_owned());
+        labels.insert("zulip_stream_id".to_owned(), stream_id.to_owned());
+        return PrincipalRef {
+            foreign_id: format!("zulip-stream-{}-{}", slugify(realm), slugify(stream_id)),
+            name: format!("Zulip stream {stream_id} (realm {realm})"),
+            labels,
+        };
+    }
+
+    if let Some((realm, direct_key)) = parse_zulip_dm_segments(thread_key) {
+        let mut labels = BTreeMap::new();
+        labels.insert("zulip_realm".to_owned(), realm.to_owned());
+        labels.insert("zulip_dm_key".to_owned(), direct_key.to_owned());
+        return PrincipalRef {
+            foreign_id: format!("zulip-dm-{}-{}", slugify(realm), slugify(direct_key)),
+            name: format!("Zulip DM {direct_key} (realm {realm})"),
+            labels,
+        };
+    }
+
     let (team_id, conversation_id) = parse_slack_segments(thread_key);
+    let mut labels = BTreeMap::new();
+    if let Some(team) = team_id {
+        labels.insert("slack_team_id".to_owned(), team.to_owned());
+    }
     let scope = team_id
         .map(|team| format!("{}-", slugify(team)))
         .unwrap_or_default();
@@ -58,19 +91,26 @@ pub fn derive_principal(thread_key: &str, slack_user_id: Option<&str>) -> Princi
         return PrincipalRef {
             foreign_id: format!("slack-user-{scope}{}", slugify(user)),
             name: format!("Slack user {user}{team_suffix}"),
+            labels: {
+                labels.insert("slack_user_id".to_owned(), user.to_owned());
+                labels
+            },
         };
     }
 
     if let Some(conversation_id) = conversation_id {
+        labels.insert("slack_channel_id".to_owned(), conversation_id.to_owned());
         return PrincipalRef {
             foreign_id: format!("slack-channel-{scope}{}", slugify(conversation_id)),
             name: format!("Slack channel {conversation_id}{team_suffix}"),
+            labels,
         };
     }
 
     PrincipalRef {
         foreign_id: format!("thread-{}", slugify(thread_key)),
         name: thread_key.to_owned(),
+        labels,
     }
 }
 
@@ -91,6 +131,22 @@ fn parse_slack_segments(thread_key: &str) -> (Option<&str>, Option<&str>) {
         }
     }
     (team, conversation)
+}
+
+fn parse_zulip_stream_segments(thread_key: &str) -> Option<(&str, &str)> {
+    let rest = thread_key.strip_prefix("zulip:")?;
+    let mut segments = rest.split(':').map(str::trim);
+    let realm = segments.next().filter(|realm| !realm.is_empty())?;
+    let stream_id = segments.next().filter(|stream| !stream.is_empty())?;
+    Some((realm, stream_id))
+}
+
+fn parse_zulip_dm_segments(thread_key: &str) -> Option<(&str, &str)> {
+    let rest = thread_key.strip_prefix("zulipdm:")?;
+    let mut segments = rest.split(':').map(str::trim);
+    let realm = segments.next().filter(|realm| !realm.is_empty())?;
+    let direct_key = segments.next().filter(|direct| !direct.is_empty())?;
+    Some((realm, direct_key))
 }
 
 /// Slack direct-message conversation ids start with ``D``.
@@ -142,6 +198,36 @@ mod tests {
         let principal = derive_principal("slack:T123:D9:ts", Some("U07ABC"));
         assert_eq!(principal.foreign_id, "slack-user-t123-u07abc");
         assert_eq!(principal.name, "Slack user U07ABC (team T123)");
+    }
+
+    #[test]
+    fn zulip_stream_keys_on_the_stream_and_carries_scope_labels() {
+        let principal = derive_principal("zulip:staghunt:42:roadmap", Some("ignored"));
+        assert_eq!(principal.foreign_id, "zulip-stream-staghunt-42");
+        assert_eq!(principal.name, "Zulip stream 42 (realm staghunt)");
+        assert_eq!(
+            principal.labels.get("zulip_realm").map(String::as_str),
+            Some("staghunt")
+        );
+        assert_eq!(
+            principal.labels.get("zulip_stream_id").map(String::as_str),
+            Some("42")
+        );
+    }
+
+    #[test]
+    fn zulip_dm_keys_on_the_direct_conversation_and_carries_scope_labels() {
+        let principal = derive_principal("zulipdm:staghunt:12,34", Some("ignored"));
+        assert_eq!(principal.foreign_id, "zulip-dm-staghunt-12-34");
+        assert_eq!(principal.name, "Zulip DM 12,34 (realm staghunt)");
+        assert_eq!(
+            principal.labels.get("zulip_realm").map(String::as_str),
+            Some("staghunt")
+        );
+        assert_eq!(
+            principal.labels.get("zulip_dm_key").map(String::as_str),
+            Some("12,34")
+        );
     }
 
     #[test]
