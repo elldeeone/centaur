@@ -554,6 +554,12 @@ struct SandboxArgs {
     workflow_host_image: Option<String>,
     #[arg(long = "workflow-host-command", env = "WORKFLOW_HOST_COMMAND")]
     workflow_host_command: Option<String>,
+    #[arg(
+        long = "workflow-host-passthrough-env",
+        env = "WORKFLOW_HOST_PASSTHROUGH_ENV",
+        value_delimiter = ','
+    )]
+    workflow_host_passthrough_env: Vec<String>,
     #[command(flatten)]
     tools_source: ToolsArgs,
     #[arg(
@@ -1044,7 +1050,11 @@ impl SandboxArgs {
             envs.push(("TOOLS_OVERLAY_PATH".to_owned(), value));
         }
 
-        for name in &self.passthrough_env {
+        for name in self
+            .passthrough_env
+            .iter()
+            .chain(self.workflow_host_passthrough_env.iter())
+        {
             let name = name.trim();
             if name.is_empty() {
                 continue;
@@ -1861,6 +1871,9 @@ mod tests {
 
     #[test]
     fn agent_k8s_workflow_host_mounts_repos_and_tool_env() {
+        unsafe {
+            env::set_var("ZULIP_ETL_ENABLED", "true");
+        }
         let args = Args::try_parse_from([
             "centaur-api-server",
             "--database-url",
@@ -1877,10 +1890,20 @@ mod tests {
             "/home/agent/github/tempoxyz/centaur-tempo/tools",
             "--session-sandbox-passthrough-env",
             "TOOLS_PATH,TOOLS_OVERLAY_PATH",
+            "--workflow-host-passthrough-env",
+            "ZULIP_ETL_ENABLED",
         ])
         .unwrap();
 
+        assert_eq!(
+            args.sandbox.workflow_host_passthrough_env,
+            vec!["ZULIP_ETL_ENABLED".to_owned()]
+        );
+        assert_eq!(env::var("ZULIP_ETL_ENABLED").as_deref(), Ok("true"));
         let spec = args.sandbox.workflow_host_spec(None).unwrap();
+        unsafe {
+            env::remove_var("ZULIP_ETL_ENABLED");
+        }
 
         assert!(spec.mounts.iter().any(|mount| {
             mount.target_path == SANDBOX_REPOS_MOUNT_PATH
@@ -1904,10 +1927,20 @@ mod tests {
                 .map(|env| env.value.as_str()),
             Some("/home/agent/github/tempoxyz/centaur-tempo/tools")
         );
+        assert_eq!(
+            spec.env
+                .iter()
+                .find(|env| env.name == "ZULIP_ETL_ENABLED")
+                .map(|env| env.value.as_str()),
+            Some("true")
+        );
     }
 
     #[test]
     fn codex_app_server_env_template_injects_auth_mode_and_placeholder() {
+        unsafe {
+            env::set_var("ZULIP_API_KEY", "zulip-secret");
+        }
         let args = Args::try_parse_from([
             "centaur-api-server",
             "--database-url",
@@ -1916,10 +1949,15 @@ mod tests {
             "codex-app-server",
             "--session-sandbox-centaur-api-url",
             "http://host.docker.internal:8080",
+            "--workflow-host-passthrough-env",
+            "ZULIP_API_KEY",
         ])
         .unwrap();
 
         let env = args.sandbox.codex_app_server_env_template().unwrap();
+        unsafe {
+            env::remove_var("ZULIP_API_KEY");
+        }
         // CENTAUR_API_URL is always first.
         assert_eq!(
             env[0],
@@ -1938,6 +1976,7 @@ mod tests {
             env.iter()
                 .any(|(name, value)| name == "OPENAI_API_KEY" && value == "OPENAI_API_KEY")
         );
+        assert!(!env.iter().any(|(name, _)| name == "ZULIP_API_KEY"));
     }
 
     #[test]
