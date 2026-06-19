@@ -19,6 +19,7 @@ from centaur_sdk.tool_sdk import secret
 DEFAULT_SEARCH_LIMIT = 10
 MAX_SEARCH_LIMIT = 50
 TITLE_MATCH_BOOST = 4
+BODY_MATCH_BOOST = 1
 EXACT_QUERY_TITLE_BOOST = 8
 EXACT_QUERY_BODY_BOOST = 2
 THREAD_SCORE_MULTIPLIER = 1.25
@@ -197,6 +198,22 @@ def _search_where_clause(term_count: int) -> str:
     return " OR ".join(clauses)
 
 
+def _search_rank_expression(term_count: int) -> str:
+    """Return a SQL rank expression that avoids ParadeDB score() planner limits."""
+    clauses = [
+        f"CASE WHEN strpos(lower(title), lower($1::text)) > 0 THEN {EXACT_QUERY_TITLE_BOOST} ELSE 0 END",
+        f"CASE WHEN strpos(lower(body), lower($1::text)) > 0 THEN {EXACT_QUERY_BODY_BOOST} ELSE 0 END",
+    ]
+    for index in range(2, term_count + 2):
+        clauses.extend(
+            [
+                f"CASE WHEN strpos(lower(title), lower(${index}::text)) > 0 THEN {TITLE_MATCH_BOOST} ELSE 0 END",
+                f"CASE WHEN strpos(lower(body), lower(${index}::text)) > 0 THEN {BODY_MATCH_BOOST} ELSE 0 END",
+            ]
+        )
+    return "\n                        + ".join(f"({clause})" for clause in clauses)
+
+
 def _body_preview(body: str, *, query: str, max_chars: int = DEFAULT_PREVIEW_CHARS) -> str:
     """Build a compact preview centered on the first query-term hit when possible."""
     normalized = _normalize_text(body)
@@ -365,6 +382,7 @@ class CompanyContextClient:
             occurred_after_param = len(search_terms) + 3
             occurred_before_param = len(search_terms) + 4
             limit_param = len(search_terms) + 5
+            rank_expression = _search_rank_expression(len(terms))
             rows = await conn.fetch(
                 f"""
                 SELECT
@@ -382,9 +400,9 @@ class CompanyContextClient:
                     occurred_at,
                     source_updated_at,
                     metadata,
-                    paradedb.score(document_id) AS score
+                    ({rank_expression})::double precision AS score
                 FROM company_context_documents
-                WHERE {_search_where_clause(len(terms))}
+                WHERE ({_search_where_clause(len(terms))})
                   AND (${source_param}::text IS NULL OR source = ${source_param})
                   AND (${source_type_param}::text IS NULL OR source_type = ${source_type_param})
                   AND (${occurred_after_param}::timestamptz IS NULL
@@ -392,7 +410,7 @@ class CompanyContextClient:
                   AND (${occurred_before_param}::timestamptz IS NULL
                        OR occurred_at < ${occurred_before_param})
                 ORDER BY
-                    paradedb.score(document_id)
+                    ({rank_expression})
                     * CASE source_type
                         WHEN 'slack_thread' THEN {THREAD_SCORE_MULTIPLIER}
                         WHEN 'slack_channel_day' THEN {CHANNEL_DAY_SCORE_MULTIPLIER}
