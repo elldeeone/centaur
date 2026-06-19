@@ -203,12 +203,14 @@ def test_search_queries_bm25_and_returns_compact_results(monkeypatch):
     assert "title ||| $2::text::pdb.boost(4) OR body ||| $2" in query
     assert "title ||| $3::text::pdb.boost(4) OR body ||| $3" in query
     assert ") OR (" in query
+    assert "strpos(lower(title), lower($1::text)) > 0" in query
+    assert "strpos(lower(body), lower($2::text)) > 0" in query
     assert "WHEN 'slack_thread' THEN 1.25" in query
     assert "WHEN 'slack_channel_day' THEN 0.75" in query
     assert "WHEN 'zulip_topic' THEN 1.25" in query
     assert "WHEN 'zulip_stream_day' THEN 0.75" in query
     assert "END DESC" in query
-    assert "paradedb.score(document_id)" in query
+    assert "paradedb.score(document_id)" not in query
     assert args == (
         "ParadeDB BM25",
         "ParadeDB",
@@ -340,12 +342,14 @@ def test_search_uses_or_terms_and_drops_stop_words(monkeypatch):
 
     assert result["status"] == "ok"
     query, args = fake.fetch_calls[0]
-    assert "WHERE (title ||| $1::text::pdb.boost(8) OR body ||| $1::text::pdb.boost(2))" in query
+    assert "WHERE ((title ||| $1::text::pdb.boost(8) OR body ||| $1::text::pdb.boost(2))" in query
     assert "OR (title ||| $2::text::pdb.boost(4) OR body ||| $2)" in query
     assert "OR (title ||| $3::text::pdb.boost(4) OR body ||| $3)" in query
     assert "OR (title ||| $4::text::pdb.boost(4) OR body ||| $4)" in query
     assert "OR (title ||| $5::text::pdb.boost(4) OR body ||| $5)" in query
     assert "title ||| $6::text::pdb.boost(4)" not in query
+    assert "strpos(lower(title), lower($5::text)) > 0" in query
+    assert "paradedb.score(document_id)" not in query
     assert args == (
         "what is the state root state mismatch in prod",
         "state",
