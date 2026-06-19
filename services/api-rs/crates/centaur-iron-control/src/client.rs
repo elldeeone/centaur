@@ -279,15 +279,7 @@ impl IronControlClient {
                 &input.foreign_id,
             )
             .await?;
-        let matches_input = value
-            .get("foreign_id")
-            .and_then(Value::as_str)
-            .is_some_and(|foreign_id| foreign_id == input.foreign_id)
-            && value
-                .get("database")
-                .and_then(Value::as_str)
-                .is_some_and(|database| database == input.database);
-        if !matches_input {
+        if !pg_dsn_detail_matches_input(&value, input) {
             return Ok(None);
         }
         Ok(Some(SecretRecord {
@@ -582,6 +574,33 @@ fn pg_dsn_database_already_taken(error: &IronControlError) -> bool {
     )
 }
 
+fn pg_dsn_detail_matches_input(value: &Value, input: &PgDsnSecretInput) -> bool {
+    let Ok(expected) = serde_json::to_value(input) else {
+        return false;
+    };
+    let (Some(actual), Some(expected)) = (value.as_object(), expected.as_object()) else {
+        return false;
+    };
+
+    [
+        ("namespace", Value::Null),
+        ("foreign_id", Value::Null),
+        ("name", Value::Null),
+        ("database", Value::Null),
+        ("description", Value::Null),
+        ("role", Value::Null),
+        ("labels", json!({})),
+        ("settings", json!([])),
+        ("dsn", Value::Null),
+    ]
+    .into_iter()
+    .all(|(key, default)| {
+        let actual = actual.get(key).unwrap_or(&default);
+        let expected = expected.get(key).unwrap_or(&default);
+        actual == expected
+    })
+}
+
 /// Path to a resource (or sub-resource) addressed by ``ident``: the bare
 /// ``/:id`` route when ``ident`` is an OID (carries ``oid_prefix``), else the
 /// namespaced ``/lookup/:namespace/:foreign_id`` route, since the ``/:id`` form
@@ -642,7 +661,10 @@ async fn ensure_success(resp: Response, method: Method, path: &str) -> Result<Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{InjectConfig, ReplaceConfig, RequestRule, SecretSource};
+    use crate::models::{
+        InjectConfig, PgDsnSettingInput, PgDsnSettingValueFromInput, ReplaceConfig, RequestRule,
+        SecretSource,
+    };
 
     #[test]
     fn grant_body_principal_static() {
@@ -735,6 +757,72 @@ mod tests {
                 .to_owned(),
         };
         assert!(!pg_dsn_database_already_taken(&other));
+    }
+
+    #[test]
+    fn pg_dsn_detail_matches_input_accepts_equivalent_detail() {
+        let input = pg_dsn_input();
+        let mut detail = serde_json::to_value(&input).unwrap();
+        detail["id"] = json!("pgs_existing");
+        detail["created_at"] = json!("2026-06-19T00:00:00Z");
+
+        assert!(pg_dsn_detail_matches_input(&detail, &input));
+    }
+
+    #[test]
+    fn pg_dsn_detail_matches_input_rejects_mutable_field_drift() {
+        let input = pg_dsn_input();
+        let mut stale_detail = serde_json::to_value(&input).unwrap();
+        stale_detail["id"] = json!("pgs_existing");
+        stale_detail["role"] = json!("old_reader");
+
+        assert!(!pg_dsn_detail_matches_input(&stale_detail, &input));
+    }
+
+    #[test]
+    fn pg_dsn_detail_matches_input_treats_omitted_defaults_as_equivalent() {
+        let input = PgDsnSecretInput {
+            namespace: "default".to_owned(),
+            foreign_id: "pg-company-context-dsn".to_owned(),
+            name: "company_context_dsn".to_owned(),
+            database: "ai_v2".to_owned(),
+            description: None,
+            role: None,
+            labels: Default::default(),
+            settings: vec![],
+            dsn: SecretSource::env("DATABASE_URL"),
+        };
+        let detail = json!({
+            "id": "pgs_existing",
+            "namespace": "default",
+            "foreign_id": "pg-company-context-dsn",
+            "name": "company_context_dsn",
+            "database": "ai_v2",
+            "dsn": { "source_type": "env", "config": { "var": "DATABASE_URL" } }
+        });
+
+        assert!(pg_dsn_detail_matches_input(&detail, &input));
+    }
+
+    fn pg_dsn_input() -> PgDsnSecretInput {
+        PgDsnSecretInput {
+            namespace: "default".to_owned(),
+            foreign_id: "pg-company-context-dsn".to_owned(),
+            name: "company_context_dsn".to_owned(),
+            database: "ai_v2".to_owned(),
+            description: Some("Company context database".to_owned()),
+            role: Some("centaur_slack_reader".to_owned()),
+            labels: [("managed-by".to_owned(), "centaur".to_owned())].into(),
+            settings: vec![PgDsnSettingInput {
+                name: "centaur.zulip_stream_id".to_owned(),
+                value: None,
+                value_from: Some(PgDsnSettingValueFromInput {
+                    principal_label: Some("zulip_stream_id".to_owned()),
+                    principal_field: None,
+                }),
+            }],
+            dsn: SecretSource::env("DATABASE_URL"),
+        }
     }
 
     #[test]
