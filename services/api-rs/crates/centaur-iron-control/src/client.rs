@@ -247,12 +247,69 @@ impl IronControlClient {
 
     /// Upsert a Postgres DSN secret by ``foreign_id``.
     pub async fn upsert_pg_dsn_secret(&self, input: &PgDsnSecretInput) -> Result<SecretRecord> {
-        self.write(
-            Method::PUT,
-            &upsert_path("pg_dsn_secrets", &input.foreign_id),
-            input,
-        )
-        .await
+        match self
+            .write(
+                Method::PUT,
+                &upsert_path("pg_dsn_secrets", &input.foreign_id),
+                input,
+            )
+            .await
+        {
+            Ok(record) => Ok(record),
+            Err(error) => {
+                if pg_dsn_database_already_taken(&error)
+                    && let Ok(Some(record)) = self.lookup_matching_pg_dsn_secret(input).await
+                {
+                    return Ok(record);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn lookup_matching_pg_dsn_secret(
+        &self,
+        input: &PgDsnSecretInput,
+    ) -> Result<Option<SecretRecord>> {
+        let value = self
+            .get_secret_detail(
+                "pg_dsn_secrets",
+                "pgs_",
+                &input.namespace,
+                &input.foreign_id,
+            )
+            .await?;
+        let matches_input = value
+            .get("foreign_id")
+            .and_then(Value::as_str)
+            .is_some_and(|foreign_id| foreign_id == input.foreign_id)
+            && value
+                .get("database")
+                .and_then(Value::as_str)
+                .is_some_and(|database| database == input.database);
+        if !matches_input {
+            return Ok(None);
+        }
+        Ok(Some(SecretRecord {
+            id: value
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            namespace: value
+                .get("namespace")
+                .and_then(Value::as_str)
+                .unwrap_or(&input.namespace)
+                .to_owned(),
+            foreign_id: value
+                .get("foreign_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            name: value
+                .get("name")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        }))
     }
 
     /// Upsert an HMAC signing secret by ``foreign_id``.
@@ -514,6 +571,17 @@ fn upsert_path(collection: &str, foreign_id: &str) -> String {
     )
 }
 
+fn pg_dsn_database_already_taken(error: &IronControlError) -> bool {
+    matches!(
+        error,
+        IronControlError::Status {
+            status: 422,
+            body,
+            ..
+        } if body.contains("\"database\"") && body.contains("has already been taken")
+    )
+}
+
 /// Path to a resource (or sub-resource) addressed by ``ident``: the bare
 /// ``/:id`` route when ``ident`` is an OID (carries ``oid_prefix``), else the
 /// namespaced ``/lookup/:namespace/:foreign_id`` route, since the ``/:id`` form
@@ -646,6 +714,27 @@ mod tests {
             "/api/v1/static_secrets/github%2Ftoken"
         );
         assert_eq!(collection_path("grants"), "/api/v1/grants");
+    }
+
+    #[test]
+    fn pg_dsn_database_already_taken_matches_only_specific_validation() {
+        let error = IronControlError::Status {
+            method: "PUT".to_owned(),
+            path: "/api/v1/pg_dsn_secrets/pg-company-context-dsn".to_owned(),
+            status: 422,
+            body: r#"{"error":{"message":"validation failed","details":{"database":["has already been taken"]}}}"#
+                .to_owned(),
+        };
+        assert!(pg_dsn_database_already_taken(&error));
+
+        let other = IronControlError::Status {
+            method: "PUT".to_owned(),
+            path: "/api/v1/pg_dsn_secrets/pg-company-context-dsn".to_owned(),
+            status: 422,
+            body: r#"{"error":{"message":"validation failed","details":{"name":["is invalid"]}}}"#
+                .to_owned(),
+        };
+        assert!(!pg_dsn_database_already_taken(&other));
     }
 
     #[test]
