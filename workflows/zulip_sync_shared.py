@@ -44,14 +44,14 @@ def env_flag_enabled(name: str, default: bool = True) -> bool:
 
 def _secret_or_env(name: str, *, default: str = "") -> str:
     value = os.getenv(name)
-    if value is not None:
-        return value
-    return str(secret(name, default=default) or "")
+    if value is None:
+        value = str(secret(name, default=default) or "")
+    value = value.strip()
+    return "" if value == name else value
 
 
 def _optional_secret_or_env(name: str) -> str:
-    value = _secret_or_env(name).strip()
-    return "" if value == name else value
+    return _secret_or_env(name)
 
 
 def clean_zulip_realm_segment(value: str) -> str:
