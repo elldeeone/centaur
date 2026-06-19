@@ -32,6 +32,7 @@ _add_pythonpath_entry() {
 }
 
 _add_pythonpath_entry "/opt/centaur"
+_add_pythonpath_entry "/opt/centaur/services/api"
 if [ -n "${TOOL_DIRS:-}" ]; then
     IFS=':' read -ra _centaur_tool_dirs <<< "$TOOL_DIRS"
     for _centaur_tool_dir in "${_centaur_tool_dirs[@]}"; do
