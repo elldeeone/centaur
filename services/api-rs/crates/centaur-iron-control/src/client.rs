@@ -597,26 +597,7 @@ fn pg_dsn_detail_matches_input(value: &Value, input: &PgDsnSecretInput) -> bool 
         let actual = actual.get(key).unwrap_or(&default);
         let expected = expected.get(key).unwrap_or(&default);
         actual == expected
-    }) && pg_dsn_source_matches(
-        actual.get("dsn").unwrap_or(&Value::Null),
-        expected.get("dsn").unwrap_or(&Value::Null),
-    )
-}
-
-fn pg_dsn_source_matches(actual: &Value, expected: &Value) -> bool {
-    if expected.get("source_type").and_then(Value::as_str) != Some("control_plane") {
-        return actual == expected;
-    }
-
-    actual.get("source_type").and_then(Value::as_str) == Some("control_plane")
-        && control_plane_source_config(actual) == control_plane_source_config(expected)
-}
-
-fn control_plane_source_config(source: &Value) -> Value {
-    match source.get("config") {
-        Some(Value::Null) | None => json!({}),
-        Some(config) => config.clone(),
-    }
+    }) && actual.get("dsn").unwrap_or(&Value::Null) == expected.get("dsn").unwrap_or(&Value::Null)
 }
 
 /// Path to a resource (or sub-resource) addressed by ``ident``: the bare
@@ -823,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn pg_dsn_detail_matches_input_accepts_control_plane_source_without_secret() {
+    fn pg_dsn_detail_matches_input_rejects_control_plane_source_without_secret() {
         let mut input = pg_dsn_input();
         input.dsn = SecretSource {
             source_type: "control_plane".to_owned(),
@@ -834,7 +815,7 @@ mod tests {
         detail["id"] = json!("pgs_existing");
         detail["dsn"] = json!({ "source_type": "control_plane", "config": {} });
 
-        assert!(pg_dsn_detail_matches_input(&detail, &input));
+        assert!(!pg_dsn_detail_matches_input(&detail, &input));
     }
 
     #[test]
