@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import sys
 from pathlib import Path
@@ -48,6 +49,89 @@ def test_search_rejects_empty_query(query):
     result = CompanyContextClient("postgresql://example").search(query)
 
     assert result == {"status": "error", "error": "query cannot be empty"}
+
+
+def test_default_database_url_prefers_centaur_postgres_dsn_env(monkeypatch):
+    monkeypatch.setenv("CENTAUR_POSTGRES_DSN", "postgresql://scoped")
+    monkeypatch.setenv("COMPANY_CONTEXT_DSN", "postgresql://legacy-tool")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://raw-app-db")
+
+    client = CompanyContextClient()
+
+    assert client._require_database_url() == "postgresql://scoped"
+
+
+def test_default_database_url_falls_back_to_company_context_dsn_env(monkeypatch):
+    monkeypatch.delenv("CENTAUR_POSTGRES_DSN", raising=False)
+    monkeypatch.setenv("COMPANY_CONTEXT_DSN", "postgresql://legacy-tool")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://raw-app-db")
+
+    client = CompanyContextClient()
+
+    assert client._require_database_url() == "postgresql://legacy-tool"
+
+
+def test_default_database_url_falls_back_to_database_url_env(monkeypatch):
+    monkeypatch.delenv("CENTAUR_POSTGRES_DSN", raising=False)
+    monkeypatch.delenv("COMPANY_CONTEXT_DSN", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://raw-app-db")
+
+    client = CompanyContextClient()
+
+    assert client._require_database_url() == "postgresql://raw-app-db"
+
+
+def test_database_url_with_name_adds_missing_database():
+    assert (
+        company_context_client._database_url_with_name("postgresql://u:p@proxy:5432", "ai_v2")
+        == "postgresql://u:p@proxy:5432/ai_v2"
+    )
+
+
+def test_database_url_with_name_keeps_existing_database():
+    assert (
+        company_context_client._database_url_with_name(
+            "postgresql://u:p@proxy:5432/custom",
+            "ai_v2",
+        )
+        == "postgresql://u:p@proxy:5432/custom"
+    )
+
+
+def test_postgres_database_name_defaults_to_ai_v2(monkeypatch):
+    monkeypatch.delenv("COMPANY_CONTEXT_POSTGRES_DATABASE", raising=False)
+
+    assert company_context_client._postgres_database_name() == "ai_v2"
+
+
+def test_postgres_database_name_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("COMPANY_CONTEXT_POSTGRES_DATABASE", "centaur")
+
+    assert company_context_client._postgres_database_name() == "centaur"
+
+
+def test_postgres_database_name_uses_default_for_blank_override(monkeypatch):
+    monkeypatch.setenv("COMPANY_CONTEXT_POSTGRES_DATABASE", " ")
+
+    assert company_context_client._postgres_database_name() == "ai_v2"
+
+
+def test_connect_appends_configured_database_to_base_dsn(monkeypatch):
+    fake = _FakeConnection()
+    calls = []
+
+    async def fake_connect(*args, **kwargs):
+        calls.append((args, kwargs))
+        return fake
+
+    monkeypatch.setenv("CENTAUR_POSTGRES_DSN", "postgresql://scoped-proxy:5432")
+    monkeypatch.setenv("COMPANY_CONTEXT_POSTGRES_DATABASE", "ai_v2")
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+
+    conn = asyncio.run(CompanyContextClient()._connect())
+
+    assert conn is fake
+    assert calls == [(("postgresql://scoped-proxy:5432/ai_v2",), {"command_timeout": 30})]
 
 
 def test_search_queries_bm25_and_returns_compact_results(monkeypatch):

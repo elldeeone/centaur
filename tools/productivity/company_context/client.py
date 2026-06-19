@@ -10,6 +10,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import asyncpg
 
@@ -27,6 +28,10 @@ ZULIP_STREAM_DAY_SCORE_MULTIPLIER = CHANNEL_DAY_SCORE_MULTIPLIER
 DEFAULT_PREVIEW_CHARS = 280
 MAX_RELATED_CHILDREN = 25
 SLACK_LIVE_SOURCE_TYPE = "slack_live_message"
+CENTAUR_POSTGRES_DSN_ENV = "CENTAUR_POSTGRES_DSN"
+COMPANY_CONTEXT_DSN_ENV = "COMPANY_CONTEXT_DSN"
+COMPANY_CONTEXT_DATABASE_ENV = "COMPANY_CONTEXT_POSTGRES_DATABASE"
+DEFAULT_POSTGRES_DATABASE = "ai_v2"
 _SLACK_AFTER_RE = re.compile(r"\bafter:\d{4}-\d{2}-\d{2}\b", re.IGNORECASE)
 
 _SEARCH_TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*")
@@ -78,6 +83,31 @@ _STOP_WORDS = {
 def _clamp(value: int, *, minimum: int, maximum: int) -> int:
     """Clamp integer tool inputs to predictable output bounds."""
     return max(minimum, min(int(value), maximum))
+
+
+def _scoped_database_url() -> str:
+    """Return the proxy-scoped Postgres URL exposed to the sandbox."""
+    for env_name in (CENTAUR_POSTGRES_DSN_ENV, COMPANY_CONTEXT_DSN_ENV, "DATABASE_URL"):
+        value = os.getenv(env_name)  # noqa: TID251
+        if value is None:
+            value = secret(env_name, default="")
+        value = value.strip()
+        if value and value != env_name:
+            return value
+    return ""
+
+
+def _database_url_with_name(value: str, database: str) -> str:
+    """Append a database name to database-less proxy URLs."""
+    parsed = urlparse(value)
+    if parsed.scheme and parsed.netloc and parsed.path in ("", "/"):
+        return urlunparse(parsed._replace(path=f"/{database}"))
+    return value
+
+
+def _postgres_database_name() -> str:
+    value = os.getenv(COMPANY_CONTEXT_DATABASE_ENV, DEFAULT_POSTGRES_DATABASE)  # noqa: TID251
+    return value.strip() or DEFAULT_POSTGRES_DATABASE
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -300,23 +330,21 @@ class CompanyContextClient:
     """Query the shared company context document table."""
 
     def __init__(self, database_url: str | None = None) -> None:
-        # COMPANY_CONTEXT_DSN is the agent-facing, proxy-scoped DSN. DATABASE_URL is
-        # kept as a local/dev fallback for tests and admin shells.
-        env_database_url = os.getenv("COMPANY_CONTEXT_DSN") or os.getenv("DATABASE_URL")  # noqa: TID251
-        self._database_url = (
-            database_url
-            or env_database_url
-            or secret("COMPANY_CONTEXT_DSN", default="")
-            or secret("DATABASE_URL", default="")
-        ).strip()
+        self._database_url = (database_url or _scoped_database_url()).strip()
 
     def _require_database_url(self) -> str:
         if not self._database_url:
-            raise RuntimeError("DATABASE_URL is required for company context search")
+            raise RuntimeError(
+                "CENTAUR_POSTGRES_DSN, COMPANY_CONTEXT_DSN, or DATABASE_URL is required "
+                "for company context search"
+            )
         return self._database_url
 
     async def _connect(self) -> asyncpg.Connection:
-        return await asyncpg.connect(self._require_database_url(), command_timeout=30)
+        return await asyncpg.connect(
+            _database_url_with_name(self._require_database_url(), _postgres_database_name()),
+            command_timeout=30,
+        )
 
     async def _search_async(
         self,

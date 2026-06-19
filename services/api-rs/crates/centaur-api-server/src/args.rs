@@ -1159,10 +1159,10 @@ impl TryFrom<&SandboxArgs> for AgentSandboxConfig {
         config.ready_timeout = Duration::from_secs(args.ready_timeout_secs);
         config.iron_proxy = args.iron_proxy.to_config()?;
         if let Some(proxy) = config.iron_proxy.as_mut() {
-            // The k8s backend derives the static sandbox PG DSN catalog from
-            // these fragments (see `pg_sandbox_dsns`); `to_config` only ships
-            // the harness fragment, so add the infra fragment and the
-            // discovered tool fragment (where `pg_dsn` secrets are declared).
+            // The k8s backend still needs the full proxy fragment set for
+            // managed proxy setup and iron-control tool grants; `to_config`
+            // only ships the harness fragment, so add the infra fragment and
+            // the discovered tool fragment (where `pg_dsn` secrets are declared).
             let mut fragments = vec![args.iron_proxy.infra_fragment()?];
             if let Some(tool_fragment) = args.discover_tool_proxy_fragment()? {
                 fragments.push(tool_fragment.fragment);

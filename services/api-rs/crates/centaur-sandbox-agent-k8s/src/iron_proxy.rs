@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use centaur_iron_proxy::{ProxyFragment, SourceKind, SourcePolicy, pg_sandbox_dsns};
+use centaur_iron_proxy::{ProxyFragment, SourceKind, SourcePolicy};
 use centaur_sandbox_core::{SandboxError, SandboxId, SandboxResult, SandboxSpec};
 use k8s_openapi::api::core::v1::{
     Capabilities, Container, ContainerPort, EmptyDirVolumeSource, EnvFromSource,
@@ -47,6 +47,7 @@ const PROXY_LOG_LEVEL: &str = "info";
 // shared client credential (random per sandbox) the sandbox presents on every
 // DSN. These are the deploy-level env vars iron-proxy reads for that listener.
 const PG_LISTENER_PORT: u16 = 5432;
+const CENTAUR_POSTGRES_DSN_ENV: &str = "CENTAUR_POSTGRES_DSN";
 const PG_LISTEN_ENV: &str = "IRON_PROXY_PG_LISTEN";
 const PG_CLIENT_USER_ENV: &str = "IRON_PROXY_PG_CLIENT_USER";
 const PG_CLIENT_PASSWORD_ENV: &str = "IRON_PROXY_PG_CLIENT_PASSWORD";
@@ -104,9 +105,9 @@ pub(crate) struct ResolvedIronProxy {
     principal_id: String,
     // The single Postgres listener the proxy multiplexes all upstreams through,
     // derived from the principal's effective config. `None` when the principal
-    // resolves to no Postgres upstreams. The upstream DSN/role/database are
+    // resolves to no Postgres listener. The upstream DSN/role/database are
     // control-plane-owned; api-rs assigns the local listen/client knobs
-    // (IRON_PROXY_PG_* + the per-upstream sandbox DSN env vars).
+    // (IRON_PROXY_PG_* + the sandbox's shared base DSN env var).
     pg: Option<ResolvedPg>,
     // Replace-secret placeholders the operator granted the principal
     // (`proxy_value` -> same), set as sandbox env so tools send the value the
@@ -129,17 +130,6 @@ struct ResolvedPg {
     /// Shared client password (random per sandbox); set on both the proxy
     /// (CLIENT_PASSWORD) and every sandbox DSN so the two agree.
     password: String,
-    /// One DSN per upstream, all pointing at this listener and differing only
-    /// by database.
-    dsns: Vec<ResolvedPgDsn>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ResolvedPgDsn {
-    /// Sandbox env var that receives the proxied DSN.
-    sandbox_env_name: String,
-    /// Database the sandbox connects to; iron-proxy routes the listener on it.
-    database: String,
 }
 
 /// Env injected into a managed proxy pod so iron-proxy pulls its config from
@@ -173,7 +163,7 @@ impl AgentSandboxBackend {
                 "iron-proxy sandbox spec is missing its iron-control principal".to_owned(),
             )
         })?;
-        let pg = self.resolved_pg_from_fragments();
+        let pg = self.resolved_pg();
         let replace_placeholders = self.effective_replace_placeholders(&principal_id).await?;
 
         Ok(Some(ResolvedIronProxy {
@@ -188,9 +178,8 @@ impl AgentSandboxBackend {
 
     /// Read the principal's effective config from iron-control for the
     /// replace-secret placeholders set as sandbox env (so tools send the value
-    /// the proxy swaps for the real secret). The Postgres DSN catalog is
-    /// derived statically from fragments instead — see
-    /// [`Self::resolved_pg_from_fragments`].
+    /// the proxy swaps for the real secret). The Postgres listener is provided
+    /// as one fixed local DSN instead — see [`Self::resolved_pg`].
     async fn effective_replace_placeholders(
         &self,
         principal: &str,
@@ -214,32 +203,18 @@ impl AgentSandboxBackend {
             .collect())
     }
 
-    /// Build the single Postgres listener from the static fragment catalog
-    /// (every tool's declared `pg_dsn` env var name + database). Unlike the
-    /// per-principal `effective_config` path this needs no principal, so warm
-    /// sandboxes — created under the roleless bootstrap principal — are still
-    /// born with the full DSN set and a live listener; the reassignable proxy
-    /// enforces per-principal access at runtime by routing only the claimed
-    /// principal's granted databases. iron-proxy multiplexes every upstream
-    /// through one listener, so the DSNs differ only by database; api-rs binds a
-    /// single local port and a shared client credential (random per sandbox,
-    /// set on both the proxy CLIENT_PASSWORD and every sandbox DSN). Returns
-    /// `None` when no fragment declares a `pg_dsn`.
-    fn resolved_pg_from_fragments(&self) -> Option<ResolvedPg> {
-        let iron_proxy = self.config.iron_proxy.as_ref()?;
-        let dsns: Vec<ResolvedPgDsn> = pg_sandbox_dsns(&iron_proxy.fragments)
-            .into_iter()
-            .map(|(sandbox_env_name, database)| ResolvedPgDsn {
-                sandbox_env_name,
-                database,
-            })
-            .collect();
-        (!dsns.is_empty()).then(|| ResolvedPg {
+    /// Build the single local Postgres listener every managed iron-proxy
+    /// exposes. The sandbox always receives one database-less base DSN; tools
+    /// choose the database name, and iron-control decides which upstream
+    /// credential/role backs that database for the currently assigned
+    /// principal.
+    fn resolved_pg(&self) -> Option<ResolvedPg> {
+        self.config.iron_proxy.as_ref()?;
+        Some(ResolvedPg {
             listen: format!("0.0.0.0:{PG_LISTENER_PORT}"),
             port: PG_LISTENER_PORT,
             user: format!("pg-user-{}", uuid::Uuid::new_v4().simple()),
             password: format!("pg-{}", uuid::Uuid::new_v4().simple()),
-            dsns,
         })
     }
 
@@ -268,7 +243,7 @@ impl AgentSandboxBackend {
         let Some(principal_id) = principal_id else {
             return Ok(None);
         };
-        let pg = self.resolved_pg_from_fragments();
+        let pg = self.resolved_pg();
         let replace_placeholders = self.effective_replace_placeholders(&principal_id).await?;
         Ok(Some(ResolvedIronProxy {
             proxy_host: iron_proxy_service_name(id),
@@ -544,18 +519,15 @@ pub(crate) fn apply_proxy_env(spec: &mut SandboxSpec, resolved: &ResolvedIronPro
     for (name, value) in &resolved.replace_placeholders {
         set_missing_env(spec, name, value);
     }
-    // Each Postgres upstream reaches the sandbox as a DSN env var. They all
-    // point at the proxy's single listener with the same shared credential and
-    // differ only by database; iron-proxy routes on the database and fronts the
-    // real upstream.
+    // The sandbox always gets one local Postgres base DSN. Tools choose the
+    // database name they connect to; iron-proxy routes that database to the
+    // assigned principal's effective pg_dsn secret.
     if let Some(pg) = &resolved.pg {
-        for dsn in &pg.dsns {
-            let value = format!(
-                "postgresql://{}:{}@{}:{}/{}",
-                pg.user, pg.password, resolved.proxy_host, pg.port, dsn.database,
-            );
-            set_missing_env(spec, &dsn.sandbox_env_name, &value);
-        }
+        let value = format!(
+            "postgresql://{}:{}@{}:{}",
+            pg.user, pg.password, resolved.proxy_host, pg.port,
+        );
+        set_missing_env(spec, CENTAUR_POSTGRES_DSN_ENV, &value);
     }
 }
 
@@ -1196,6 +1168,17 @@ mod tests {
         }
     }
 
+    fn resolved_with_pg() -> ResolvedIronProxy {
+        let mut resolved = resolved();
+        resolved.pg = Some(ResolvedPg {
+            listen: "0.0.0.0:5432".to_owned(),
+            port: 5432,
+            user: "pg-user".to_owned(),
+            password: "pg-pass".to_owned(),
+        });
+        resolved
+    }
+
     fn rule_allows_namespace_port(
         rule: &NetworkPolicyEgressRule,
         namespace: &str,
@@ -1283,5 +1266,18 @@ mod tests {
                 "{name} should contain the OTLP endpoint host: {value}"
             );
         }
+    }
+
+    #[test]
+    fn apply_proxy_env_sets_shared_postgres_base_dsn() {
+        let mut spec = SandboxSpec::new("centaur-agent:latest");
+
+        apply_proxy_env(&mut spec, &resolved_with_pg());
+
+        assert_eq!(
+            env_value(&spec, CENTAUR_POSTGRES_DSN_ENV).as_deref(),
+            Some("postgresql://pg-user:pg-pass@asbx-test-iron-proxy:5432")
+        );
+        assert!(env_value(&spec, "COMPANY_CONTEXT_DSN").is_none());
     }
 }
