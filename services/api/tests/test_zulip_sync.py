@@ -66,6 +66,31 @@ def test_zulip_etl_client_allows_explicit_thread_key_realm(
     assert client.realm == "stag-hunt"
 
 
+def test_zulip_etl_client_falls_back_when_optional_etl_secret_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from workflows import zulip_sync_shared
+
+    def missing_secret(name: str, *, default: str = "") -> str:
+        return name
+
+    monkeypatch.setattr(zulip_sync_shared, "secret", missing_secret)
+    monkeypatch.delenv("ZULIP_ETL_SITE", raising=False)
+    monkeypatch.delenv("ZULIP_ETL_EMAIL", raising=False)
+    monkeypatch.delenv("ZULIP_ETL_API_KEY", raising=False)
+    monkeypatch.delenv("ZULIP_ETL_REALM", raising=False)
+    monkeypatch.setenv("ZULIP_SITE", "https://staghunt.zulipchat.com")
+    monkeypatch.setenv("ZULIP_BOT_EMAIL", "centaur-bot@staghunt.zulipchat.com")
+    monkeypatch.setenv("ZULIP_API_KEY", "fallback-api-key")
+
+    client = zulip_sync_shared.ZulipEtlClient()
+
+    assert client.site == "https://staghunt.zulipchat.com"
+    assert client.email == "centaur-bot@staghunt.zulipchat.com"
+    assert client.api_key == "fallback-api-key"
+    assert client.realm == "staghunt"
+
+
 def test_list_etl_streams_uses_non_admin_visibility_params():
     from workflows.zulip_sync_shared import ZulipEtlClient
 
