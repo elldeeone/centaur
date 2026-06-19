@@ -31,6 +31,30 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     python-pptx==1.0.2 openpyxl==3.1.5 PyMuPDF==1.27.2 mammoth==1.12.0 \
     faster-whisper \
     asyncpg==0.30.0 \
+    "anthropic>=0.54.0" \
+    "pgvector>=0.3.6" \
+    "httpx>=0.28.0" \
+    "openai>=1.60.0" \
+    "pydantic>=2.10.0" \
+    "pydantic-settings>=2.7.0" \
+    "structlog>=24.4.0" \
+    "tenacity>=9.0.0" \
+    "fastapi>=0.115.0" \
+    "uvicorn[standard]>=0.34.0" \
+    "mcp>=1.0.0" \
+    "toon-format @ git+https://github.com/toon-format/toon-python.git" \
+    "aiodocker>=0.22.0" \
+    "kubernetes-asyncio>=33.3.0" \
+    "psycopg2-binary>=2.9.11" \
+    "sse-starlette>=3.2.0" \
+    "croniter>=6.2.2" \
+    "feedparser>=6.0.0" \
+    "opentelemetry-api>=1.42.1" \
+    "opentelemetry-sdk>=1.42.1" \
+    "opentelemetry-exporter-otlp-proto-http>=1.42.1" \
+    "opentelemetry-instrumentation-fastapi>=0.63b1" \
+    "opentelemetry-instrumentation-httpx>=0.63b1" \
+    "opentelemetry-instrumentation-asyncpg>=0.63b1" \
     opentelemetry-proto==1.42.1 \
     && find /usr/local/lib/python3.12 /usr/lib/python3 -type d -name __pycache__ -prune -exec rm -rf '{}' +
 
