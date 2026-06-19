@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import importlib
 import importlib.util
 import inspect
 import json
@@ -195,10 +196,19 @@ class RegisteredWorkflow:
 
 
 def install_api_compat_module() -> None:
-    api_mod = sys.modules.setdefault("api", types.ModuleType("api"))
     workflow_engine = types.ModuleType("api.workflow_engine")
     workflow_engine.WorkflowContext = WorkflowContext
-    sys.modules.setdefault("api.workflow_engine", workflow_engine)
+    api_mod = sys.modules.get("api")
+    if api_mod is None or not hasattr(api_mod, "__path__"):
+        previous_api_mod = api_mod
+        if api_mod is not None:
+            sys.modules.pop("api", None)
+        try:
+            api_mod = importlib.import_module("api")
+        except Exception:
+            api_mod = previous_api_mod or types.ModuleType("api")
+            sys.modules["api"] = api_mod
+    sys.modules["api.workflow_engine"] = workflow_engine
     setattr(api_mod, "workflow_engine", workflow_engine)
 
 
